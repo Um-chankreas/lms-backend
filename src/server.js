@@ -8,23 +8,25 @@ dotenv.config();
 const app = express();
 
 // ============ Middleware ============
-// app.use(cors({
-//   origin: process.env.CORS_ORIGIN?.split(',') || 'http://localhost:5173',
-//   credentials: true
-// }));
+// ============ Middleware ============
+const defaultOrigins = [
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:3000',
+  'http://localhost:8080',
+  'http://127.0.0.1:5173'
+];
+
 const allowedOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(',').map(o => o.trim())
-  : ['http://localhost:5173', 'http://localhost:3000'];
+  : defaultOrigins;
 
 app.use(cors({
-  origin: (origin, callback) => {
-    // Allow requests with no origin (Postman, mobile apps, curl) OR allowed web origins
-    if (!origin || allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-    return callback(new Error('CORS Policy: Origin not allowed'), false);
-  },
-  credentials: true
+  origin: allowedOrigins,
+  origin: true,
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
 }));
 
 app.use(express.json());
