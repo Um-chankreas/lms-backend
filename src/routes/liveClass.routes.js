@@ -5,7 +5,7 @@ const supabase = require('../config/supabase');
 const { authenticateToken, isTeacher } = require('../middleware/auth');
 const { generateAgoraToken, appId } = require('../utils/agoraToken');
 const { v4: uuidv4 } = require('uuid');
- 
+
 /**
  * POST /api/live-classes
  * Create a new live class (Teacher only)
@@ -13,32 +13,32 @@ const { v4: uuidv4 } = require('uuid');
 router.post('/', authenticateToken, isTeacher, async (req, res) => {
   try {
     const { course_id, title, description, scheduled_at } = req.body;
- 
+
     if (!course_id || !title) {
       return res.status(400).json({
         success: false,
         error: 'Course ID and title are required'
       });
     }
- 
+
     // Verify course ownership
     const { data: course } = await supabase
       .from('courses')
       .select('teacher_id')
       .eq('id', course_id)
       .single();
- 
+
     if (course?.teacher_id !== req.user.userId) {
       return res.status(403).json({
         success: false,
         error: 'You can only create live classes for your own courses'
       });
     }
- 
+
     // Generate unique channel name
     const classId = uuidv4();
     const channelName = `class_${classId}`;
- 
+
     const { data: newClass, error } = await supabase
       .from('live_classes')
       .insert({
@@ -54,9 +54,9 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
       })
       .select()
       .single();
- 
+
     if (error) throw error;
- 
+
     res.status(201).json({
       success: true,
       message: 'Live class created successfully',
@@ -73,7 +73,7 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
     });
   }
 });
- 
+
 /**
  * GET /api/live-classes/:id
  * Get live class details
@@ -81,27 +81,27 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
 router.get('/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
- 
+
     const { data: liveClass, error } = await supabase
       .from('live_classes')
       .select('*')
       .eq('id', id)
       .single();
- 
+
     if (error || !liveClass) {
       return res.status(404).json({
         success: false,
         error: 'Live class not found'
       });
     }
- 
+
     // Get course info
     const { data: course } = await supabase
       .from('courses')
       .select('id, title')
       .eq('id', liveClass.course_id)
       .single();
- 
+
     // Get active participants if class is active
     let participants = [];
     if (liveClass.status === 'active') {
@@ -112,7 +112,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
         .eq('left_at', null); // Only active participants
       participants = parts || [];
     }
- 
+
     res.json({
       success: true,
       data: {
@@ -132,7 +132,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
     });
   }
 });
- 
+
 /**
  * GET /api/live-classes/course/:courseId
  * Get all live classes for a course
@@ -140,15 +140,15 @@ router.get('/:id', authenticateToken, async (req, res) => {
 router.get('/course/:courseId', authenticateToken, async (req, res) => {
   try {
     const { courseId } = req.params;
- 
+
     const { data: liveClasses, error } = await supabase
       .from('live_classes')
       .select('*')
       .eq('course_id', courseId)
       .order('scheduled_at', { ascending: false });
- 
+
     if (error) throw error;
- 
+
     res.json({
       success: true,
       data: { liveClasses }
@@ -161,7 +161,7 @@ router.get('/course/:courseId', authenticateToken, async (req, res) => {
     });
   }
 });
- 
+
 /**
  * POST /api/live-classes/:id/token
  * Get Agora token for joining live class
@@ -170,28 +170,28 @@ router.get('/course/:courseId', authenticateToken, async (req, res) => {
 router.post('/:id/token', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
- 
+
     // Get live class
     const { data: liveClass, error: classError } = await supabase
       .from('live_classes')
       .select('*')
       .eq('id', id)
       .single();
- 
+
     if (classError || !liveClass) {
       return res.status(404).json({
         success: false,
         error: 'Live class not found'
       });
     }
- 
+
     // Generate Agora token
     const token = generateAgoraToken(
       liveClass.channel_name,
       req.user.userId.substring(0, 8), // Use first 8 chars of UUID as numeric UID
       req.user.role
     );
- 
+
     // Record participant
     const participantId = uuidv4();
     await supabase
@@ -204,7 +204,7 @@ router.post('/:id/token', authenticateToken, async (req, res) => {
         joined_at: new Date()
       })
       .single();
- 
+
     res.json({
       success: true,
       data: {
@@ -226,7 +226,7 @@ router.post('/:id/token', authenticateToken, async (req, res) => {
     });
   }
 });
- 
+
 /**
  * PUT /api/live-classes/:id/start
  * Start the live class (Teacher only)
@@ -234,21 +234,21 @@ router.post('/:id/token', authenticateToken, async (req, res) => {
 router.put('/:id/start', authenticateToken, isTeacher, async (req, res) => {
   try {
     const { id } = req.params;
- 
+
     // Verify ownership
     const { data: liveClass } = await supabase
       .from('live_classes')
       .select('teacher_id')
       .eq('id', id)
       .single();
- 
+
     if (liveClass?.teacher_id !== req.user.userId) {
       return res.status(403).json({
         success: false,
         error: 'Only the teacher can start this class'
       });
     }
- 
+
     const { data: updatedClass, error } = await supabase
       .from('live_classes')
       .update({
@@ -258,9 +258,9 @@ router.put('/:id/start', authenticateToken, isTeacher, async (req, res) => {
       .eq('id', id)
       .select()
       .single();
- 
+
     if (error) throw error;
- 
+
     res.json({
       success: true,
       message: 'Live class started',
@@ -274,7 +274,7 @@ router.put('/:id/start', authenticateToken, isTeacher, async (req, res) => {
     });
   }
 });
- 
+
 /**
  * PUT /api/live-classes/:id/end
  * End the live class (Teacher only)
@@ -282,21 +282,21 @@ router.put('/:id/start', authenticateToken, isTeacher, async (req, res) => {
 router.put('/:id/end', authenticateToken, isTeacher, async (req, res) => {
   try {
     const { id } = req.params;
- 
+
     // Verify ownership
     const { data: liveClass } = await supabase
       .from('live_classes')
       .select('teacher_id')
       .eq('id', id)
       .single();
- 
+
     if (liveClass?.teacher_id !== req.user.userId) {
       return res.status(403).json({
         success: false,
         error: 'Only the teacher can end this class'
       });
     }
- 
+
     const { data: updatedClass, error } = await supabase
       .from('live_classes')
       .update({
@@ -306,16 +306,16 @@ router.put('/:id/end', authenticateToken, isTeacher, async (req, res) => {
       .eq('id', id)
       .select()
       .single();
- 
+
     if (error) throw error;
- 
+
     // Mark all participants as left
     await supabase
       .from('live_class_participants')
       .update({ left_at: new Date() })
       .eq('live_class_id', id)
       .is('left_at', null);
- 
+
     res.json({
       success: true,
       message: 'Live class ended',
@@ -329,7 +329,7 @@ router.put('/:id/end', authenticateToken, isTeacher, async (req, res) => {
     });
   }
 });
- 
+
 /**
  * POST /api/live-classes/:id/leave
  * Student/Teacher leave the live class
@@ -337,7 +337,7 @@ router.put('/:id/end', authenticateToken, isTeacher, async (req, res) => {
 router.post('/:id/leave', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
- 
+
     // Mark participant as left
     const { error } = await supabase
       .from('live_class_participants')
@@ -345,9 +345,9 @@ router.post('/:id/leave', authenticateToken, async (req, res) => {
       .eq('live_class_id', id)
       .eq('user_id', req.user.userId)
       .is('left_at', null);
- 
+
     if (error) throw error;
- 
+
     res.json({
       success: true,
       message: 'Left the live class'
@@ -360,5 +360,5 @@ router.post('/:id/leave', authenticateToken, async (req, res) => {
     });
   }
 });
- 
+
 module.exports = router;
