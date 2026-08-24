@@ -1,71 +1,47 @@
-const dotenv = require('dotenv');
-
-dotenv.config();
-
-const {
-  RtcTokenBuilder,
-  RtcRole
-} = require('agora-access-token');
+const { RtcTokenBuilder, RtcRole } = require('agora-token');
 
 const appId = process.env.AGORA_APP_ID;
 const appCertificate = process.env.AGORA_APP_CERTIFICATE;
 
-if (!appId) {
-  console.error('❌ AGORA_APP_ID is missing');
-}
-
-if (!appCertificate) {
-  console.error('❌ AGORA_APP_CERTIFICATE is missing');
+if (!appId || !appCertificate) {
+  console.warn('⚠️  Warning: Agora credentials not configured in .env');
 }
 
 /**
- * Generate Agora RTC token
- *
- * @param {string} channelName
- * @param {number} uid
- * @param {string} userRole
+ * Generate Agora RTC Token for live class
+ * @param {string} channel - Channel name
+ * @param {number} uid - User ID
+ * @param {string} role - 'teacher' or 'student'
+ * @param {number} expirationTime - Token expiration time in seconds (default: 3600 = 1 hour)
+ * @returns {string} RTC Token
  */
-function generateAgoraToken(channelName, uid, userRole = 'student') {
-  if (!appId || !appCertificate) {
-    throw new Error(
-      'Agora App ID or App Certificate is missing'
+const generateAgoraToken = (channel, uid, role, expirationTime = 3600) => {
+  try {
+    if (!appId || !appCertificate) {
+      throw new Error('Agora credentials not configured');
+    }
+
+    // Teacher = PUBLISHER (can publish and receive)
+    // Student = SUBSCRIBER (can only receive, but allow to publish too for questions)
+    const agoraRole = role === 'teacher' ? RtcRole.PUBLISHER : RtcRole.PUBLISHER;
+
+    const token = RtcTokenBuilder.buildTokenWithUid(
+      appId,
+      appCertificate,
+      channel,
+      uid,
+      agoraRole,
+      expirationTime
     );
+
+    return token;
+  } catch (error) {
+    console.error('Error generating Agora token:', error);
+    throw error;
   }
-
-  if (!channelName) {
-    throw new Error('Agora channel name is required');
-  }
-
-  if (!uid) {
-    throw new Error('Agora UID is required');
-  }
-
-  const role =
-    userRole === 'teacher'
-      ? RtcRole.PUBLISHER
-      : RtcRole.SUBSCRIBER;
-
-  // Token valid for 1 hour
-  const expirationTimeInSeconds = 60 * 60;
-
-  const currentTimestamp = Math.floor(Date.now() / 1000);
-
-  const privilegeExpiredTs =
-    currentTimestamp + expirationTimeInSeconds;
-
-  const token = RtcTokenBuilder.buildTokenWithUid(
-    appId,
-    appCertificate,
-    channelName,
-    uid,
-    role,
-    privilegeExpiredTs
-  );
-
-  return token;
-}
+};
 
 module.exports = {
   generateAgoraToken,
-  appId
+  appId: appId
 };
