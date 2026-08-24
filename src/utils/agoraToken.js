@@ -1,29 +1,39 @@
+const jwt = require('jsonwebtoken');
 const { RtcTokenBuilder, RtcRole } = require('agora-token');
 
 const appId = process.env.AGORA_APP_ID;
 const appCertificate = process.env.AGORA_APP_CERTIFICATE;
 
 if (!appId || !appCertificate) {
-  console.warn('⚠️  Warning: Agora credentials not configured in .env');
+  console.warn('⚠️  WARNING: Agora credentials not configured in .env');
+  console.warn('AGORA_APP_ID:', appId ? '✅ Set' : '❌ Missing');
+  console.warn('AGORA_APP_CERTIFICATE:', appCertificate ? '✅ Set' : '❌ Missing');
 }
 
 /**
- * Generate Agora RTC Token for live class
- * @param {string} channel - Channel name
- * @param {number} uid - User ID
- * @param {string} role - 'teacher' or 'student'
- * @param {number} expirationTime - Token expiration time in seconds (default: 3600 = 1 hour)
- * @returns {string} RTC Token
+ * Generate Agora RTC Token
  */
-const generateAgoraToken = (channel, uid, role, expirationTime = 3600) => {
+const generateAgoraToken = (channel, uid, role, expirationTimeInSeconds = 3600) => {
   try {
     if (!appId || !appCertificate) {
-      throw new Error('Agora credentials not configured');
+      throw new Error('Agora credentials not configured in .env file');
     }
 
-    // Teacher = PUBLISHER (can publish and receive)
-    // Student = SUBSCRIBER (can only receive, but allow to publish too for questions)
-    const agoraRole = role === 'teacher' ? RtcRole.PUBLISHER : RtcRole.PUBLISHER;
+    // Ensure UID is numeric
+    if (typeof uid !== 'number') {
+      uid = parseInt(uid) || Math.floor(Math.random() * 10000);
+    }
+
+    // ✅ FIX: Calculate current timestamp (seconds) + expiration duration
+    const currentTimestamp = Math.floor(Date.now() / 1000);
+    const privilegeExpiredTs = currentTimestamp + expirationTimeInSeconds;
+
+    console.log('🎟️  Generating Agora token:');
+    console.log('  Channel:', channel);
+    console.log('  UID:', uid, '(numeric)');
+    console.log('  Expires At (Unix):', privilegeExpiredTs);
+
+    const agoraRole = role === 'teacher' ? RtcRole.PUBLISHER : RtcRole.SUBSCRIBER;
 
     const token = RtcTokenBuilder.buildTokenWithUid(
       appId,
@@ -31,12 +41,13 @@ const generateAgoraToken = (channel, uid, role, expirationTime = 3600) => {
       channel,
       uid,
       agoraRole,
-      expirationTime
+      privilegeExpiredTs // ✅ Correct absolute timestamp passed here
     );
 
+    console.log('✅ Token generated successfully');
     return token;
   } catch (error) {
-    console.error('Error generating Agora token:', error);
+    console.error('❌ Error generating Agora token:', error.message);
     throw error;
   }
 };

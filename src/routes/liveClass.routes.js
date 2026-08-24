@@ -82,6 +82,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
 
+    // 1. Get live class details
     const { data: liveClass, error } = await supabase
       .from('live_classes')
       .select('*')
@@ -95,23 +96,34 @@ router.get('/:id', authenticateToken, async (req, res) => {
       });
     }
 
-    // Get course info
+    // 2. Get course info
     const { data: course } = await supabase
       .from('courses')
       .select('id, title')
       .eq('id', liveClass.course_id)
       .single();
 
-    // Get active participants if class is active
-    let participants = [];
-    if (liveClass.status === 'active') {
-      const { data: parts } = await supabase
-        .from('live_class_participants')
-        .select('*, users(name)')
-        .eq('live_class_id', id)
-        .eq('left_at', null); // Only active participants
-      participants = parts || [];
+    // 3. Get all active participants (using .is instead of .eq for NULL)
+    const { data: parts, error: partsError } = await supabase
+      .from('live_class_participants')
+      .select('id, live_class_id, user_id, role, joined_at, users(id, name, email, avatar)')
+      .eq('live_class_id', id)
+      .is('left_at', null); // ✅ FIX: Use .is() for checking NULL in Supabase
+
+    if (partsError) {
+      console.error('Error fetching participants:', partsError);
     }
+
+    // Map nested user data cleanly
+    const formattedParticipants = (parts || []).map(p => ({
+      id: p.user_id,
+      participant_id: p.id,
+      name: p.users?.name || 'Unknown Student',
+      email: p.users?.email,
+      avatar: p.users?.avatar,
+      role: p.role,
+      joined_at: p.joined_at
+    }));
 
     res.json({
       success: true,
@@ -119,8 +131,8 @@ router.get('/:id', authenticateToken, async (req, res) => {
         liveClass: {
           ...liveClass,
           course,
-          participants,
-          participants_count: participants.length
+          participants: formattedParticipants,
+          participants_count: formattedParticipants.length
         }
       }
     });
@@ -167,6 +179,11 @@ router.get('/course/:courseId', authenticateToken, async (req, res) => {
  * Get Agora token for joining live class
  * Both teacher and student use this endpoint
  */
+/**
+ * POST /api/live-classes/:id/token
+ * Get Agora token for joining live class
+ * Both teacher and student use this endpoint
+ */
 router.post('/:id/token', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
@@ -185,10 +202,11 @@ router.post('/:id/token', authenticateToken, async (req, res) => {
       });
     }
 
-    // Generate Agora token
+    const numericUid = parseInt(req.user.userId.replace(/[^0-9]/g, '').substring(0, 8)) || Math.floor(Math.random() * 10000);
+
     const token = generateAgoraToken(
       liveClass.channel_name,
-      req.user.userId.substring(0, 8), // Use first 8 chars of UUID as numeric UID
+      numericUid, // ✅ CORRECT - NUMERIC
       req.user.role
     );
 
@@ -202,8 +220,7 @@ router.post('/:id/token', authenticateToken, async (req, res) => {
         user_id: req.user.userId,
         role: req.user.role,
         joined_at: new Date()
-      })
-      .single();
+      });
 
     res.json({
       success: true,
@@ -211,6 +228,7 @@ router.post('/:id/token', authenticateToken, async (req, res) => {
         token,
         channel: liveClass.channel_name,
         appId: appId,
+        uid: numericUid, // 👈 ADD THIS LINE HERE
         liveClass: {
           id: liveClass.id,
           title: liveClass.title,

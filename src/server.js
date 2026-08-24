@@ -8,22 +8,12 @@ dotenv.config();
 const app = express();
 
 // ============ Middleware ============
-// ============ Middleware ============
-const defaultOrigins = [
-  'http://localhost:5173',
-  'http://localhost:5174',
-  'http://localhost:3000',
-  'http://localhost:8080',
-  'http://127.0.0.1:5173'
-];
-
-const allowedOrigins = process.env.CORS_ORIGIN
-  ? process.env.CORS_ORIGIN.split(',').map(o => o.trim())
-  : defaultOrigins;
-
+// Dynamically allow requests from localhost, local IP addresses, or any origin in development
 app.use(cors({
-  origin: allowedOrigins,
-  origin: true,
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps, curl, Postman) or any origin on local network
+    callback(null, true);
+  },
   credentials: true,
   allowedHeaders: ['Content-Type', 'Authorization'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
@@ -77,13 +67,16 @@ app.use((req, res) => {
 
 // ============ Start Server ============
 const PORT = process.env.PORT || 5000;
-const server = app.listen(PORT, () => {
+const HOST = '0.0.0.0'; // Bind to 0.0.0.0 to accept connections on local IP
+
+const server = app.listen(PORT, HOST, () => {
   console.log(`
 ╔════════════════════════════════════════╗
 ║   🎓 LMS Backend Server Running        ║
 ╚════════════════════════════════════════╝
  
-📍 URL: http://localhost:${PORT}
+📍 Local:     http://localhost:${PORT}
+📡 Network:   http://0.0.0.0:${PORT}
 🔧 Environment: ${process.env.NODE_ENV}
 📊 Database: Supabase
 🎥 Video: Agora
