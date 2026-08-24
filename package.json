@@ -13,6 +13,7 @@
   "license": "ISC",
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",
+    "agora-access-token": "^2.0.4",
     "agora-token": "^2.0.5",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
