@@ -2,7 +2,8 @@
 const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
-const { authenticateToken, isTeacher } = require('../middleware/auth');
+const { authenticateToken, optionalAuth, isTeacher } = require('../middleware/auth');
+const { hasCourseAccess, ensureEnrolled } = require('../utils/access');
 const { v4: uuidv4 } = require('uuid');
 
 /**
@@ -11,7 +12,7 @@ const { v4: uuidv4 } = require('uuid');
  */
 router.post('/', authenticateToken, isTeacher, async (req, res) => {
   try {
-    const { title, description, category, color, icon, cover_image } = req.body;
+    const { title, description, category, color, icon, cover_image, is_free } = req.body;
 
     // Validation
     if (!title) {
@@ -37,6 +38,7 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
         icon: icon || '📚',                   // NEW! Icon field
         cover_image: cover_image || null,    // NEW! Cover image
         code: classCode,                      // NEW! Auto-generated code
+        is_free: typeof is_free === 'boolean' ? is_free : false,
         created_at: new Date()
       })
       .select()
@@ -50,7 +52,7 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
       data: {
         course: newCourse,
         classCode: classCode,                 // NEW! Return class code
-        joinUrl: `/join/${classCode}`         // NEW! Join URL for students
+        joinUrl: `/join/${classCode}`
       }
     });
   } catch (error) {
@@ -66,14 +68,18 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
  * GET /api/courses
  * Get all courses
  * - Teachers see their own courses
- * - Students see all available courses
+ * - Students and guests see all available courses
  */
-router.get('/', authenticateToken, async (req, res) => {
+router.get('/', optionalAuth, async (req, res) => {
   try {
-    let query = supabase.from('courses').select('*');
+    let query = supabase
+      .from('courses')
+      .select('*, course_enrollments(count), students:course_enrollments(enrolled_at, users(id, name, avatar_url))')
+      .order('enrolled_at', { ascending: true, referencedTable: 'students' })
+      .limit(2, { referencedTable: 'students' });
 
     // Teachers see only their courses
-    if (req.user.role === 'teacher') {
+    if (req.user?.role === 'teacher') {
       query = query.eq('teacher_id', req.user.userId);
     }
 
@@ -81,9 +87,17 @@ router.get('/', authenticateToken, async (req, res) => {
 
     if (error) throw error;
 
+    // Flatten the embedded aggregates: a total student_count plus a short
+    // preview list of up to 2 students.
+    const coursesWithCounts = (courses || []).map(({ course_enrollments, students, ...course }) => ({
+      ...course,
+      student_count: course_enrollments?.[0]?.count || 0,
+      students: (students || []).map(s => s.users).filter(Boolean)
+    }));
+
     res.json({
       success: true,
-      data: { courses, total: courses.length }
+      data: { courses: coursesWithCounts, total: coursesWithCounts.length }
     });
   } catch (error) {
     console.error('Courses fetch error:', error);
@@ -98,7 +112,7 @@ router.get('/', authenticateToken, async (req, res) => {
  * GET /api/courses/:id
  * Get course details with lessons
  */
-router.get('/:id', authenticateToken, async (req, res) => {
+router.get('/:id', optionalAuth, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -121,16 +135,98 @@ router.get('/:id', authenticateToken, async (req, res) => {
       .from('lessons')
       .select('*')
       .eq('course_id', id)
-      .order('order_number', { ascending: true });
+      .order('order_number', { ascending: true })
+      .order('created_at', { ascending: true });
 
     if (lessonsError) throw lessonsError;
 
     // Get teacher info
     const { data: teacher } = await supabase
       .from('users')
-      .select('id, name, email')
+      .select('id, name, email,avatar_url')
       .eq('id', course.teacher_id)
       .single();
+
+    // Any student viewing a course counts as engaging with it — see
+    // ensureEnrolled for why this must run before hasCourseAccess.
+    await ensureEnrolled({ supabase, course, user: req.user });
+
+    // A course-wide pass (free course, owning teacher, or enrolled student)
+    // unlocks every lesson; otherwise each lesson falls back to its own
+    // is_free flag (paid course with free preview lessons).
+    const courseAccess = await hasCourseAccess({ supabase, course, user: req.user });
+
+    // Number of enrolled students in this class, plus a preview of up to 2
+    const { count: studentCount } = await supabase
+      .from('course_enrollments')
+      .select('id', { count: 'exact', head: true })
+      .eq('course_id', id);
+
+    const { data: studentPreviewRows } = await supabase
+      .from('course_enrollments')
+      .select('enrolled_at, users:student_id (id, name, avatar_url)')
+      .eq('course_id', id)
+      .order('enrolled_at', { ascending: true })
+      .limit(2);
+    const studentPreview = (studentPreviewRows || []).map(r => r.users).filter(Boolean);
+
+    let completedLessonIds = new Set();
+    if (req.user?.role === 'student' && lessons.length > 0) {
+      const { data: completions } = await supabase
+        .from('lesson_completions')
+        .select('lesson_id')
+        .eq('student_id', req.user.userId)
+        .in('lesson_id', lessons.map(l => l.id));
+
+      completedLessonIds = new Set((completions || []).map(c => c.lesson_id));
+    }
+
+    // Lightweight quiz metadata per lesson — id/title/status/question count
+    // only. Full questions (and correct_answer) stay behind GET
+    // /api/quizzes/:id, fetched only when the student actually opens one.
+    const quizzesByLesson = {};
+    if (lessons.length > 0) {
+      let quizQuery = supabase
+        .from('quizzes')
+        .select('id, lesson_id, title, status, quiz_questions(count)')
+        .eq('course_id', id)
+        .not('lesson_id', 'is', null);
+
+      if (req.user?.role !== 'teacher') {
+        quizQuery = quizQuery.eq('status', 'published');
+      }
+
+      const { data: quizzes } = await quizQuery;
+
+      (quizzes || []).forEach(quiz => {
+        if (!quizzesByLesson[quiz.lesson_id]) quizzesByLesson[quiz.lesson_id] = [];
+        quizzesByLesson[quiz.lesson_id].push({
+          id: quiz.id,
+          title: quiz.title,
+          status: quiz.status,
+          total_questions: quiz.quiz_questions?.[0]?.count || 0
+        });
+      });
+    }
+
+    const materialsBase = `${process.env.SUPABASE_URL}/storage/v1/object/public/course-materials/`;
+    const lessonsWithAccess = lessons.map(lesson => {
+      const unlocked = courseAccess || lesson.is_free;
+      return {
+        ...lesson,
+        locked: !unlocked,
+        completed: completedLessonIds.has(lesson.id),
+        file_url: unlocked && lesson.file_url ? materialsBase + lesson.file_url : null,
+        video_url: unlocked && lesson.video_url ? materialsBase + lesson.video_url : null,
+        thumbnail_url: lesson.thumbnail_url ? materialsBase + lesson.thumbnail_url : null,
+        has_video: !!lesson.video_url,
+        text_content: unlocked ? lesson.text_content : '',
+        quizzes: quizzesByLesson[lesson.id] || [],
+      };
+    });
+
+    const totalLessons = lessons.length;
+    const completedLessons = completedLessonIds.size;
 
     res.json({
       success: true,
@@ -138,8 +234,18 @@ router.get('/:id', authenticateToken, async (req, res) => {
         course: {
           ...course,
           teacher: teacher,
-          lessons_count: lessons.length,
-          lessons
+          has_access: courseAccess,
+          student_count: studentCount || 0,
+          students: studentPreview,
+          lessons_count: lessonsWithAccess.length,
+          lessons: lessonsWithAccess,
+          progress: req.user?.role === 'student'
+            ? {
+                completed_lessons: completedLessons,
+                total_lessons: totalLessons,
+                percentage: totalLessons > 0 ? Math.round((completedLessons / totalLessons) * 100) : 0
+              }
+            : null
         }
       }
     });
@@ -159,7 +265,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
 router.put('/:id', authenticateToken, isTeacher, async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, description, category } = req.body;
+    const { title, description, category, color, icon, cover_image, code, is_free } = req.body;
 
     // Verify ownership
     const { data: course } = await supabase
@@ -168,6 +274,13 @@ router.put('/:id', authenticateToken, isTeacher, async (req, res) => {
       .eq('id', id)
       .single();
 
+    if (!course) {
+      return res.status(404).json({
+        success: false,
+        error: 'Course not found'
+      });
+    }
+
     if (course.teacher_id !== req.user.userId) {
       return res.status(403).json({
         success: false,
@@ -175,10 +288,29 @@ router.put('/:id', authenticateToken, isTeacher, async (req, res) => {
       });
     }
 
+    // Only update fields actually present in the request, so a partial
+    // update doesn't null out columns the client didn't send.
+    const updatePayload = {};
+    if (title !== undefined) updatePayload.title = title;
+    if (description !== undefined) updatePayload.description = description;
+    if (category !== undefined) updatePayload.category = category;
+    if (color !== undefined) updatePayload.color = color;
+    if (icon !== undefined) updatePayload.icon = icon;
+    if (cover_image !== undefined) updatePayload.cover_image = cover_image;
+    if (code !== undefined) updatePayload.code = code;
+    if (typeof is_free === 'boolean') updatePayload.is_free = is_free;
+
+    if (Object.keys(updatePayload).length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'No fields to update'
+      });
+    }
+
     // Update course
     const { data: updatedCourse, error } = await supabase
       .from('courses')
-      .update({ title, description, category })
+      .update(updatePayload)
       .eq('id', id)
       .select()
       .single();
@@ -207,12 +339,19 @@ router.delete('/:id', authenticateToken, isTeacher, async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Verify ownership
+    // Verify course exists and ownership
     const { data: course } = await supabase
       .from('courses')
       .select('teacher_id')
       .eq('id', id)
       .single();
+
+    if (!course) {
+      return res.status(404).json({
+        success: false,
+        error: 'Course not found'
+      });
+    }
 
     if (course.teacher_id !== req.user.userId) {
       return res.status(403).json({
@@ -221,7 +360,74 @@ router.delete('/:id', authenticateToken, isTeacher, async (req, res) => {
       });
     }
 
-    // Delete course (cascade will handle lessons)
+    // Quizzes (course-level and lesson-level) -> questions & submissions
+    const { data: quizzes } = await supabase
+      .from('quizzes')
+      .select('id')
+      .eq('course_id', id);
+    const quizIds = (quizzes || []).map(q => q.id);
+
+    if (quizIds.length > 0) {
+      await supabase.from('quiz_questions').delete().in('quiz_id', quizIds);
+      await supabase.from('quiz_submissions').delete().in('quiz_id', quizIds);
+    }
+    await supabase.from('quizzes').delete().eq('course_id', id);
+
+    // Lessons -> completions & uploaded files
+    const { data: lessons } = await supabase
+      .from('lessons')
+      .select('id, file_url')
+      .eq('course_id', id);
+    const lessonIds = (lessons || []).map(l => l.id);
+
+    if (lessonIds.length > 0) {
+      await supabase.from('lesson_completions').delete().in('lesson_id', lessonIds);
+
+      const lessonFileUrls = lessons.filter(l => l.file_url).map(l => l.file_url);
+      if (lessonFileUrls.length > 0) {
+        await supabase.storage.from('course-materials').remove(lessonFileUrls);
+      }
+    }
+    await supabase.from('lessons').delete().eq('course_id', id);
+
+    // Assignments -> submissions & uploaded files
+    const { data: assignments } = await supabase
+      .from('assignments')
+      .select('id')
+      .eq('course_id', id);
+    const assignmentIds = (assignments || []).map(a => a.id);
+
+    if (assignmentIds.length > 0) {
+      const { data: submissions } = await supabase
+        .from('assignment_submissions')
+        .select('file_url')
+        .in('assignment_id', assignmentIds);
+
+      const submissionFileUrls = (submissions || []).filter(s => s.file_url).map(s => s.file_url);
+      if (submissionFileUrls.length > 0) {
+        await supabase.storage.from('assignments').remove(submissionFileUrls);
+      }
+
+      await supabase.from('assignment_submissions').delete().in('assignment_id', assignmentIds);
+    }
+    await supabase.from('assignments').delete().eq('course_id', id);
+
+    // Enrollments
+    await supabase.from('course_enrollments').delete().eq('course_id', id);
+
+    // Live classes -> participants
+    const { data: liveClasses } = await supabase
+      .from('live_classes')
+      .select('id')
+      .eq('course_id', id);
+    const liveClassIds = (liveClasses || []).map(lc => lc.id);
+
+    if (liveClassIds.length > 0) {
+      await supabase.from('live_class_participants').delete().in('live_class_id', liveClassIds);
+    }
+    await supabase.from('live_classes').delete().eq('course_id', id);
+
+    // Finally, delete the course itself
     const { error } = await supabase
       .from('courses')
       .delete()
@@ -231,7 +437,7 @@ router.delete('/:id', authenticateToken, isTeacher, async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Course deleted successfully'
+      message: 'Course and all related content deleted successfully'
     });
   } catch (error) {
     console.error('Course deletion error:', error);

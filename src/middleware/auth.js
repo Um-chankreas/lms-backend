@@ -32,6 +32,23 @@ const authenticateToken = (req, res, next) => {
   }
 };
  
+// Middleware that attaches req.user when a valid token is present, but
+// doesn't reject the request when it's missing/invalid — for routes that
+// should work for both guests and logged-in users (e.g. public course
+// browsing), while still letting logged-in-only logic branch on req.user.
+const optionalAuth = (req, res, next) => {
+  try {
+    const token = extractToken(req.headers['authorization']);
+    if (token) {
+      const decoded = verifyToken(token);
+      if (decoded) req.user = decoded;
+    }
+    next();
+  } catch (error) {
+    next();
+  }
+};
+
 // Middleware to check if user is teacher
 const isTeacher = (req, res, next) => {
   if (req.user?.role !== 'teacher') {
@@ -53,9 +70,22 @@ const isStudent = (req, res, next) => {
   }
   next();
 };
- 
+
+// Middleware to check if user is an admin (web portal only)
+const isAdmin = (req, res, next) => {
+  if (req.user?.role !== 'admin') {
+    return res.status(403).json({
+      success: false,
+      error: 'This action requires admin privileges'
+    });
+  }
+  next();
+};
+
 module.exports = {
   authenticateToken,
+  optionalAuth,
   isTeacher,
-  isStudent
+  isStudent,
+  isAdmin
 };

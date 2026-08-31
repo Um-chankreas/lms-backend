@@ -1,4 +1,5 @@
 const express = require('express');
+const http = require('http');
 const cors = require('cors');
 const dotenv = require('dotenv');
 
@@ -6,6 +7,7 @@ const dotenv = require('dotenv');
 dotenv.config();
 
 const app = express();
+const { initLiveClassRealtime } = require('./realtime/liveClassSocket');
 
 // ============ Middleware ============
 // Dynamically allow requests from localhost, local IP addresses, or any origin in development
@@ -29,6 +31,10 @@ app.use('/api/lessons', require('./routes/lessons.routes'));
 app.use('/api/quizzes', require('./routes/quizzes.routes'));
 app.use('/api/assignments', require('./routes/assignments.routes'));
 app.use('/api/live-classes', require('./routes/liveClass.routes'));
+app.use('/api/dashboard', require('./routes/dashboard.routes'));
+app.use('/api/leaderboard', require('./routes/leaderboard.routes'));
+app.use('/api/profile', require('./routes/profile.routes'));
+app.use('/api/admin', require('./routes/admin.routes'));
 
 // ============ Health Check ============
 app.get('/', (req, res) => {
@@ -41,7 +47,8 @@ app.get('/', (req, res) => {
       lessons: '/api/lessons',
       quizzes: '/api/quizzes',
       assignments: '/api/assignments',
-      liveClasses: '/api/live-classes'
+      liveClasses: '/api/live-classes',
+      dashboard: '/api/dashboard'
     }
   });
 });
@@ -69,7 +76,12 @@ app.use((req, res) => {
 const PORT = process.env.PORT || 5000;
 const HOST = '0.0.0.0'; // Bind to 0.0.0.0 to accept connections on local IP
 
-const server = app.listen(PORT, HOST, () => {
+const httpServer = http.createServer(app);
+
+// Attach the live-class realtime (Socket.IO) layer to the same HTTP server.
+initLiveClassRealtime(httpServer);
+
+const server = httpServer.listen(PORT, HOST, () => {
   console.log(`
 ╔════════════════════════════════════════╗
 ║   🎓 LMS Backend Server Running        ║
@@ -80,6 +92,7 @@ const server = app.listen(PORT, HOST, () => {
 🔧 Environment: ${process.env.NODE_ENV}
 📊 Database: Supabase
 🎥 Video: Agora
+🔌 Realtime: Socket.IO (/socket.io)
  
 ✅ Press Ctrl+C to stop the server
   `);
