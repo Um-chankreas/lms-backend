@@ -1,11 +1,20 @@
 const express = require('express');
 const router = express.Router();
+const path = require('path');
+const multer = require('multer');
+const { parse: parseCsv } = require('csv-parse/sync');
 const supabase = require('../config/supabase');
 const { authenticateToken, isTeacher, isStudent } = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
 const { awardXp, XP_VALUES } = require('../utils/xp');
 const { evaluateAchievements } = require('../utils/achievements');
 const { hasCourseAccess, ensureEnrolled } = require('../utils/access');
+
+// Configure multer for quiz question CSV imports
+const csvUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024 }, // 2MB
+});
 
 // Picks up to n random items from arr without repeats
 function pickRandom(arr, n) {
@@ -115,6 +124,172 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to create quiz: ' + error.message
+    });
+  }
+});
+
+/**
+ * GET /api/quizzes/questions/import/template
+ * Download the CSV template used for bulk-importing quiz questions
+ */
+router.get('/questions/import/template', authenticateToken, isTeacher, (req, res) => {
+  res.download(
+    path.join(__dirname, '../../templates/quiz_questions_template.csv'),
+    'quiz_questions_template.csv'
+  );
+});
+
+/**
+ * POST /api/quizzes/:id/questions/import
+ * Bulk-import questions for an existing quiz from a CSV file (Teacher only).
+ * New questions are appended after any questions the quiz already has.
+ *
+ * Expected CSV columns (see templates/quiz_questions_template.csv):
+ *   question, option_1, option_2, ... option_N, correct_answer, explanation, question_type
+ */
+router.post('/:id/questions/import', authenticateToken, isTeacher, csvUpload.single('file'), async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        error: 'CSV file is required (form field name: "file")'
+      });
+    }
+
+    // Verify ownership
+    const { data: quiz } = await supabase
+      .from('quizzes')
+      .select('id, courses(teacher_id)')
+      .eq('id', id)
+      .single();
+
+    if (!quiz) {
+      return res.status(404).json({
+        success: false,
+        error: 'Quiz not found'
+      });
+    }
+
+    if (quiz.courses?.teacher_id !== req.user.userId) {
+      return res.status(403).json({
+        success: false,
+        error: 'Unauthorized quiz access'
+      });
+    }
+
+    let records;
+    try {
+      records = parseCsv(req.file.buffer.toString('utf8'), {
+        columns: header => header.map(h => h.trim().toLowerCase()),
+        skip_empty_lines: true,
+        trim: true
+      });
+    } catch (parseError) {
+      return res.status(400).json({
+        success: false,
+        error: 'Failed to parse CSV file: ' + parseError.message
+      });
+    }
+
+    if (!records || records.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'CSV file has no data rows'
+      });
+    }
+
+    const parsedQuestions = [];
+    const rowErrors = [];
+
+    records.forEach((record, idx) => {
+      const rowNumber = idx + 2; // +1 for header row, +1 for 1-based indexing
+      const question = (record.question || '').trim();
+
+      const options = Object.keys(record)
+        .filter(key => /^option_?\d+$/i.test(key))
+        .sort((a, b) => parseInt(a.replace(/\D/g, ''), 10) - parseInt(b.replace(/\D/g, ''), 10))
+        .map(key => (record[key] || '').trim())
+        .filter(value => value.length > 0);
+
+      const correctAnswer = (record.correct_answer || '').trim();
+      const explanation = (record.explanation || '').trim() || null;
+      const questionType = (record.question_type || '').trim() || 'multiple_choice';
+
+      if (!question) {
+        rowErrors.push({ row: rowNumber, error: 'Question text is required' });
+        return;
+      }
+      if (options.length < 2) {
+        rowErrors.push({ row: rowNumber, error: 'At least 2 options are required' });
+        return;
+      }
+      if (!correctAnswer) {
+        rowErrors.push({ row: rowNumber, error: 'correct_answer is required' });
+        return;
+      }
+      if (!options.includes(correctAnswer)) {
+        rowErrors.push({ row: rowNumber, error: `correct_answer "${correctAnswer}" does not match any option` });
+        return;
+      }
+
+      parsedQuestions.push({
+        question,
+        options,
+        correct_answer: correctAnswer,
+        explanation,
+        question_type: questionType
+      });
+    });
+
+    if (rowErrors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'CSV contains invalid rows',
+        data: { rowErrors }
+      });
+    }
+
+    // Continue numbering after any questions the quiz already has
+    const { data: lastQuestion } = await supabase
+      .from('quiz_questions')
+      .select('order_number')
+      .eq('quiz_id', id)
+      .order('order_number', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const startOrder = lastQuestion?.order_number || 0;
+
+    const questionsToInsert = parsedQuestions.map((q, idx) => ({
+      id: uuidv4(),
+      quiz_id: id,
+      question: q.question,
+      options: JSON.stringify(q.options),
+      correct_answer: q.correct_answer,
+      explanation: q.explanation,
+      question_type: q.question_type,
+      order_number: startOrder + idx + 1
+    }));
+
+    const { data: insertedQuestions, error } = await supabase
+      .from('quiz_questions')
+      .insert(questionsToInsert)
+      .select();
+
+    if (error) throw error;
+
+    res.status(201).json({
+      success: true,
+      message: `${insertedQuestions.length} question(s) imported successfully`,
+      data: { questions: insertedQuestions }
+    });
+  } catch (error) {
+    console.error('Quiz question import error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to import quiz questions: ' + error.message
     });
   }
 });

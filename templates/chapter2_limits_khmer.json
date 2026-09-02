@@ -1,0 +1,1879 @@
+[
+  {
+    "id": "Item1_Q1",
+    "chapter": "2",
+    "item": "Item1",
+    "question_number": 1,
+    "khmer_question": "2\nគណនាលីមីត (2 ។ 3)",
+    "math_question": "\\lim_{x \\to 2} (x^2 + 3)",
+    "khmer_solution": "ដំណោះស្រាយ\n\nដោយសារអនុគមន៍ពហុធាជាប់ត្រង់ ,» -- 2 យើង\n\nគ្រាន់តែជំនួស 2 = 2 ចូល៖ 2? | 3 = 4 | 3 = 7។",
+    "math_steps": "x = 2 \\Rightarrow 2^2 + 3 = 4 + 3 = 7",
+    "answer": 7
+  },
+  {
+    "id": "Item1_Q2",
+    "chapter": "2",
+    "item": "Item1",
+    "question_number": 2,
+    "khmer_question": "ន 22 -- 9\nគណនាលីមីត 3 2 3 ?",
+    "math_question": "$$\\lim _ { x \\to 3 } \\frac { x ^ { 2 } - 9 } { x - 3 }$$",
+    "khmer_solution": "ម\n\nនេះជាទម្រង់មិនកំណត់ 0។ យើងដាក់ជាផលគុណ\n\nកត្តា៖ 282 ។ នាំឱ្យលីមីតគឺ",
+    "math_steps": [
+      "0 = \\frac{(x - 3)(x + 3)}{x - 3} = x + 3",
+      "x + 3 = 6"
+    ],
+    "answer": 6
+  },
+  {
+    "id": "Item1_Q3",
+    "chapter": "2",
+    "item": "Item1",
+    "question_number": 3,
+    "khmer_question": "រ នរំ 2\nគណនាលីមីត ហា “2 ?",
+    "math_question": "$$\\lim _ { x \\to 0 } \\frac { \\sin x } { x }$$",
+    "khmer_solution": "គុណនឹងកន្សោមឆ្លាស់ +/2 រ 1 - 1 នាំឱ្យបាន\n\nស 1\n(2 ។ 1 -1) + 11 ។ ជំនួស 2 = 0\n\nបាន 1/2។",
+    "math_steps": "",
+    "answer": ""
+  },
+  {
+    "id": "Item1_Q4",
+    "chapter": "2",
+    "item": "Item1",
+    "question_number": 4,
+    "khmer_question": "្ប ន 527\nគណនាលីមីត .:៕ 2 ?",
+    "math_question": "$$\\lim_{x \\to 0} \\frac{\\sin 5 x}{x}$$",
+    "khmer_solution": "នរំ ៤\n\nប្រើរូបមន្ត [ថា 1។ ត្រង់នេះ\nនា ៦2 = 5. នរ ៦52 _› 5(1) = 5\n\nន ង ។",
+    "math_steps": " \\lim_{x \\to 0} \\frac{\\sin 5x}{x} = 5 \\cdot \\lim_{x \\to 0} \\frac{\\sin 5x}{5x} \\to 5(1) = 5 ",
+    "answer": 5
+  },
+  {
+    "id": "Item1_Q5",
+    "chapter": "2",
+    "item": "Item1",
+    "question_number": 5,
+    "khmer_question": "3 _ 1\nគណនាលីមីត ង 1 ?",
+    "math_question": "$$\\lim _ { x \\to 1 } \\frac { x ^ { 3 } - 1 } { x - 1 } ?$$",
+    "khmer_solution": "បំបែករាង 2 -- 1 = (2 -- 1)(2? -- 2 - 1) ។\nសម្រួល (2 -- 1) ចោល សល់ 2? | 2 - 1។ ជំនួស\n\n2 = 1 បាន1-1-1=23។",
+    "math_steps": "x^3 - 1 = (x - 1)(x^2 + x + 1) \\Rightarrow \\text{when } x = 1, \\text{then } 1^2 + 1 + 1 = 3",
+    "answer": 3
+  },
+  {
+    "id": "Item1_Q6",
+    "chapter": "2",
+    "item": "Item1",
+    "question_number": 6,
+    "khmer_question": "== រា\nគណនាលីមីត +“ +/:2 -- 2 ?",
+    "math_question": "$$\\lim _ { x \\to 4 } \\frac { x - 4 } { \\sqrt { x } - 2 } ?$$",
+    "khmer_solution": "បំបែក 2 -- 4 = (+/2 -- 2)(+/2 - 2) ។ សម្រួល\n(2 -- 2) សល់ +/2 ។ 2។ ជំនួស 2 = 4 បាន\n\n2។2=4។",
+    "math_steps": "x - 4 = (\\sqrt{x} - 2)(\\sqrt{x} + 2) \\Rightarrow x - 4 = (\\sqrt{x})^2 - 2^2 \\Rightarrow x - 4 = x - 4 \\Rightarrow \\text{True for all } x \\geq 0. \\text{ But check if } (\\sqrt{x} - 2) = 0 \\text{ or } (\\sqrt{x} + 2) = 0. \\text{ Since } \\sqrt{x} + 2 > 0 \\text{ for all } x \\geq 0, \\text{ then } \\sqrt{x} - 2 = 0 \\Rightarrow \\sqrt{x} = 2 \\Rightarrow x = 4. \\text{ Also, if } x = 4, \\text{ then } \\sqrt{x} + 2 = 2 + 2 = 4, \\text{ which matches the right-hand side. So } x = 4 \\text{ is the solution.}",
+    "answer": 4
+  },
+  {
+    "id": "Item1_Q7",
+    "chapter": "2",
+    "item": "Item1",
+    "question_number": 7,
+    "khmer_question": "្ប |ន -- |\nគណនាលីមីត ,.“ 21 ?",
+    "math_question": "$$\\lim _ { x \\to 1 ^ { + } } \\frac { | x - 1 | } { x - 1 } ?$$",
+    "khmer_solution": "ចំពោះ 2 > 1 នោះ |2 -- | = 2 -- 1។ ដូចនេះ\nផលចែកស្មើនឹង 1។",
+    "math_steps": "Given: x > 1 and |x - 1| = x - 1. We need to prove that x - 1 > 0.\n\nStep 1: Use the definition of absolute value.\n|x - 1| = x - 1 implies that x - 1 is non-negative, i.e., x - 1 \\geq 0.\n\nStep 2: Use the given condition x > 1.\nSince x > 1, subtracting 1 from both sides gives x - 1 > 0.\n\nStep 3: Combine the results.\nFrom Step 1, we have x - 1 \\geq 0. From Step 2, we have x - 1 > 0. Therefore, x - 1 > 0 is true.\n\nThus, the statement is proven.",
+    "answer": "x - 1 > 0"
+  },
+  {
+    "id": "Item1_Q8",
+    "chapter": "2",
+    "item": "Item1",
+    "question_number": 8,
+    "khmer_question": "(2) មានតម្លៃ តើត្រូវមានលក្ខខណ្ឌចាំបាច់",
+    "math_question": "$$\\lim _ { x \\to a } f ( x )$$",
+    "khmer_solution": "លីមីតត្រង់ចំណុចមួយមានតម្លៃ លុះត្រាតែលីមីតខាង\nឆ្វេង និងលីមីតខាងស្អាំត្រង់ចំណុចនោះមានតម្លៃស្មើ\nគ្នា។",
+    "math_steps": [],
+    "answer": "The solution is not provided in the image."
+  },
+  {
+    "id": "Item1_Q9",
+    "chapter": "2",
+    "item": "Item1",
+    "question_number": 9,
+    "khmer_question": "1 -- 0082\n\nគណនាលីមីត ឃុ” ?",
+    "math_question": "$$\\lim_{{x \\to 0}} \\frac { 1 - \\cos x } { x }$$",
+    "khmer_solution": "1 -- 0082\n\nតាមរូបមន្ត យ “5 1/2 នាំឱ្យ\n1 --\n055 = 0\n\n2» ស ។",
+    "math_steps": [
+      "We are given that \\( \\lim_{x \\to 0} \\frac{1 - \\cos x}{x^2} = \\frac{1}{2} \\).",
+      "We want to find \\( \\lim_{x \\to 0} \\frac{1 - \\cos x}{x} \\).",
+      "Note that \\( \\frac{1 - \\cos x}{x} = \\frac{1 - \\cos x}{x^2} \\cdot x \\).",
+      "Therefore, \\( \\lim_{x \\to 0} \\frac{1 - \\cos x}{x} = \\lim_{x \\to 0} \\left( \\frac{1 - \\cos x}{x^2} \\cdot x \\right) \\).",
+      "Using the given limit, we have \\( \\lim_{x \\to 0} \\frac{1 - \\cos x}{x^2} = \\frac{1}{2} \\), and \\( \\lim_{x \\to 0} x = 0 \\).",
+      "So, \\( \\lim_{x \\to 0} \\frac{1 - \\cos x}{x} = \\frac{1}{2} \\cdot 0 = 0 \\)."
+    ],
+    "answer": 0
+  },
+  {
+    "id": "Item1_Q10",
+    "chapter": "2",
+    "item": "Item1",
+    "question_number": 10,
+    "khmer_question": "គណនាលីមីត ឬ 0522",
+    "math_question": "\\lim_{x\\to\\pi}\\cos x",
+    "khmer_solution": "08 (7) = --1។",
+    "math_steps": "x = \\pi \\quad \\text{and} \\quad \\cos(\\pi) = -1",
+    "answer": -1
+  },
+  {
+    "id": "Item1_Q11",
+    "chapter": "2",
+    "item": "Item1",
+    "question_number": 11,
+    "khmer_question": "ម: -- 3 -- 2\nគណនាលីមីត ៤  ?",
+    "math_question": "$$\\lim _ { x \\to 1 } \\frac { \\sqrt { x + 3 } - 2 } { x - 1 } ?$$",
+    "khmer_solution": "គុណឆ្លាស់ (2 ។ 3 - 2) បាន\n\n2 -- 3 -- 4 _ 1\n(2 -- 1)(។@ 52) + 2 ។ ជំនួស\n\n2 = 1 បាន 1/4។",
+    "math_steps": [
+      "Given: \\frac{x + 3 - 4}{(x - 1)(\\sqrt{x + 3} + 2)} = \\frac{1}{\\sqrt{x + 3} + 2}",
+      "Simplify numerator: \\frac{x - 1}{(x - 1)(\\sqrt{x + 3} + 2)} = \\frac{1}{\\sqrt{x + 3} + 2}",
+      "Cancel (x - 1) from numerator and denominator (assuming x \\neq 1): \\frac{1}{\\sqrt{x + 3} + 2} = \\frac{1}{\\sqrt{x + 3} + 2}",
+      "This is an identity, meaning the equation holds for all x where the expressions are defined.",
+      "Domain restrictions: x - 1 \\neq 0 \\Rightarrow x \\neq 1, and \\sqrt{x + 3} + 2 \\neq 0 (always true since square root is non-negative).",
+      "Also, x + 3 \\geq 0 \\Rightarrow x \\geq -3.",
+      "Therefore, the solution is x \\geq -3 and x \\neq 1.",
+      "The given solution states x = 1 and x = 1/4, but x = 1 is excluded due to domain restriction.",
+      "Check x = 1/4: \\sqrt{1/4 + 3} + 2 = \\sqrt{13/4} + 2 = \\frac{\\sqrt{13}}{2} + 2, which is defined and non-zero.",
+      "So x = 1/4 is a valid solution.",
+      "The solution set is x \\geq -3, x \\neq 1, and x = 1/4 is included as a specific solution."
+    ],
+    "answer": "x \\geq -3, x \\neq 1, with x = 1/4 being a valid solution"
+  },
+  {
+    "id": "Item1_Q12",
+    "chapter": "2",
+    "item": "Item1",
+    "question_number": 12,
+    "khmer_question": "គណនាលីមីត ផូ ' 32 ។ 3",
+    "math_question": "$$\\lim _ { x \\to 2 } \\sqrt { 3 x + 3 }$$",
+    "khmer_solution": "ជំនួស 2 = 2 បូល៖\n\n(ន 5 = 65 = 5 = 3 ។",
+    "math_steps": "x = 2 \\Rightarrow \\sqrt{3(2) + 3} = \\sqrt{6 + 3} = \\sqrt{9} = 3",
+    "answer": 3
+  },
+  {
+    "id": "Item1_Q13",
+    "chapter": "2",
+    "item": "Item1",
+    "question_number": 13,
+    "khmer_question": "រ ខោ ខ27\nគណនាលីមីត .៕ 2 ?",
+    "math_question": "$$\\lim_{x \\to 0} \\frac { \\tan 2 x } { x }$$",
+    "khmer_solution": "ខោ22 _ ខ ខោ 22\nយ 227 ។ កាលណា2 -»0នោះ\n\nខោ 22 1 = =\n22 / នាំឱ្យលីមីតរ\n\n2។\n\nរ",
+    "math_steps": [
+      "\\frac{\\tan 2x}{x} = 2 \\cdot \\frac{\\tan 2x}{2x} \\text{ ดังนั้นเมื่อ } x \\to 0 \\text{ ได้:}",
+      "\\frac{\\tan 2x}{2x} \\to 1 \\text{ ดังนั้น } \\frac{\\tan 2x}{x} \\to 2 \\cdot 1 = 2"
+    ],
+    "answer": 2
+  },
+  {
+    "id": "Item1_Q14",
+    "chapter": "2",
+    "item": "Item1",
+    "question_number": 14,
+    "khmer_question": "",
+    "math_question": "\\lim_{x \\to 2} (x^2)",
+    "khmer_solution": "",
+    "math_steps": "2^2 = 4^1",
+    "answer": "2^2 = 4^1"
+  },
+  {
+    "id": "Item1_Q15",
+    "chapter": "2",
+    "item": "Item1",
+    "question_number": 15,
+    "khmer_question": "",
+    "math_question": "$$\\lim_{x \\to 2} ( x ^ { 2 } ) ?$$",
+    "khmer_solution": "ស ១\n\nនេះជាលីមីតសាមញ្ហ ជំនួ នួស + = 2 នាំឱ្យបាន\n\n១? = 4។",
+    "math_steps": "2^2 = 4^1",
+    "answer": "2^2 = 4^1"
+  },
+  {
+    "id": "Item2_Q1",
+    "chapter": "2",
+    "item": "Item2",
+    "question_number": 1,
+    "khmer_question": "ប ‹/1 2 -- 1\nគណនាលីមីត គ ?",
+    "math_question": "$$\\lim_{x \\to 0} \\frac { \\sqrt [ 3 ] { 1 + x } - 1 } { x } ?$$",
+    "khmer_solution": "ប្រើរូបមន្ត ៤ -- 0 = (៤ -- ៦)(@ - % - 0)\nដើ\n\nម្បីគុណកន្សោមឆ្លាស់ ឬប្រើច្បាប់ (/។6ឯ|8| នាំឱ្យ\n\n1\n៣73 = 1/3\nបាន 3(1 0)” ។",
+    "math_steps": [
+      "a^3 - b^3 = (a - b)(a^2 + ab + b^2)",
+      "\\lim_{b \\to a} \\frac{a^3 - b^3}{(a - b)^3} = \\lim_{b \\to a} \\frac{(a - b)(a^2 + ab + b^2)}{(a - b)^3} = \\lim_{b \\to a} \\frac{a^2 + ab + b^2}{(a - b)^2}",
+      "\\lim_{b \\to a} \\frac{a^2 + ab + b^2}{(a - b)^2} = \\lim_{b \\to a} \\frac{a + 2b}{-2(a - b)}",
+      "\\lim_{b \\to a} \\frac{a + 2b}{-2(a - b)} = \\frac{a + 2a}{-2(a - a)} = \\frac{3a}{0}",
+      "This is undefined, so we must use L'Hôpital's Rule correctly."
+    ],
+    "answer": "The limit is undefined as shown above."
+  },
+  {
+    "id": "Item2_Q2",
+    "chapter": "2",
+    "item": "Item2",
+    "question_number": 2,
+    "khmer_question": "1 -- 00842\n\nគណនាលីមីត ៤ 5” 2",
+    "math_question": "$$\\lim_{x \\to 0} \\frac { 1 - \\cos 4 x } { x ^ { 2 } } ?$$",
+    "khmer_solution": "1 -- 008៤\n\nតាមរូបមន្ត យុ “5” = 1/2 ។ ក្នុងករណីនេះ\n1 -- 00542 = 1 00542 [1 .16=8\n\n- (42)? 2 ។",
+    "math_steps": "\\\\[\\\\lim_{u \\to 0} \\frac{1 - \\cos u}{u^2} = \\frac{1}{2}\\\\]\\\\[\\\\frac{1 - \\cos 4x}{x^2} = \\frac{1 - \\cos 4x}{(4x)^2} \\cdot 16 \\to \\frac{1}{2} \\cdot 16 = 8\\\\]",
+    "answer": 8
+  },
+  {
+    "id": "Item2_Q3",
+    "chapter": "2",
+    "item": "Item2",
+    "question_number": 3,
+    "khmer_question": "7 _ 1\nគណនាលីមីត ក 21 ចំពោះ » 6 អ?",
+    "math_question": "$$\\lim _ { x \\to 1 } \\frac { x ^ { n } - 1 } { x - 1 } \\text { ที่ } n \\in \\mathbb { N } ?$$",
+    "khmer_solution": "តាមដេរីវេនៃ ,»» ត្រង់ ,» - 1 ឬតាមការបំបែកកត្តា\nខា _ 1 = (2 -- 1)(ន1 | 23 | 1) ។\n\nជំនួស ,» = 1 បាន ,| តួនៃលេខ 1 គឺស្មើ ។",
+    "math_steps": "x^n - 1 = (x - 1)(x^{n-1} + x^{n-2} + \\cdots + 1)\\quad \\text{for } x = 1, \\text{ we get } 1^n - 1 = (1 - 1)(1^{n-1} + 1^{n-2} + \\cdots + 1)\\Rightarrow 0 = 0\\cdot n\\Rightarrow 0 = 0\\text{ (true for all } n\\text{)}",
+    "answer": "0 = 0"
+  },
+  {
+    "id": "Item2_Q4",
+    "chapter": "2",
+    "item": "Item2",
+    "question_number": 4,
+    "khmer_question": "រកតម្លៃ /, ដើម្បីឱ្យ (2) មានលីមីតត្រង់ .» = 2 បើ\n(2) = 23 ចំពោះ2 <2 និង (2) = 2? -| 1\nចំពោះ 2 > 2?",
+    "math_question": "$$\\text { ถ้า } k \\text { เดียวกัน } f ( x ) \\text { ที่มีค่าที่ } x = 2 \\text { คือ } f ( x ) = k x + 3 \\text { ถ้า } x \\leq 2 \\text { หรือ } f ( x ) = x ^ { 2 } + 1 \\text { ถ้า } x > 2 ?$$",
+    "khmer_solution": "ដើម្បីឱ្យមានលីមីត លីមីតឆ្វេងស្មើលីមីតស្តាំ៖\n\n2៤ --3 = 2* 1 = 2%-។3=5= 2៤ =2 =,\n។",
+    "math_steps": "2k + 3 = 2^2 + 1 \\Rightarrow 2k + 3 = 5 \\Rightarrow 2k = 2 \\Rightarrow k = 1",
+    "answer": 1
+  },
+  {
+    "id": "Item2_Q5",
+    "chapter": "2",
+    "item": "Item2",
+    "question_number": 5,
+    "khmer_question": "2\n\nយ\nគណនាលីមីត ឃុ 22052?",
+    "math_question": "$$\\lim _ { x \\to 0 } \\frac { x ^ { 2 } } { 2 - 2 \\cos x }$$",
+    "khmer_solution": "1 -- 0082\nនេះជាចម្រាស់នៃរូបមន្តគ្រឹះ “25 “* 1/2 ។\n\nដូចនេះលីមីតស្មើនឹង 1//(2 . 1/2) = 1 ។ (កែតម្រូវ៖\n\n2 .\n2? / [2(1 -- 0082)] = .---- »2.2=:\n\n)",
+    "math_steps": [
+      "\\frac{1 - \\cos x}{x^2} \\to \\frac{1}{2}",
+      "1 / (2 \\cdot \\frac{1}{2}) = 1",
+      "x^2 / [2(1 - \\cos x)] = \\frac{1}{2} \\cdot \\frac{x^2}{1 - \\cos x} \\to \\frac{1}{2} \\cdot 2 = 1"
+    ],
+    "answer": 1
+  },
+  {
+    "id": "Item2_Q6",
+    "chapter": "2",
+    "item": "Item2",
+    "question_number": 6,
+    "khmer_question": "_ 1\nគណនាលីមីត ឈុ ន ?",
+    "math_question": "$$\\lim_{x \\to 0} \\frac { e ^ { x } - 1 } { \\sin x }$$",
+    "khmer_solution": "ចែកភាគយកនិងភាគបែងនឹង ,»៖\n\n(2 -- 1), 2 _\n(នា 2) 2  1/1 = 1 ។",
+    "math_steps": "\\[ \\lim_{x \\to 0} \\frac{(e^x - 1)/x}{(\\sin x)/x} \\to \\frac{1}{1} = 1 \\]",
+    "answer": 1
+  },
+  {
+    "id": "Item2_Q7",
+    "chapter": "2",
+    "item": "Item2",
+    "question_number": 7,
+    "khmer_question": "នរ 2 -- 0082\n== រា -----------\n\nគណនាល័ម័ត 2»-+/4 2 --7/4 ?",
+    "math_question": "$$\\lim _ { x \\to \\pi / 4 } \\frac { \\sin x - \\cos x } { x - \\pi / 4 }$$",
+    "khmer_solution": "ប្រើរូបមន្តបំប្លែង\nនរន -- 0082= = ខន (2 -- 7/4) ។ នាំឱ្យលីមីត\n\nស្មើ +2។",
+    "math_steps": [
+      "sin(x) - cos(x) = \\sqrt{2} \\sin(\\frac{\\pi}{4}) \\cos(x) - \\sqrt{2} \\cos(\\frac{\\pi}{4}) \\sin(x)",
+      "sin(x) - cos(x) = \\sqrt{2} \\left( \\frac{\\sqrt{2}}{2} \\cos(x) - \\frac{\\sqrt{2}}{2} \\sin(x) \\right)",
+      "sin(x) - cos(x) = \\sqrt{2} \\cdot \\frac{\\sqrt{2}}{2} (\\cos(x) - \\sin(x))",
+      "sin(x) - cos(x) = 1 \\cdot (\\cos(x) - \\sin(x))",
+      "sin(x) - cos(x) = - (sin(x) - cos(x))",
+      "2(sin(x) - cos(x)) = 0",
+      "sin(x) - cos(x) = 0",
+      "sin(x) = cos(x)",
+      "tan(x) = 1",
+      "x = \\frac{\\pi}{4} + n\\pi, \\quad n \\in \\mathbb{Z}"
+    ],
+    "answer": "x = \\frac{\\pi}{4} + n\\pi, \\quad n \\in \\mathbb{Z}"
+  },
+  {
+    "id": "Item2_Q8",
+    "chapter": "2",
+    "item": "Item2",
+    "question_number": 8,
+    "khmer_question": "នរ 7\nគណនាលីមីត ៤ 2 ?",
+    "math_question": "$$\\lim _ { x \\to \\infty } \\frac { \\sin x } { x }$$",
+    "khmer_solution": "ប្រេទ្រស្តបទញៀប៖ --1//2 <: (#២2)//2 < 1/2 ។\nកាលណា 2 _» 2 នោះលីមីតសងខាងស្មើ 0 នាំឱ្យ\n\nលីមីតស្មើ 0។",
+    "math_steps": [
+      "Given: -1/x \\leq \\frac{\\sin x}{x} \\leq 1/x",
+      "Take the limit as x \\to \\infty:",
+      "\\lim_{x \\to \\infty} \\left( -\\frac{1}{x} \\right) = 0",
+      "\\lim_{x \\to \\infty} \\left( \\frac{1}{x} \\right) = 0",
+      "By the Squeeze Theorem, since \\frac{\\sin x}{x} is squeezed between two functions that both approach 0, then \\lim_{x \\to \\infty} \\frac{\\sin x}{x} = 0"
+    ],
+    "answer": 0
+  },
+  {
+    "id": "Item2_Q9",
+    "chapter": "2",
+    "item": "Item2",
+    "question_number": 9,
+    "khmer_question": "គណនាលីមីត !ឃុុខ#៕ (=)?",
+    "math_question": "$$\\lim _ { x \\to 0 } x \\sin \\left( \\frac { 1 } { x } \\right)$$",
+    "khmer_solution": "តាមទ្រឹស្តីបទញៀប (3$0។6878 ។|80|8៣ា)\nដោយសារ --1 <: #២(1/2) < 1 នាំឱ្យ\n\n_-|2| < ខន (12) < |2| ។ លីមីតគឺ 0។",
+    "math_steps": "-1 \\le \\sin(1/x) \\le 1 \\Rightarrow -|x| \\le x \\sin(1/x) \\le |x| \\text{ as } x \\to 0",
+    "answer": "The limit of $x \\sin(1/x)$ as $x \\to 0$ is 0."
+  },
+  {
+    "id": "Item2_Q10",
+    "chapter": "2",
+    "item": "Item2",
+    "question_number": 10,
+    "khmer_question": "ក 2 ។ 1\n==_ រា\nគណនាលមត +“ = +,” -|- 5 ?",
+    "math_question": "\\lim_{x \\to -\\infty} \\frac{x + 1}{\\sqrt{x^2 + 5}}",
+    "khmer_solution": "នៅពេល 2 -» 0, 22 = |2| = 2 ។ នាំឱ្យ\n\n2_ = 1\nបាន -2 ។",
+    "math_steps": [
+      "Given: $x \\to -\\infty$, $\\sqrt{x^2} = |x| = -x$",
+      "We are to show: $\\frac{x}{-x} = -1$",
+      "Start with the expression: $\\frac{x}{-x}$",
+      "Simplify: $\\frac{x}{-x} = \\frac{1}{-1} = -1$",
+      "Therefore, $\\frac{x}{-x} = -1$ holds true for $x \\to -\\infty$"
+    ],
+    "answer": "-1"
+  },
+  {
+    "id": "Item2_Q11",
+    "chapter": "2",
+    "item": "Item2",
+    "question_number": 11,
+    "khmer_question": "យ 72 -- 1 -- ន្ទ\nគណនាលីមីត 2 2",
+    "math_question": "$$\\lim _ { x \\to 0 } \\frac { \\sqrt { 1 + x } - 1 - \\frac { x } { 2 } } { x ^ { 2 } }$$",
+    "khmer_solution": "ប្រើពន្លាត ។8\"|0| ឬ (/60|18| ពីរដង៖ លើកទី១\n\n1/(2,2)--1/2 _\nបាន ខា លេកទ២ បាន --1/8។\n\n(កែតម្រូវ៖ ចម្លើយគឺ -1/8)",
+    "math_steps": [
+      "Let f(x) = 1/(2\\sqrt{1+x}) - 1/2, g(x) = 2x",
+      "We are to find \\lim_{x \\to 0} \\frac{f(x)}{g(x)}",
+      "Note that f(0) = 0, g(0) = 0, so we have an indeterminate form 0/0",
+      "Apply L'Hôpital's Rule: \\lim_{x \\to 0} \\frac{f'(x)}{g'(x)}",
+      "Compute f'(x): f'(x) = \\frac{d}{dx} \\left( \\frac{1}{2} (1+x)^{-1/2} \\right) = -\\frac{1}{4} (1+x)^{-3/2}",
+      "Compute g'(x): g'(x) = 2",
+      "So, \\lim_{x \\to 0} \\frac{f'(x)}{g'(x)} = \\lim_{x \\to 0} \\frac{-\\frac{1}{4} (1+x)^{-3/2}}{2} = \\frac{-1}{8} (1+0)^{-3/2} = -\\frac{1}{8}",
+      "Therefore, the limit is -1/8"
+    ],
+    "answer": "-1/8"
+  },
+  {
+    "id": "Item2_Q12",
+    "chapter": "2",
+    "item": "Item2",
+    "question_number": 12,
+    "khmer_question": "ឬ នរ យ\nគណនាលីមីត .:: 31 72 ?",
+    "math_question": "$$\\lim _ { x \\to 0 } \\frac { \\sin a x } { \\sin b x } ?$$",
+    "khmer_solution": "",
+    "math_steps": "\\frac{\\sin ax}{ax} \\cdot \\frac{bx}{\\sin bx} \\cdot \\frac{a}{b} \\to 1 \\cdot 1 \\cdot a/b = a/b",
+    "answer": "a/b"
+  },
+  {
+    "id": "Item2_Q13",
+    "chapter": "2",
+    "item": "Item2",
+    "question_number": 13,
+    "khmer_question": "2\nគណនាលីមីត ‹%។ 2 1?",
+    "math_question": "$$\\lim_{x \\to 1} \\frac { \\ln x } { x - 1 }$$",
+    "khmer_solution": "តាង ៤ = 2 - 1 នាំឱ្យ 2 = 1 + យ។ លីមីតក្លាយជា\n\nឈុ ២ ៕ = ]\n៕--»0 ។",
+    "math_steps": [
+      "Given: u = x - 1, so x = 1 + u",
+      "We are to prove: \\lim_{u \\to 0} \\frac{\\ln(1 + u)}{u} = 1"
+    ],
+    "answer": 1
+  },
+  {
+    "id": "Item3_Q3",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 3,
+    "khmer_question": "(ន) = 22 -- 3\nតើអាស៊ីមតូតដេកនៃអនុគមន៍ ” '%/ ' = = គឺជាអ្វី?",
+    "math_question": "$$f ( x ) = \\frac { 2 x - 3 } { x + 1 }$$",
+    "khmer_solution": "អាស៊ីមតូតដេកគឺ ? \" ,[៤ /(2) = 2/1 = 2 ។",
+    "math_steps": "y = \\lim_{x \\to \\infty} f(x) = \\frac{2}{1} = 2",
+    "answer": 2
+  },
+  {
+    "id": "Item3_Q4",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 4,
+    "khmer_question": "គណនាលីមីត ២៩ / ?",
+    "math_question": "\\lim_{x\\to\\infty}e^{-x}",
+    "khmer_solution": "",
+    "math_steps": " \\lim_{x \\to \\infty} e^{-x} = \\lim_{x \\to \\infty} \\frac{1}{e^{x}} = \\frac{1}{\\infty} = 0 ",
+    "answer": 0
+  },
+  {
+    "id": "Item3_Q5",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 5,
+    "khmer_question": "្ច 222»\nដន រា\nគណនាលមត +“›= 2 -| 2? ?",
+    "math_question": "$$\\lim _ { x \\to \\infty } \\frac { x ^ { 2 } + 2 ^ { x } } { x + 2 ^ { x } } ?$$",
+    "khmer_solution": "ធៀបតួដែលលូតលាស់លឿនបំផុតគឺ 2» នាំឱ្យបាន\nខះ\n\nរា ខ្លន = 1",
+    "math_steps": [
+      "The problem asks to find the limit of \\( \\frac{2^x}{2^x} \\) as \\( x \\) approaches infinity.",
+      "Simplify the expression: \\( \\frac{2^x}{2^x} = 1 \\) for all \\( x \\) where \\( 2^x \\neq 0 \\).",
+      "Since the expression is constantly equal to 1 for all \\( x \\), the limit as \\( x \\to \\infty \\) is also 1.",
+      "Therefore, \\( \\lim_{x \\to \\infty} \\frac{2^x}{2^x} = 1 \\)."
+    ],
+    "answer": 1
+  },
+  {
+    "id": "Item3_Q6",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 6,
+    "khmer_question": "យ - 1 2 -\nគណនាលីមីត រ (មូ ន ។ 22/3 -- 2) 2",
+    "math_question": "$$\\lim _ { x \\rightarrow \\infty } \\left( \\sqrt { x ^ { 2 } + 2 x / 3 } - x \\right) ?$$",
+    "khmer_solution": "ប្រើការគុណឆ្លាស់ នាំឱ្យបានលីមីតស្មើនឹងពាក់\nកណ្តាលនៃមេគុណតួទី២ បើ ៥ = 1 គឺ\n\n2/3 - 2 =1/3។",
+    "math_steps": [
+      "2/3 \\div 2 = 1/3"
+    ],
+    "answer": "1/3"
+  },
+  {
+    "id": "Item3_Q7",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 7,
+    "khmer_question": "2 -។ 1\nគណនាលីមីត ,[២(-)?",
+    "math_question": "\\lim_{x\\to\\infty}\\ln\\left(\\frac{x+1}{x}\\right)",
+    "khmer_solution": "]] 21 = 1\nលីមីតខាងក្នងគឺ ៤ 2 ។  ។ នាំឱ្យ\n\n1 (1) = 0។",
+    "math_steps": [
+      "\\lim_{x \\to \\infty} \\frac{x + 1}{x} = 1",
+      "\\ln(1) = 0"
+    ],
+    "answer": 0
+  },
+  {
+    "id": "Item3_Q9",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 9,
+    "khmer_question": "នា 08 (2?)\nគណនាលីមីត ៤  ?",
+    "math_question": "$$\\lim _ { x \\to \\infty } \\frac { \\cos \\left( x ^ { 2 } \\right) } { x }$$",
+    "khmer_solution": "តាមទ្រឹស្តីបទញៀប --1//2 < 008 (2?)//:2 < 12 ។\nដូចនេះលីមីតស្មើ 0។",
+    "math_steps": "",
+    "answer": ""
+  },
+  {
+    "id": "Item3_Q10",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 10,
+    "khmer_question": "រា (/ 222 -- 32 -- ៗ) ៗ\n\n2» វ",
+    "math_question": "\\lim_{x\\to\\infty}(\\sqrt{x^{2}+3x}-x)",
+    "khmer_solution": "៦ 3\nក :- =: ក =8/2\nប្រើរូបមន្តសម្រាយរហ័ស 2+/ឲ 2+%1 / ។",
+    "math_steps": "The given equation is: \\[ \\frac{b}{2\\sqrt{a}} = \\frac{3}{2\\sqrt{1}} = \\frac{3}{2} \\]",
+    "answer": "3/2"
+  },
+  {
+    "id": "Item3_Q11",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 11,
+    "khmer_question": "",
+    "math_question": "\\lim_{x\\to\\infty}(2+e^{-x})",
+    "khmer_solution": "កច - -\n៩ . = 0 ដួូចនេះលីមីតស្មើ 2 + 0 = 2។",
+    "math_steps": "\\[\\lim_{x \\to \\infty} e^{-x} = 0\\]",
+    "answer": "0"
+  },
+  {
+    "id": "Item3_Q13",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 13,
+    "khmer_question": "រ ៣ -។ នាញ\nគណនាលីមីត 2៤ 2 2 ?",
+    "math_question": "$$\\lim _ { x \\to \\infty } \\frac { x + \\sin x } { x - \\sin x } ?$$",
+    "khmer_solution": "ចែកភាគយកនិងភាគបែងនឹង ,» បាន\n\n1 -- (81២2)/3@ 1-។0\n+” យ.+។។//- 1\n1 (2) 110” ។",
+    "math_steps": "\\\\[\\\\frac{1 + \\frac{\\sin x}{x}}{1 - \\frac{\\sin x}{x}} \\to \\frac{1 + 0}{1 - 0} = 1\\\\]",
+    "answer": 1
+  },
+  {
+    "id": "Item3_Q14",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 14,
+    "khmer_question": "ន\nគណនាលីមីត វយ 5 ( )?",
+    "math_question": "\\lim_{x\\to\\infty}\\sin\\left(\\frac{1}{x}\\right)",
+    "khmer_solution": "កាលណា 2 -» 2 នោះ 1/2 - 0។ ដូចនេះ\n\nនរ (0) = 0០។",
+    "math_steps": [
+      "x \\to \\infty \\Rightarrow \\frac{1}{x} \\to 0",
+      "\\sin(0) = 0"
+    ],
+    "answer": "0"
+  },
+  {
+    "id": "Item3_Q15",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 15,
+    "khmer_question": "422 1\n\n=) = 3\n\nរកអាស៊ីមតូតដេកនៃ",
+    "math_question": "$$f ( x ) = \\frac { 4 x ^ { 2 } - 1 } { x ^ { 2 } + 3 }$$",
+    "khmer_solution": "",
+    "math_steps": "y = \\lim_{x \\to \\infty} \\frac{4x^2}{x^2} = 4",
+    "answer": 4
+  },
+  {
+    "id": "Item3_Q16",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 16,
+    "khmer_question": "្ប ខ2 5\nគណនាលីមីត + ស 1 ?",
+    "math_question": "$$\\lim _ { x \\to - \\infty } \\frac { 2 x + 5 } { 1 - x }$$",
+    "khmer_solution": "22»\nក  - - = -ខ\nធៀបមេគុណដឹក្រេខ្ពស់បំផុត 7 ។",
+    "math_steps": [
+      "Given: \\frac{2x}{-x} = -2",
+      "Simplify the left-hand side: \\frac{2x}{-x} = -2",
+      "Note: \\frac{2x}{-x} = -2 \\cdot \\frac{x}{x} = -2 \\cdot 1 = -2",
+      "So, the equation becomes: -2 = -2",
+      "This is always true for any x (except x=0, since division by zero is undefined).",
+      "Therefore, the solution is all real numbers except x=0."
+    ],
+    "answer": "x \\neq 0"
+  },
+  {
+    "id": "Item3_Q17",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 17,
+    "khmer_question": "្ប ៩ -។- 2\nគណនាលីមីត + ៤ 1?",
+    "math_question": "$$\\lim _ { x \\to \\infty } \\frac { e ^ { x } + x } { e ^ { x } - 1 } ?$$",
+    "khmer_solution": "ទាញ &» ជាកត្ថា នាំឱ្យបាន\n\n1 + 2/៩ _ 10]\n11 10\" ។",
+    "math_steps": "e^x \\to \\infty, \\quad \\frac{1 + x/e^x}{1 - 1/e^x} \\to \\frac{1 + 0}{1 - 0} = 1",
+    "answer": 1
+  },
+  {
+    "id": "Item3_Q19",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 19,
+    "khmer_question": "",
+    "math_question": "$$\\lim _ { x \\to \\infty } \\sqrt [ x ] { x }$$",
+    "khmer_solution": "2 បាយ 0\nបំប្លែងជា '៤(” ៗ )។ ដោយសារ 2 0 នោះ\n\n៩! = 1។",
+    "math_steps": [
+      "We are given that \\( \\frac{\\ln x}{x} \\to 0 \\) as \\( x \\to \\infty \\).",
+      "We are to evaluate \\( \\exp\\left( \\frac{\\ln x}{x} \\right) \\).",
+      "Since \\( \\frac{\\ln x}{x} \\to 0 \\), we can use the property of the exponential function: \\( \\exp(0) = 1 \\).",
+      "Therefore, \\( \\exp\\left( \\frac{\\ln x}{x} \\right) \\to 1 \\) as \\( x \\to \\infty \\)."
+    ],
+    "answer": "1"
+  },
+  {
+    "id": "Item3_Q20",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 20,
+    "khmer_question": "] ១2 -- |] 2\nគណនាលីមីត ៤ 22 2 ?",
+    "math_question": "$$\\lim _ { x \\to \\infty } \\frac { 2 x - \\ln x } { 2 x + \\ln x } ?$$",
+    "khmer_solution": "- 2 0 -- =\nចែកនឹង , នាំឱ្យតួ “៣ ។។ ដូចនេះលីមីតស្មើ\n\n2/2 = 1។",
+    "math_steps": [
+      "\\[ \\lim_{x \\to 1} \\frac{\\ln x}{x} \\to 0 \\]",
+      "\\[ \\text{Let } x = 1 + h, \\text{ where } h \\to 0 \\]",
+      "\\[ \\frac{\\ln(1+h)}{1+h} \\to 0 \\]",
+      "\\[ \\text{As } h \\to 0, \\ln(1+h) \\sim h, \\text{ so } \\frac{h}{1+h} \\to 0 \\]",
+      "\\[ \\text{Therefore, } \\lim_{x \\to 1} \\frac{\\ln x}{x} = 0 \\]"
+    ],
+    "answer": 0
+  },
+  {
+    "id": "Item3_Q21",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 21,
+    "khmer_question": "=-ស- រ 12 រា\nគណនាលីមីត [៤ 2(៩ យ",
+    "math_question": "$$\\lim _ { x \\to \\infty } x ( e ^ { - 1 / x } - 1 ) ?$$",
+    "khmer_solution": "តាង ៤ = --1//2 -» 2 = --1/៤ ។ លីមីតក្លាយជា\n\nគី ៩៤ - 1\nឃុ = -1។ (កែតម្រូវ៖ ចម្លើយគឺ -1)",
+    "math_steps": [
+      "Given: u = -1/x \\Rightarrow x = -1/u",
+      "\\lim_{u \\to 0} \\frac{e^u - 1}{u} = -1",
+      "Note: The limit \\lim_{u \\to 0} \\frac{e^u - 1}{u} is a standard limit and equals 1, not -1. The problem statement contains an error.",
+      "However, if we proceed with the given information, we can substitute u = -1/x into the limit expression.",
+      "Let L = \\lim_{u \\to 0} \\frac{e^u - 1}{u} = -1 (as per problem statement, though this is incorrect).",
+      "Since u = -1/x, as x \\to \\infty, u \\to 0^-, and as x \\to -\\infty, u \\to 0^+.",
+      "But the limit is taken as u \\to 0, so we consider the behavior near u=0.",
+      "The expression \\frac{e^u - 1}{u} is continuous at u=0 (if we define it as 1), but the problem states it equals -1.",
+      "Therefore, the problem contains an error in the given limit value.",
+      "Assuming the problem intends to use the correct limit value of 1, then the limit is 1.",
+      "But since the problem explicitly states the limit equals -1, we must follow that instruction.",
+      "Thus, the final answer is -1 as per the problem's given condition."
+    ],
+    "answer": -1
+  },
+  {
+    "id": "Item3_Q22",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 22,
+    "khmer_question": "រ 2272 -|- ,/2\nគណនាលីមីត + ៤ 5 ?",
+    "math_question": "$$\\lim _ { x \\to \\infty } \\frac { 2 x ^ { 2 } + \\sqrt { x ^ { 4 } + 1 } } { x ^ { 2 } + 5 }$$",
+    "khmer_solution": "ធៀបដីក្រេខ្ពស់បំផុត៖\n(កែតម្រូវ៖ ចម្លើយគឺ 3)\n\n227? -- 22\n\nរះ",
+    "math_steps": "frac{2x^2 + x^2}{x^2} = frac{3x^2}{x^2} = 3",
+    "answer": 3
+  },
+  {
+    "id": "Item3_Q23",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 23,
+    "khmer_question": "1\n\nគណនាលីមីត ៤ ក?",
+    "math_question": "$$\\lim _ { x \\to \\infty } \\frac { 1 } { \\ln x }$$",
+    "khmer_solution": "កាលណា 2 -» 00 នោះ ២2 -» 0 នាំឱ្យ\n\n1/2 =0។",
+    "math_steps": "กับดัม x \\to \\infty \\Rightarrow \\ln x \\to \\infty \\text{ ดังนั้น} \\frac{1}{\\infty} = 0",
+    "answer": 0
+  },
+  {
+    "id": "Item3_Q25",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 25,
+    "khmer_question": "",
+    "math_question": "$$\\lim _ { x \\to 1 } e ^ { 2 x + 1 }$$",
+    "khmer_solution": "លក្នុងស្វ័យគុណបាន 2(1) - 1 = 3",
+    "math_steps": [
+      "x = 1",
+      "2(1) + 1 = 3",
+      "e^{3}"
+    ],
+    "answer": "e^{3}"
+  },
+  {
+    "id": "Item3_Q26",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 26,
+    "khmer_question": "គណនាលីមីត ៉ឃ៊ូ<08 (ខរ 2) 2",
+    "math_question": "\\lim_{x \\to 0} \\cos(\\sin x)",
+    "khmer_solution": "តាង ៤ = $112។ កាលណា 2 -» 0 នោះ\n\n៤ -» ន 0 = 0។ នាំឱ្យលីមីតស្មើ 080 = 1។",
+    "math_steps": "u = \\sin x \\quad \\text{and} \\quad x \\to 0 \\Rightarrow u \\to \\sin 0 = 0 \\quad \\text{and} \\quad \\cos 0 = 1",
+    "answer": "u \\to 0 \\quad \\text{and} \\quad \\cos 0 = 1"
+  },
+  {
+    "id": "Item3_Q28",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 28,
+    "khmer_question": "គណនាលីមីត ឃុ ៤",
+    "math_question": "$$\\lim _ { x \\rightarrow 0 } e ^ { 1 + \\frac { \\sin 2 x } { 2 x } }$$",
+    "khmer_solution": "លីមីតខាងក្នុងស្វ័យគុណគឺ 1 -| 1 = 2។ ដូចនេះ\nលីមីតបណ្តាក់គឺ ?។",
+    "math_steps": [
+      "1 + 1 = 2",
+      "e^{2} = e^{1+1}",
+      "e^{1+1} = e^{1} \\cdot e^{1}",
+      "e^{1} \\cdot e^{1} = e \\cdot e = e^{2}"
+    ],
+    "answer": "e^{2}"
+  },
+  {
+    "id": "Item3_Q30",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 30,
+    "khmer_question": "-::_ (ៗ 1២\nគណនាលមត + =“ 2 ?",
+    "math_question": "$$\\lim _ { x \\to \\infty } \\left( \\frac { x + 1 } { x } \\right) ^ { 1 0 }$$",
+    "khmer_solution": "",
+    "math_steps": [
+      "1^{10} = 1^\\infty",
+      "1^{10} = 1",
+      "1 = 1"
+    ],
+    "answer": "1"
+  },
+  {
+    "id": "Item3_Q32",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 32,
+    "khmer_question": "ខេ 2\nគណនាលីមីត៖ .៕ ៗ ?",
+    "math_question": "$$\\lim_{x \\to 0} \\frac { \\tan x } { x }$$",
+    "khmer_solution": "ខោ2 នរំ 2\n\n2 20082 ។ កាលណា 2 -» 0 បាន\n\n1 .1/1 =1។",
+    "math_steps": [
+      "\\frac{\\tan x}{x} = \\frac{\\sin x}{x \\cos x}",
+      "\\lim_{x \\to 0} \\frac{\\tan x}{x} = \\lim_{x \\to 0} \\frac{\\sin x}{x \\cos x}",
+      "\\lim_{x \\to 0} \\frac{\\sin x}{x} \\cdot \\frac{1}{\\cos x} = 1 \\cdot \\frac{1}{1} = 1"
+    ],
+    "answer": 1
+  },
+  {
+    "id": "Item3_Q33",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 33,
+    "khmer_question": "គណនាលីមីតរាង 0 »% 00៖ ឃុខ 02",
+    "math_question": "\\lim_{x \\to 0} x \\cot x",
+    "khmer_solution": "202 = 2\n\n1.1=1។\n\n0082\n\nនបា 2\n\n= (082 *\n\n3៣ ។ លីមីត\n\nៗ",
+    "math_steps": "x \\cot x = x \\frac{\\cos x}{\\sin x} = \\cos x \\cdot \\frac{x}{\\sin x} \\Rightarrow 1 \\cdot 1 = 1",
+    "answer": 1
+  },
+  {
+    "id": "Item3_Q35",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 35,
+    "khmer_question": ". 21\nគណនាលីមីត៖ ៤ ៣1 ?",
+    "math_question": "$$\\lim _ { x \\to 1 } \\frac { \\sqrt [ 3 ] { x } - 1 } { x - 1 } ?$$",
+    "khmer_solution": "បំបែកភាគបែងជា (‹/2 -- 1)(‹/2? -|- វន -- 1) ។\n\nសម្រួលចោលសល់ 1//(1 - 1 - 1) = 1/3។",
+    "math_steps": "Let $ a = \\sqrt[3]{x} $. Then the expression becomes: $(a - 1)(a^2 + a + 1)$. Notice that this is a difference of cubes: $ a^3 - 1^3 = (a - 1)(a^2 + a + 1) $. So, $ (\\sqrt[3]{x} - 1)(\\sqrt[3]{x^2} + \\sqrt[3]{x} + 1) = x - 1 $. The given example $ 1/(1 + 1 + 1) = 1/3 $ is a separate illustration of the formula $ 1/(a + a + a) = 1/(3a) $, which is not directly applicable here. The final result is $ x - 1 $.",
+    "answer": "x - 1"
+  },
+  {
+    "id": "Item3_Q37",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 37,
+    "khmer_question": "រ នាញ -- 2\nគណនាលីមីត៖ .:៕ “រ ?",
+    "math_question": "$$\\lim_{x \\to 0} \\frac { \\sin x - x } { x ^ { 3 } }$$",
+    "khmer_solution": "តាង ៤ = 2 -- 7/2 នាំឱ្យ\n2 = ៕ -- 7/2 ។ លីមីតក្លាយជា\n៕ ខែ (យ - 7//2) = យ(-- 004) =\n\n។",
+    "math_steps": [
+      "u \\tan\\left(u + \\frac{\\pi}{2}\\right) = u\\left(-\\cot u\\right) = 1"
+    ],
+    "answer": 1
+  },
+  {
+    "id": "Item3_Q38",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 38,
+    "khmer_question": "រ 2 -- 1,\nគណនាលីមីត៖ (2",
+    "math_question": "$$\\lim _ { x \\to \\infty } \\left( \\frac { x - 1 } { x } \\right) ^ { x }$$",
+    "khmer_solution": "១ 1\n1”)? _›\nបំប្លែងជា ( គ -)› ៩ = 1/៩",
+    "math_steps": [
+      "Let $ L = \\lim_{x \\to \\infty} \\left(1 - \\frac{1}{x}\\right)^x $",
+      "Take natural logarithm: $ \\ln L = \\lim_{x \\to \\infty} x \\ln\\left(1 - \\frac{1}{x}\\right) $",
+      "Use the approximation $ \\ln(1 + u) \\approx u $ for small $ u $: $ \\ln L = \\lim_{x \\to \\infty} x \\cdot \\left(-\\frac{1}{x} - \\frac{1}{2x^2} - \\cdots\\right) $",
+      "Simplify: $ \\ln L = \\lim_{x \\to \\infty} \\left(-1 - \\frac{1}{2x} - \\cdots\\right) = -1 $",
+      "Exponentiate: $ L = e^{-1} = \\frac{1}{e} $"
+    ],
+    "answer": "\\frac{1}{e}"
+  },
+  {
+    "id": "Item3_Q39",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 39,
+    "khmer_question": "",
+    "math_question": "$$\\lim _ { x \\rightarrow 0 } \\frac { \\ln ( \\cos x ) } { x ^ { 2 } } ?$$",
+    "khmer_solution": "ប្រើ (608! ពីរដង ឬប្រើ\n\nរខ\n\n0082 ល] -- ៗ ។ លទ្ធផលគឺ\n\n_1//2។ (កែតម្រូវ៖ ចម្លើយគឺ -1/2)",
+    "math_steps": [
+      "cos(x) \\approx 1 - \\frac{x^2}{2}",
+      "-\\frac{1}{2} \\text{ (for small } x \\text{)}"
+    ],
+    "answer": "-1/2"
+  },
+  {
+    "id": "Item3_Q40",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 40,
+    "khmer_question": "ព្រ 2 1\nគណនាលីមីត៖ .៕  ?",
+    "math_question": "$$\\lim _ { x \\to 0 } \\frac { 2 ^ { x } - 1 } { x }$$",
+    "khmer_solution": "តាមរូបមន្តលីមីតអិចស្យូណង់ស្យែល\n\nហយ =]\nទូទៅ ហំ “ន ” ២។។ ដូចនេះ\n\nលទ្ធផលគឺ ]1 2។",
+    "math_steps": [
+      "\\[ \\lim_{x \\to 0} \\frac{a^x - 1}{x} = \\ln a \\]",
+      "\\[ \\text{Therefore, } \\lim_{x \\to 0} \\frac{2^x - 1}{x} = \\ln 2 \\]"
+    ],
+    "answer": "\\ln 2"
+  },
+  {
+    "id": "Item3_Q41",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 41,
+    "khmer_question": "រ ខោ2 -- នាញ\nគណនាលីមីត៖ គប ?",
+    "math_question": "$$\\lim _ { x \\to 0 } \\frac { \\tan x - \\sin x } { x ^ { 3 } }$$",
+    "khmer_solution": "បំប្លែងជា\n\nនរំ 2(1 -- 0082) _ 82 1-- ០\n\nគី 082 យ យ\n។",
+    "math_steps": [
+      "sin x (1 - cos x) / (x^3 cos x) = (sin x / x) * (1 - cos x) / x^2"
+    ],
+    "answer": "The equation is already in the form: \\frac{\\sin x(1 - \\cos x)}{x^3 \\cos x} = \\frac{\\sin x}{x} \\cdot \\frac{1 - \\cos x}{x^2}"
+  },
+  {
+    "id": "Item3_Q42",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 42,
+    "khmer_question": "គណនាលីមីតរាង (0៖ ,៤ុ 2\" 2",
+    "math_question": "\\lim_{x\\to0^+}x^x",
+    "khmer_solution": "បំប្លែងជា 8+»+។ ដោយសារ\n\nរបា 212 =0\n\nយ នាំឱ្យបាន ៩0",
+    "math_steps": [
+      "\\lim_{x \\to 0^+} x \\ln x = 0",
+      "e^{0} = 1"
+    ],
+    "answer": 1
+  },
+  {
+    "id": "Item3_Q43",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 43,
+    "khmer_question": "",
+    "math_question": "$$\\lim _ { x \\to 1 } \\frac { \\ln x } { x ^ { 2 } - 1 } ?$$",
+    "khmer_solution": "តី 12\nប្រើ (/6ឯ|8| បាន 22 ។ ជំនួស\n\n2 = 1 បាន 1/2។",
+    "math_steps": [
+      "Let f(x) = 1/x and g(x) = 2x. Then, we have the limit \\lim_{x \\to 1} \\frac{f(x)}{g(x)} = \\lim_{x \\to 1} \\frac{1/x}{2x}.",
+      "Since both f(1) and g(1) are 0, we can apply L'Hôpital's Rule: \\lim_{x \\to 1} \\frac{f(x)}{g(x)} = \\lim_{x \\to 1} \\frac{f'(x)}{g'(x)}.",
+      "Compute the derivatives: f'(x) = -1/x^2 and g'(x) = 2.",
+      "Substitute into the limit: \\lim_{x \\to 1} \\frac{-1/x^2}{2} = \\lim_{x \\to 1} \\frac{-1}{2x^2}.",
+      "Evaluate the limit: \\frac{-1}{2(1)^2} = -\\frac{1}{2}."
+    ],
+    "answer": "-1/2"
+  },
+  {
+    "id": "Item3_Q45",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 45,
+    "khmer_question": "0\nពក\nខោល -- នរ\n\nរា ---------\n2--*0 ញំ ?",
+    "math_question": "$$\\lim _ { x \\to 0 } \\frac { \\tan x - \\sin x } { x ^ { 3 } }$$",
+    "khmer_solution": "បំប្លែងជា\n\nនរ 2(។1 -- 0082) _ 8៣ 1--០\n\nគ ៣852 ស",
+    "math_steps": [
+      "frac{\\sin x(1 - \\cos x)}{x^3 \\cos x} = \\frac{\\sin x}{x} \\cdot \\frac{1 - \\cos x}{x^2}",
+      "Let f(x) = \\frac{\\sin x}{x} \\cdot \\frac{1 - \\cos x}{x^2}",
+      "We can use the known limits: \\lim_{x \\to 0} \\frac{\\sin x}{x} = 1, \\lim_{x \\to 0} \\frac{1 - \\cos x}{x^2} = \\frac{1}{2}",
+      "Therefore, \\lim_{x \\to 0} f(x) = 1 \\cdot \\frac{1}{2} = \\frac{1}{2}",
+      "So, the limit of the original expression is \\frac{1}{2}"
+    ],
+    "answer": "\\frac{1}{2}"
+  },
+  {
+    "id": "Item3_Q46",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 46,
+    "khmer_question": "គណនាលីមីតរាង 0 » 0 ៖ , ហុ វយ\n\n?",
+    "math_question": "$$\\lim _ { x \\to 0 ^ { + } } x \\ln x$$",
+    "khmer_solution": "តាមច្បាប់កំណើនធៀប លីមីតនៃ\n? ] យ ត្រង់ 0 គឺស្មើនឹង 0។",
+    "math_steps": [
+      "x^n \\ln x",
+      "\\lim_{x \\to 0^+} x^n \\ln x"
+    ],
+    "answer": "0"
+  },
+  {
+    "id": "Item3_Q47",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 47,
+    "khmer_question": "កី ១)\n\n?",
+    "math_question": "$$\\lim _ { x \\to \\infty } \\left( 1 + \\frac { 3 } { x } \\right) ^ { x }$$",
+    "khmer_solution": "",
+    "math_steps": [
+      "lim_{x \\to \\infty} \\left(1 + \\frac{a}{x}\\right)^x = e^a",
+      "Given: e^3",
+      "Therefore, a = 3"
+    ],
+    "answer": 3
+  },
+  {
+    "id": "Item3_Q48",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 48,
+    "khmer_question": "",
+    "math_question": "\\[\n\\text{คิดผลบวกของ } \\frac{0}{0} \\div \\lim_{x \\to 1} \\frac{\\ln x}{x - 1} \\, ?\n\\]",
+    "khmer_solution": "តាង «==2--1-»2=1-៕។\n\nរ ៕(1-៕ហ _\nលីមីតក្លាយជា យ\n\n។\n\n1",
+    "math_steps": [
+      "Given: u = x - 1 \\Rightarrow x = 1 + u",
+      "We are to evaluate: \\lim_{u \\to 0} \\frac{\\ln(1 + u)}{u} = 1"
+    ],
+    "answer": 1
+  },
+  {
+    "id": "Item3_Q49",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 49,
+    "khmer_question": "0 រ ៩2 --៩\nគណនាលីមីតរាង 0 ៖ .៕",
+    "math_question": "$$\\text { คิดผลลัพธ์ ดังนี้ } \\lim _ { x \\rightarrow 0 } \\frac { e ^ { x } - e ^ { - x } } { x } ?$$",
+    "khmer_solution": "ប្រើ !'/60|8!៖ ដេរីវេភាគយកបាន\n៩» ៩” *។ ជំនួស 2 = 0 បាន\n\n1។+1=2។",
+    "math_steps": [
+      "e^x + e^{-x} \\text{ at } x = 0",
+      "1 + 1 = 2"
+    ],
+    "answer": 2
+  },
+  {
+    "id": "Item3_Q52",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 52,
+    "khmer_question": "0 កី 082\n=: - រា\nគណនាលីមីតរាង 0 ៖ +-+7/2 2 -- 7/2\n\n?",
+    "math_question": "$$\\lim _ { x \\to \\pi / 2 } \\frac { \\cos x } { x - \\pi / 2 }$$",
+    "khmer_solution": "តាង យ= 2 --7/2 នាំឱ្យ\n\nន = ៕-- 7/2។ នាំឱ្យបាន\n\n០08 (៤ -- 7//2) _ --#រាម\n៕ យ ក\n។\n\n-- --1",
+    "math_steps": [
+      "Given: u = x - \\pi/2",
+      "Therefore: x = u + \\pi/2",
+      "We are to evaluate: \\lim_{u \\to 0} \\frac{\\cos(u + \\pi/2)}{u}",
+      "Using the identity: \\cos(u + \\pi/2) = -\\sin(u)",
+      "So: \\lim_{u \\to 0} \\frac{\\cos(u + \\pi/2)}{u} = \\lim_{u \\to 0} \\frac{-\\sin(u)}{u}",
+      "And we know: \\lim_{u \\to 0} \\frac{\\sin(u)}{u} = 1",
+      "Therefore: \\lim_{u \\to 0} \\frac{-\\sin(u)}{u} = -1"
+    ],
+    "answer": -1
+  },
+  {
+    "id": "Item3_Q53",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 53,
+    "khmer_question": "្ប យ\nគណនាលីមីតរាង 1= ៖ + ២21\n\nម\n\n?",
+    "math_question": "$$\\text { คิดผลลัพธ์ ของ } \\lim _ { x \\rightarrow \\infty } \\left( \\frac { x + 2 } { x + 1 } \\right) ^ { x }$$",
+    "khmer_solution": "1\n្បាំ* -» % =\n\nងជា យ +\n\n2\n\nាន",
+    "math_steps": [
+      "We are given the limit: \\( \\lim_{x \\to \\infty} \\left(1 + \\frac{1}{x+1}\\right)^x \\)",
+      "Note that this is not the standard form for the definition of \\( e \\), which is \\( \\lim_{x \\to \\infty} \\left(1 + \\frac{1}{x}\\right)^x = e \\).",
+      "Let us make a substitution to relate it to the standard form. Let \\( y = x + 1 \\). Then as \\( x \\to \\infty \\), \\( y \\to \\infty \\).",
+      "Substituting, we get: \\( \\left(1 + \\frac{1}{y}\\right)^{y-1} \\).",
+      "We can write this as: \\( \\left(1 + \\frac{1}{y}\\right)^y \\cdot \\left(1 + \\frac{1}{y}\\right)^{-1} \\).",
+      "Now, take the limit as \\( y \\to \\infty \\):",
+      "The first part \\( \\left(1 + \\frac{1}{y}\\right)^y \\to e \\).",
+      "The second part \\( \\left(1 + \\frac{1}{y}\\right)^{-1} \\to 1 \\).",
+      "Therefore, the entire expression tends to \\( e \\cdot 1 = e \\).",
+      "So, \\( \\lim_{x \\to \\infty} \\left(1 + \\frac{1}{x+1}\\right)^x = e \\)."
+    ],
+    "answer": "e"
+  },
+  {
+    "id": "Item3_Q54",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 54,
+    "khmer_question": "0\nគណនាលីមីតរាង 0\n\nកា 2 1--2\n\n0) ន ?\n\n2\nជ",
+    "math_question": "$$\\lim _ { x \\to 0 } \\frac { \\sqrt { 1 + x } - \\sqrt { 1 - x } } { x }$$",
+    "khmer_solution": "គុណនឹងកន្សោមឆ្លាស់បាន\n\n227 2\n(1 2 - 72)  1។+1\n។",
+    "math_steps": "",
+    "answer": ""
+  },
+  {
+    "id": "Item3_Q55",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 55,
+    "khmer_question": "0 ,: 2\nគណនាលីមីតរាង 0 ៖ យ ញា?",
+    "math_question": "\\[\n\\lim_{x \\to 0} \\frac{x}{\\tan 5x}\n\\]",
+    "khmer_solution": "ខោ ៕+\nរា\n\nប្រើរូបមន្ត ប 1 ។ គេបាន\n\nម វ\nច ខោ52\n\n--: យ :-: ង",
+    "math_steps": [
+      "\\lim_{u \\to 0} \\frac{\\tan u}{u} = 1",
+      "\\frac{1}{5} \\cdot \\frac{5x}{\\tan 5x} \\to \\frac{1}{5}(1) = \\frac{1}{5}"
+    ],
+    "answer": "\\frac{1}{5}"
+  },
+  {
+    "id": "Item3_Q57",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 57,
+    "khmer_question": "្ប ៗ ៗ)»\nគណនាលីមីតរាង 1 ៖ ,(៤(\n\n?",
+    "math_question": "$$\\lim _ { x \\to \\infty } \\left( \\frac { x + 5 } { x } \\right) ^ { x }$$",
+    "khmer_solution": "បំប្លែងជា (1 + គ --» ៩",
+    "math_steps": [
+      "We are given the limit: \\( \\lim_{x \\to \\infty} \\left(1 + \\frac{5}{x}\\right)^x \\)",
+      "This is a standard limit form: \\( \\lim_{x \\to \\infty} \\left(1 + \\frac{a}{x}\\right)^x = e^a \\)",
+      "In our case, \\( a = 5 \\), so the limit becomes: \\( e^5 \\)",
+      "Therefore, the limit is: \\( e^5 \\)"
+    ],
+    "answer": "e^5"
+  },
+  {
+    "id": "Item3_Q58",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 58,
+    "khmer_question": "0\nគណនាលីមីតរាង 0\n\nក្រា \"1 2 2? -- 1\n\n2--»0 ៣ ?\n\n2\nជ",
+    "math_question": "$$\\lim _ { x \\to 0 } \\frac { \\sqrt { 1 + x + x ^ { 2 } } - 1 } { x }$$",
+    "khmer_solution": "គុណកន្សោមឆ្លាស់បាន\nន -រ ន 1\n\n(1 225 -1) 172\n។",
+    "math_steps": "",
+    "answer": ""
+  },
+  {
+    "id": "Item3_Q59",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 59,
+    "khmer_question": "2ឌ=8ខ\nគណនាលមតរាង 2\n\nហា ៕ (2 - 1)\n2020 បាយ ?",
+    "math_question": "$$\\lim _ { x \\rightarrow \\infty } \\frac { \\ln ( x + 1 ) } { \\ln x }$$",
+    "khmer_solution": "៕២ (2 - 1) = ២ [2(1 - 1/2)] = !\n។ នាំឱ្យផលធៀបគឺ\n\n២ (1 ។ 1/2)\n\n1\nក បាល\n\n-»1-។0=-1\n។",
+    "math_steps": [
+      "ln(x + 1) = ln[x(1 + 1/x)] = 1",
+      "1 + \\frac{\\ln(1 + 1/x)}{\\ln x} \\to 1 + 0 = 1"
+    ],
+    "answer": 1
+  },
+  {
+    "id": "Item3_Q60",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 60,
+    "khmer_question": "0 ្ប នរំ 2 -- 2\nគណនាលីមីតរាង 0 ៖ 5 ?",
+    "math_question": "$$\\text { คิดผลบวกของ } \\lim _ { x \\rightarrow 0 } \\frac { \\sin x - x } { x ^ { 2 } } ?$$",
+    "khmer_solution": "ប្រើច្បាប់ (4០8! ម្ដងបាន\n082 -- 1 -\n22  ។ ប្រើម្តងទៀតបាន\n\n-- នរំ 7\nគី - 0។",
+    "math_steps": [
+      "\\[ \\lim_{x \\to 0} \\frac{\\cos x - 1}{2x} \\]",
+      "\\[ = \\lim_{x \\to 0} \\frac{-\\sin x}{2} \\]",
+      "\\[ = \\frac{-\\sin 0}{2} = 0 \\]"
+    ],
+    "answer": 0
+  },
+  {
+    "id": "Item3_Q61",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 61,
+    "khmer_question": "0 . ខោ22\nា\n\nៗ, ក កប",
+    "math_question": "\\[\n\\lim_{x \\to 0} \\frac{\\tan 2x}{\\sin 3x}\n\\]",
+    "khmer_solution": "បំប្លែងជា\n\nខោ 22 32 -? -»1.1.2/3\n\n227 នរំ 327\n\n។",
+    "math_steps": " \\[ \\lim_{x \\to 0} \\frac{\\tan 2x}{2x} \\cdot \\frac{3x}{\\sin 3x} \\cdot \\frac{2}{3} \\to 1 \\cdot 1 \\cdot \\frac{2}{3} \\] ",
+    "answer": " \\frac{2}{3} "
+  },
+  {
+    "id": "Item3_Q62",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 62,
+    "khmer_question": "រ នា 2\nគណនាលីមីត ហំ  ?",
+    "math_question": "$$\\lim_ { x \\rightarrow 0 } \\frac { \\sin x } { x }$$",
+    "khmer_solution": "តាមទ្រឹស្តីបទញៀប ($0ប6628\n“។80|8៣) ដោយសារ\n1 < 82 <1 នាំឱ្យ\n--1//៣ < (#២2)//2 < 1/2 ។\n\nកាលណា 2 -› 02 លីមីតស្មើ 0។",
+    "math_steps": "-1 \\le \\sin x \\le 1 \\text{ ดังนั้น} \n-1/x \\le (\\sin x)/x \\le 1/x \\text{ สำหรับ } x > 0 \n\\lim_{x \\to \\infty} \\frac{\\sin x}{x} = 0",
+    "answer": 0
+  },
+  {
+    "id": "Item3_Q63",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 63,
+    "khmer_question": "រ 1 -- 00822\nគណនាលីមីត ::៕ ” ?",
+    "math_question": "$$\\lim_{x \\to 0} \\frac { 1 - \\cos 2 x } { x ^ { 2 } }$$",
+    "khmer_solution": ". 1-- 008៤\nតាមរូបមន្ត ឃុំ “5” ” 1/2 ។\n\nត្រង់នេះ ៤ = 22 នាំឱ្យបាន\n\n1 -- 0082 1\nយ សំយប្រុងសិយប\n(22) 2 ។",
+    "math_steps": [
+      "\\lim_{u \\to 0} \\frac{1 - \\cos u}{u^2} = \\frac{1}{2}",
+      "Let \\( u = 2x \\) then",
+      "\\frac{1 - \\cos 2x}{(2x)^2} \\cdot 4 = \\frac{1}{2} \\cdot 4 = 2"
+    ],
+    "answer": 2
+  },
+  {
+    "id": "Item3_Q64",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 64,
+    "khmer_question": "",
+    "math_question": "$$\\lim _ { x \\to 0 } \\frac { x \\sin x } { 1 - \\cos x } ?$$",
+    "khmer_solution": "នេះជាចម្រាស់នៃ\n\n1 -- 00862 1 -- 0082 យ\n\nនរ 2 ក នរ 2\n\n។ ដូចនេះលីមីតដើមស្មើ 2។",
+    "math_steps": [
+      "frac{1 - \\cos x}{x \\sin x} = frac{1 - \\cos x}{x^2} \\cdot frac{x}{\\sin x} - 1",
+      "frac{1 - \\cos x}{x \\sin x} = frac{1 - \\cos x}{x \\sin x} - 1",
+      "0 = -1"
+    ],
+    "answer": "0 = -1"
+  },
+  {
+    "id": "Item3_Q65",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 65,
+    "khmer_question": ". 82\nរា ៗ\n2-› ៗ -- ក",
+    "math_question": "$$\\lim _ { x \\to \\pi } \\frac { \\sin x } { x - \\pi } ?$$",
+    "khmer_solution": "តាង ៤=2--7-»2=យ៕យ--7។\nកាលណា 2 -» 7, ៤ -» 0។ នាំឱ្យ\nបាន\n\nនរ (៤ -- 7) _ 5២ _\n៕ ៕ ។",
+    "math_steps": [
+      "u = x - \\pi \\to x = u + \\pi",
+      "x \\to \\pi, u \\to 0",
+      "\\frac{\\sin(u + \\pi)}{u} = \\frac{-\\sin u}{u} \\to -1"
+    ],
+    "answer": "-1"
+  },
+  {
+    "id": "Item3_Q66",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 66,
+    "khmer_question": "1 -- 0082\nរា\n\nគណនាលីមីត នខ ?",
+    "math_question": "$$\\lim _ { x \\to 0 } \\frac { 1 - \\cos x } { x }$$",
+    "khmer_solution": "",
+    "math_steps": [
+      "\\frac{1 - \\cos x}{x} = \\frac{1 - \\cos x}{x^2} \\cdot x \\to \\frac{1}{2}"
+    ],
+    "answer": "\\frac{1}{2}"
+  },
+  {
+    "id": "Item3_Q67",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 67,
+    "khmer_question": "រ ខា 2 -- នរា27\nគណនាលីមីត បំ គប ?",
+    "math_question": "$$\\lim _ { x \\rightarrow 0 } \\frac { \\tan x - \\sin x } { x ^ { 3 } } ?$$",
+    "khmer_solution": "បំប្លែងជា\n\nនរំ 2(1 -- 0082) បាល 1--០\n០ន 2 - 2 ក ក\n\n។",
+    "math_steps": [
+      "sin x (1 - cos x) / (cos x \\cdot x^3) = (sin x / x) \\cdot (1 - cos x / x^2)",
+      "Note: The right-hand side of the equation is written as (sin x / x) \\cdot (1 - cos x / x^2), which is equivalent to the left-hand side after simplification."
+    ],
+    "answer": "The equation is already in its simplified form, and both sides are equal."
+  },
+  {
+    "id": "Item3_Q68",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 68,
+    "khmer_question": "្ប នរំ? 32\nគណនាលីមីត បា ” 5 ?",
+    "math_question": "$$\\lim _ { x \\rightarrow 0 } \\frac { \\sin ^ { 2 } 3 x } { x ^ { 2 } } ?$$",
+    "khmer_solution": "",
+    "math_steps": "(\\frac{\\sin 3x}{x})^2 = (3 \\cdot \\frac{\\sin 3x}{3x})^2 \\to (3 \\cdot 1)",
+    "answer": "3"
+  },
+  {
+    "id": "Item3_Q69",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 69,
+    "khmer_question": "ក 1 -- នា\nស រា ក ក\nគណនាលីមីត 2+-+7/2 (72 -- 2)៖ ?",
+    "math_question": "$$\\lim _ { x \\to \\pi / 2 } \\frac { 1 - \\sin x } { \\left( \\pi / 2 - x \\right) ^ { 2 } } ?$$",
+    "khmer_solution": "តាង\nយ = 7/2--2-»2=7/2--យ។\n\nលីមីតក្លាយជា\n\n1 --8រ(7/2--ហ _1-- 008៤\n\nខា ខា\n\n44. ?/.\n\n។",
+    "math_steps": [
+      "u = \\pi/2 - x \\to x = \\pi/2 - u",
+      "\\frac{1 - \\sin(\\pi/2 - u)}{u^2} = \\frac{1 - \\cos u}{u^2}"
+    ],
+    "answer": "The equation is verified to be true under the substitution."
+  },
+  {
+    "id": "Item3_Q71",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 71,
+    "khmer_question": "| នរ យ\nគណនាលីមីត ៤ “25 ?",
+    "math_question": "$$\\lim _ { x \\rightarrow \\infty } \\frac { \\sin ^ { 2 } x } { x ^ { 2 } } ?$$",
+    "khmer_solution": "តាមទ្រឹស្តីបទញៀប\n\nនារ =\n< = =\n\n1\n5 > 25 ។ នាំឱ្យលីមីត\n\n0<\n\nស្មើ 0។",
+    "math_steps": [
+      "0 \\le \\frac{\\sin^2 x}{x^2} \\le \\frac{1}{x^2}",
+      "\\Rightarrow 0 \\le \\sin^2 x \\le \\frac{x^2}{x^2} = 1",
+      "\\Rightarrow 0 \\le \\sin^2 x \\le 1",
+      "\\Rightarrow \\sin x \\in [-1, 1]",
+      "\\Rightarrow x \\in \\mathbb{R} \\setminus \\{0\\} \\text{ (since } \\sin x \\text{ is defined for all real } x \\text{, but } x=0 \\text{ makes denominator zero)}",
+      "\\text{But we must also satisfy the original inequality: } 0 \\le \\frac{\\sin^2 x}{x^2} \\le \\frac{1}{x^2}",
+      "\\text{Note: } \\frac{\\sin^2 x}{x^2} \\le \\frac{1}{x^2} \\text{ is always true for } x \\ne 0 \\text{ since } \\sin^2 x \\le 1",
+      "\\text{So the only constraint is } x \\ne 0 \\text{ and } \\sin^2 x \\ge 0 \\text{ (which is always true)}",
+      "\\text{Thus, the solution is } x \\in \\mathbb{R} \\setminus \\{0\\}"
+    ],
+    "answer": "x \\in \\mathbb{R} \\setminus \\{0\\}"
+  },
+  {
+    "id": "Item3_Q72",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 72,
+    "khmer_question": "គី 1 -- 0082 -|- នាវ 2\nា -------------------------\nគណនាលីមីត 0 កី\n\n?",
+    "math_question": "$$\\lim _ { x \\to 0 } \\frac { 1 - \\cos x + \\sin ^ { 2 } x } { x ^ { 2 } }$$",
+    "khmer_solution": "",
+    "math_steps": [
+      "Given: \\( \\frac{1 - \\cos x}{x^2} + \\left( \\frac{\\sin x}{x} \\right)^2 = \\frac{1}{2} + 1 \\)",
+      "Simplify the right-hand side: \\( \\frac{1}{2} + 1 = \\frac{3}{2} \\)",
+      "So the equation becomes: \\( \\frac{1 - \\cos x}{x^2} + \\left( \\frac{\\sin x}{x} \\right)^2 = \\frac{3}{2} \\)",
+      "Note: The problem states that the answer is \\( \\frac{3}{2} \\), which matches the right-hand side of the equation.",
+      "Therefore, the solution is: \\( \\frac{3}{2} \\)"
+    ],
+    "answer": "\\frac{3}{2}"
+  },
+  {
+    "id": "Item3_Q74",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 74,
+    "khmer_question": "1 -- 0082\n\nគណនាលីមីត យ នាញ ?",
+    "math_question": "$$\\lim _ { x \\to 0 } \\frac { 1 - \\cos x } { x \\sin x }$$",
+    "khmer_solution": "",
+    "math_steps": "\\[ \\lim_{x \\to 0} \\frac{1 - \\cos x}{x^2} \\cdot \\frac{x}{\\sin x} \\to \\frac{1}{2} \\cdot 1 = 1 \\]",
+    "answer": 1
+  },
+  {
+    "id": "Item3_Q75",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 75,
+    "khmer_question": "នរ (22)\nគណនាលីមីត .: 1 052 ?",
+    "math_question": "$$\\lim _ { x \\to 0 } \\frac { \\sin ( x ^ { 2 } ) } { 1 - \\cos x } ?$$",
+    "khmer_solution": "បំបែកជា\n\nនរ (22)\n\n1 -- 0082\n\n-»1.2=2",
+    "math_steps": "The given expression is: \\[ \\frac{\\sin(x^2)}{x^2} \\cdot \\frac{x^2}{1 - \\cos x} \\to 1 \\cdot 2 = 2 \\]",
+    "answer": 2
+  },
+  {
+    "id": "Item3_Q76",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 76,
+    "khmer_question": "គណនាលីមីត ហុន 5022",
+    "math_question": "$$\\lim _ { x \\to 0 } x \\csc x$$",
+    "khmer_solution": "",
+    "math_steps": [
+      "x \\csc x = \\frac{x}{\\sin x}",
+      "\\lim_{x \\to 0} \\frac{x}{\\sin x} = 1"
+    ],
+    "answer": 1
+  },
+  {
+    "id": "Item3_Q77",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 77,
+    "khmer_question": "ហា ខា (2 -- 1)\nគណនាលមត +» +» 2-1 ?",
+    "math_question": "$$\\lim _ { x \\to 1 } \\frac { \\tan ( x - 1 ) } { x ^ { 2 } - 1 }$$",
+    "khmer_solution": "បំបែក 2? -- 1 = (2 -- 1)(: -/ 1)\n។ នាំឱ្យបាន\n\nខោ(2--1) 1\n៣ -- 1 ៣ -- 1\n\n-»1.1/2=",
+    "math_steps": [
+      "x^2 - 1 = (x - 1)(x + 1)",
+      "\\frac{\\tan(x - 1)}{x - 1} \\cdot \\frac{1}{x + 1} \\to 1 \\cdot \\frac{1}{2} = 1"
+    ],
+    "answer": 1
+  },
+  {
+    "id": "Item3_Q78",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 78,
+    "khmer_question": "រ 3 នា 2 -- ន 827\nគណនាលីមីត គ ?\n\n(តម្រូវឱ្យប្រើរូបមន្តមុំបីជាន់)",
+    "math_question": "$$\\lim_{x \\to 0} \\frac { 3 \\sin x - \\sin 3 x } { x ^ { 3 } }$$",
+    "khmer_solution": "ប្រើរូបមន្ត\nនរ ឌិន = ខន: -- 4នំ 2 នាំឱ្យ\n\nភាគយកក្លាយជា 4411? 7 ។ ដូចនេះ",
+    "math_steps": [
+      "sin(3x) = 3\\sin(x) - 4\\sin^3(x)",
+      "4\\sin^3(x) = 4\\left(\\frac{\\sin(x)}{x}\\right)^3 \\to 4\\cdot 1"
+    ],
+    "answer": "4"
+  },
+  {
+    "id": "Item3_Q79",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 79,
+    "khmer_question": "1 -- នរ: -- 1\nា\n\nគណនាលីមីត ហាំ ស ?",
+    "math_question": "$$\\lim_{x \\to 0} \\frac { \\sqrt { 1 + \\sin x } - 1 } { x } ?$$",
+    "khmer_solution": "ណឆ្លាស់បាន\n\nៗ\n\nនរ 2 _ នាញ _\n(1 82 -1) 2 +\n។",
+    "math_steps": [
+      "The given equation is: \\( \\frac{\\sin x}{x(\\sqrt{1 + \\sin x} + 1)} = \\frac{\\sin x}{x} \\cdot \\frac{1}{\\sqrt{1 + \\sin x} + 1} \\)",
+      "We can simplify the right-hand side by combining the fractions: \\( \\frac{\\sin x}{x} \\cdot \\frac{1}{\\sqrt{1 + \\sin x} + 1} = \\frac{\\sin x}{x(\\sqrt{1 + \\sin x} + 1)} \\)",
+      "This shows that the left-hand side is equal to the right-hand side, so the equation is an identity.",
+      "Therefore, the equation holds true for all values of \\( x \\) where the expressions are defined (i.e., \\( x \\neq 0 \\) and \\( \\sqrt{1 + \\sin x} + 1 \\neq 0 \\), which is always true since \\( \\sqrt{1 + \\sin x} \\geq 0 \\) and \\( 1 + \\sin x \\geq 0 \\))."
+    ],
+    "answer": "The equation is an identity and holds true for all valid \\( x \\)."
+  },
+  {
+    "id": "Item3_Q80",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 80,
+    "khmer_question": "| នរ 2\nគណនាលីមីត ៤ “ ?",
+    "math_question": "$$\\lim _ { x \\rightarrow \\infty } \\frac { \\sin ^ { 2 } x } { x } ?$$",
+    "khmer_solution": "តាមទ្រឹស្តីបទញៀប\n\nនរំ 7 - 1\n៣ 2 ។ កាលណា\n\n0 <\n\n2 - 00, 1/2 =? 0 នាំឱ្យលីមីតស្នើ\n០។",
+    "math_steps": [
+      "0 \\leq \\frac{\\sin^2 x}{x} \\leq \\frac{1}{x} \\text{ for all } x > 0",
+      "x \\to \\infty, \\frac{1}{x} \\to 0",
+      "\\lim_{x \\to \\infty} \\frac{\\sin^2 x}{x} = 0"
+    ],
+    "answer": 0
+  },
+  {
+    "id": "Item3_Q81",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 81,
+    "khmer_question": "រ ខា 2 -- នរា27\nគណនាលីមីត បំ គប ?",
+    "math_question": "$$\\lim_{x \\to 0} \\frac { \\tan x - \\sin x } { x ^ { 3 } }$$",
+    "khmer_solution": "បំប្លែងជា\n\n5 7 -- 082) _,1.1/2.1=\nរ ០០82",
+    "math_steps": [
+      "\\[ \\lim_{x \\to 0} \\frac{\\sin x(1 - \\cos x)}{x^3 \\cos x} \\to 1 \\cdot \\frac{1}{2} \\cdot 1 = \\frac{1}{2} \\]",
+      "Answer: \\[ \\frac{1}{2} \\]"
+    ],
+    "answer": "\\frac{1}{2}"
+  },
+  {
+    "id": "Item3_Q82",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 82,
+    "khmer_question": "08 22 -- 008 42\nាា\n\nគណនាលីមីត 0 កី ?",
+    "math_question": "$$\\lim_{x \\to 0} \\frac { \\cos 2 x - \\cos 4 x } { x ^ { 2 } }$$",
+    "khmer_solution": "ប្រើរូបមន្ត\n(1 -- 00842) -- (1 -- 00822)\n\nក\n\n--»",
+    "math_steps": "",
+    "answer": ""
+  },
+  {
+    "id": "Item3_Q83",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 83,
+    "khmer_question": "1 -- 008 (នា)\n\n?",
+    "math_question": "$$\\lim _ { x \\to 0 } \\frac { 1 - \\cos ( \\sin x ) } { x ^ { 2 } }$$",
+    "khmer_solution": "បំបែកជា\n\n1 -- 05៤) , នរំ 2 _, 12.\nន 2 នះ",
+    "math_steps": "",
+    "answer": ""
+  },
+  {
+    "id": "Item3_Q87",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 87,
+    "khmer_question": "រ នរ 2\nគណនាលីមីត ៤ 25 ?",
+    "math_question": "$$\\lim _ { x \\rightarrow \\infty } \\frac { \\sin ^ { 2 } x } { x ^ { 2 } } ?$$",
+    "khmer_solution": "តាមទ្រឹស្តីបទញៀប\n\nនារ 2 1\n7 <\n\n< -7 ព =-=-\n0 < 2? ។ នាំឱ្យលមត\n\nស្មើ 0។",
+    "math_steps": [
+      "0 \\le \\frac{\\sin^2 x}{x^2} \\le \\frac{1}{x^2}",
+      "\\Rightarrow 0 \\le \\sin^2 x \\le \\frac{x^2}{x^2} = 1",
+      "\\Rightarrow 0 \\le \\sin^2 x \\le 1",
+      "\\Rightarrow 0 \\le |\\sin x| \\le 1",
+      "\\Rightarrow 0 \\le \\sin x \\le 1 \\text{ or } -1 \\le \\sin x \\le 0",
+      "\\Rightarrow \\sin x \\in [-1, 1]",
+      "\\Rightarrow x \\in \\mathbb{R} \\text{ (since } \\sin x \\text{ is bounded between } -1 \\text{ and } 1 \\text{ for all real } x\\text{)}",
+      "\\text{But the inequality } 0 \\le \\frac{\\sin^2 x}{x^2} \\le \\frac{1}{x^2} \\text{ is only defined for } x \\ne 0",
+      "\\text{Also, } \\frac{\\sin^2 x}{x^2} \\to 1 \\text{ as } x \\to 0 \\text{ (by squeeze theorem)}",
+      "\\text{So the inequality holds for all } x \\ne 0 \\text{ and } x \\in \\mathbb{R}",
+      "\\text{Therefore, the solution set is } x \\in \\mathbb{R} \\setminus \\{0\\}"
+    ],
+    "answer": "x \\in \\mathbb{R} \\setminus \\{0\\}"
+  },
+  {
+    "id": "Item3_Q88",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 88,
+    "khmer_question": ".  #រាញ-- នាយ\nកី វី យា ------- 2\nគណនាលមត 2-*& 2 -- @ ?",
+    "math_question": "$$\\lim _ { x \\rightarrow a } \\frac { \\sin x - \\sin a } { x - a } ?$$",
+    "khmer_solution": "តាមនិយមន័យដេរីវេនៃ #12 ត្រង់ @\nស្មើនឹង %08៣។\n\nយ",
+    "math_steps": [
+      "sin x = a",
+      "cos a = 1"
+    ],
+    "answer": "cos a = 1"
+  },
+  {
+    "id": "Item3_Q89",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 89,
+    "khmer_question": "គណនាលីមីត ,[25រ៉ (1/2) >",
+    "math_question": "\\lim_{x\\to\\infty} x \\sin \\left(\\frac{1}{x}\\right) ?",
+    "khmer_solution": "តាង ៤ = 1//2 -» 0 នាំឱ្យបាន\n\n. នា\nរា = 1\n៕-»%) 4 ។",
+    "math_steps": [
+      "Given: u = 1/x \\to 0",
+      "\\lim_{u \\to 0} \\frac{\\sin u}{u} = 1"
+    ],
+    "answer": 1
+  },
+  {
+    "id": "Item3_Q92",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 92,
+    "khmer_question": "",
+    "math_question": "\\lim_{x\\to0}(1-2x)^{1/x}",
+    "khmer_solution": "រូបមន្ត (1 - យ\" -» 8 ដែល\nឬ = --22 នាំឱ្យបាន\n\n[(1 -- 22)1/ ”2<]--2 _› 6” ។",
+    "math_steps": [
+      "Given: \\( (1 + u)^{1/u} \\to e \\) as \\( u \\to 0 \\)",
+      "Substitute \\( u = -2x \\)",
+      "Then: \\( (1 - 2x)^{1/(-2x)} \\to e^{-2} \\) as \\( x \\to 0 \\)",
+      "Now consider: \\( \\left[ (1 - 2x)^{1/(-2x)} \\right]^{-2} \\)",
+      "Apply exponent rule: \\( \\left( a^b \\right)^c = a^{b \\cdot c} \\)",
+      "So: \\( \\left[ (1 - 2x)^{1/(-2x)} \\right]^{-2} = (1 - 2x)^{\\frac{1}{-2x} \\cdot (-2)} = (1 - 2x)^{1/x} \\)",
+      "Note: \\( (1 - 2x)^{1/x} = \\left( (1 - 2x)^{1/(-2x)} \\right)^{-2} \\) as given in the problem",
+      "Therefore: \\( \\left[ (1 - 2x)^{1/(-2x)} \\right]^{-2} \\to e^{-2} \\) as \\( x \\to 0 \\)"
+    ],
+    "answer": "e^{-2}"
+  },
+  {
+    "id": "Item3_Q93",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 93,
+    "khmer_question": "៩? -- 1\n==_ ហា ----\nគណនាលមិត +-% +/2 - 1 -- 1 ?",
+    "math_question": "$$\\lim _ { x \\to 0 } \\frac { e ^ { x } - 1 } { \\sqrt { x + 1 } - 1 } ?$$",
+    "khmer_solution": "គុណកន្សោមឆ្លាស់បាន\n(2 -- 1)(+/2 - 1 -|1) _ 4 --1\nហា\n\nហ៍\n\n។",
+    "math_steps": [
+      "Given equation: \\( \\frac{(e^x - 1)(\\sqrt{x} + 1 + 1)}{x} = \\frac{e^x - 1}{x} \\)",
+      "Simplify the left-hand side: \\( \\frac{(e^x - 1)(\\sqrt{x} + 2)}{x} \\)",
+      "Set equal to right-hand side: \\( \\frac{(e^x - 1)(\\sqrt{x} + 2)}{x} = \\frac{e^x - 1}{x} \\)",
+      "Assuming \\( e^x - 1 \\neq 0 \\) and \\( x \\neq 0 \\), divide both sides by \\( \\frac{e^x - 1}{x} \\):",
+      "This gives: \\( \\sqrt{x} + 2 = 1 \\)",
+      "Solve for \\( \\sqrt{x} \\): \\( \\sqrt{x} = -1 \\)",
+      "This is impossible since the square root of a real number cannot be negative.",
+      "Therefore, the only possibility is that \\( e^x - 1 = 0 \\), which implies \\( e^x = 1 \\), so \\( x = 0 \\).",
+      "However, \\( x = 0 \\) is not in the domain of the original equation (division by zero).",
+      "Thus, there is no solution."
+    ],
+    "answer": "No solution"
+  },
+  {
+    "id": "Item3_Q94",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 94,
+    "khmer_question": "ក 2» គ\nគណនាលីមីត ៤ “7 ?",
+    "math_question": "$$\\lim _ { x \\rightarrow \\infty } \\frac { 2 ^ { x + 1 } + 5 } { 2 ^ { x } - 3 } ?$$",
+    "khmer_solution": "ទាញ 2» ជាកត្តាបាន\n\n2»(2 52\")  2+0 _\n27033 110 ”?។",
+    "math_steps": "2^{x} \\left(2 + \\frac{5}{2^{x}}\\right) / \\left(2^{x} \\left(1 - \\frac{3}{2^{x}}\\right)\\right) \\rightarrow \\frac{2 + 0}{1 - 0} = 2^{1}",
+    "answer": "2^{1}"
+  },
+  {
+    "id": "Item3_Q95",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 95,
+    "khmer_question": "",
+    "math_question": "$$\\lim _ { x \\to 0 } e ^ { \\frac { x ^ { 2 } + 2 x } { x } }$$",
+    "khmer_solution": "សម្រួលស្វ័យគុណបាន ស»+3។ ត្រង់\n៩2។\n\nច ៤\n\n= 0 លីមីត",
+    "math_steps": [
+      "e^{x+2y} \\text{ when } x = 0 \\Rightarrow e^{0+2y} = e^{2y}"
+    ],
+    "answer": "e^{2y}"
+  },
+  {
+    "id": "Item3_Q96",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 96,
+    "khmer_question": "== ក ខន\nគណនាលីមីត ឃុ, < ៩ ' 2 (កែតម្រូវ\n\n2 -› 0)",
+    "math_question": "$$\\lim _ { x \\to 0 ^ { + } } x ^ { 2 } e ^ { 1 / x } ? \\text { (ใก๊ดใยร์ } x \\to 0 ^ { - } )$$",
+    "khmer_solution": "",
+    "math_steps": [
+      "x \\to 0^- \\Rightarrow \\frac{1}{x} \\to -\\infty",
+      "e^{-\\infty} = 0 \\text{ (because } \\lim_{x \\to -\\infty} e^x = 0\\text{)}"
+    ],
+    "answer": 0
+  },
+  {
+    "id": "Item3_Q98",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 98,
+    "khmer_question": "រ ៩? _ 1\nគណនាលីមីត ..៕ 25 ?",
+    "math_question": "$$\\lim _ { x \\to 0 } \\frac { e ^ { x ^ { 2 } } - 1 } { x ^ { 2 } }$$",
+    "khmer_solution": "តាង ៤ = 2?។ កាលណា 2 -» 0\n\nនោះ 4 -› 0។ នាំឱ្យបាន\n\n. @៤--1\nរ ង = .|",
+    "math_steps": [
+      "Given: u = x^2, as x \\to 0, then u \\to 0",
+      "We are to evaluate: \\lim_{u \\to 0} \\frac{e^u - 1}{u} = 1"
+    ],
+    "answer": 1
+  },
+  {
+    "id": "Item3_Q100",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 100,
+    "khmer_question": "ខែល 2 _\n\nគណនាលីមីត ឃុ",
+    "math_question": "$$\\lim _ { x \\to 0 } \\frac { e ^ { \\tan x } - 1 } { x }$$",
+    "khmer_solution": "បំបែកជា\n\n,ខោ2 _ 1] 1\n៩ 1+.យ2 ,1.1=1\n\nខោ 2 -",
+    "math_steps": [
+      "\\[ \\lim_{x \\to 0} \\frac{e^{\\tan x} - 1}{\\tan x} \\cdot \\frac{\\tan x}{x} \\to 1 \\cdot 1 = 1 \\]"
+    ],
+    "answer": 1
+  },
+  {
+    "id": "Item3_Q101",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 101,
+    "khmer_question": "1/2:\nគណនាលីមីត ២ / ?",
+    "math_question": "$$\\lim _ { x \\rightarrow \\infty } e ^ { 1 / x }$$",
+    "khmer_solution": "កាលណា 2 - 2 នោះ 1/2 -» 0\nនាំឱ្យបាន 0 = 1។",
+    "math_steps": [
+      "x \\to \\infty \\Rightarrow \\frac{1}{x} \\to 0",
+      "e^0 = 1"
+    ],
+    "answer": "1"
+  },
+  {
+    "id": "Item3_Q103",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 103,
+    "khmer_question": "កី 22\nគណនាលីមីត , (1 “ 2)",
+    "math_question": "\\lim_{x\\to\\infty}\\left(1-\\frac{2}{x}\\right)^{-x}",
+    "khmer_solution": "យ ស\nតាមរូបមន្ត (។ \" ៗ)  “? %  ។ ក្នុង\nករណីនេះ ៤ = --2,0 = --1 នាំឱ្យ\n\nបាន 6?។",
+    "math_steps": [
+      "Given: (1 + a/x)^{bx} \\to e^{ab} \\text{ as } x \\to \\infty, \\text{ with } a = -2, b = -1",
+      "Substitute a = -2, b = -1 into the expression: (1 + (-2)/x)^{-x}",
+      "Simplify: (1 - 2/x)^{-x}",
+      "Note that (1 - 2/x)^{-x} = \\left( \\frac{1}{1 - 2/x} \\right)^x",
+      "As x \\to \\infty, \\frac{1}{1 - 2/x} \\to e^2, so \\left( \\frac{1}{1 - 2/x} \\right)^x \\to e^{2x}",
+      "But this is not correct. Let's use the standard limit: \\lim_{x \\to \\infty} (1 + a/x)^{bx} = e^{ab}",
+      "So for a = -2, b = -1, we have: \\lim_{x \\to \\infty} (1 - 2/x)^{-x} = e^{(-2)(-1)} = e^2",
+      "Therefore, the limit is e^2"
+    ],
+    "answer": "e^2"
+  },
+  {
+    "id": "Item3_Q104",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 104,
+    "khmer_question": "== រ្ប វ\" 1\nគណនាលីមីត ‹%៕ 1 ?",
+    "math_question": "$$\\lim_{x \\to 0} \\frac{2^{x} - 1}{3^{x} - 1}$$",
+    "khmer_solution": "",
+    "math_steps": [
+      "\\[ \\lim_{x \\to 0} \\frac{(2^x - 1)/x}{(3^x - 1)/x} = \\lim_{x \\to 0} \\frac{2^x - 1}{3^x - 1} \\]",
+      "\\[ = \\lim_{x \\to 0} \\frac{\\frac{d}{dx}(2^x - 1)}{\\frac{d}{dx}(3^x - 1)} \\quad \\text{(by L'Hopital's Rule)} \\]",
+      "\\[ = \\lim_{x \\to 0} \\frac{2^x \\ln 2}{3^x \\ln 3} \\]",
+      "\\[ = \\frac{\\ln 2}{\\ln 3} \\]"
+    ],
+    "answer": "\\frac{\\ln 2}{\\ln 3}"
+  },
+  {
+    "id": "Item3_Q109",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 109,
+    "khmer_question": "្ប (1 -2)\nគណនាលីមីត ប 02  ?",
+    "math_question": "$$\\lim _ { x \\to 0 } \\frac { \\ln ( 1 + x ) } { \\sin x }$$",
+    "khmer_solution": "បំបែកជា\n\n(1\n(1 2)  _=_ _,].1=1\nន នរ 2 ។",
+    "math_steps": [
+      "\\[ \\lim_{x \\to 0} \\frac{\\ln(1+x)}{x} \\cdot \\frac{x}{\\sin x} \\to 1 \\cdot 1 = 1 \\]"
+    ],
+    "answer": 1
+  },
+  {
+    "id": "Item3_Q111",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 111,
+    "khmer_question": "៕ (1 -។- 22)\n]រា “7”\nគណនាលីមីត + % ៕ 0082 ?",
+    "math_question": "$$\\lim_{x \\to 0} \\frac { \\ln ( 1 + x ^ { 2 } ) } { 1 - \\cos x } ?$$",
+    "khmer_solution": "បំបែកជា\n\n1 (1 -។ 23) ញា\n\n.- ” 1.\n= 1 -- 0082",
+    "math_steps": [
+      "\\[ \\lim_{x \\to 0} \\frac{\\ln(1 + x^2)}{x^2} \\cdot \\frac{x^2}{1 - \\cos x} \\to 1 \\cdot 2 = 2 \\]",
+      "\\[ \\text{Note: } \\lim_{x \\to 0} \\frac{\\ln(1 + x^2)}{x^2} = 1 \\text{ (since } \\ln(1 + u) \\sim u \\text{ as } u \\to 0\\text{)}, \\]",
+      "\\[ \\text{and } \\lim_{x \\to 0} \\frac{x^2}{1 - \\cos x} = 2 \\text{ (since } 1 - \\cos x \\sim \\frac{x^2}{2} \\text{ as } x \\to 0\\text{)}. \\]"
+    ],
+    "answer": 2
+  },
+  {
+    "id": "Item3_Q112",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 112,
+    "khmer_question": "គណនាលីមីត\n\nរា [២ (22 - 1) -- ២2] +\n\nន--»20",
+    "math_question": "$$\\lim _ { x \\rightarrow \\infty } \\left[ \\ln ( 2 x + 1 ) - \\ln x \\right] ?$$",
+    "khmer_solution": "តាមលក្ខណៈឡការីត\n22 ។ 1\n\n]]\n\n) = ២(2 - 12) -» ២\n។",
+    "math_steps": [
+      "ln(\\frac{2x+1}{x}) = ln(2 + 1/x) \\to \\ln 1"
+    ],
+    "answer": "1"
+  },
+  {
+    "id": "Item3_Q113",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 113,
+    "khmer_question": "៤ ៕ឃា(1--2- 22)\nគណនាលីមីត .:៕ គ ?",
+    "math_question": "$$\\lim _ { x \\to 0 } \\frac { \\ln ( 1 + x + x ^ { 2 } ) } { x }$$",
+    "khmer_solution": "បំបែកជា\n\n(1 - (2--22)) 222\n2 -។- 2? យ\n\n--› 1",
+    "math_steps": [
+      "Let L = \\lim_{x \\to 0} \\frac{\\ln(1 + (x + x^2))}{x + x^2} \\cdot \\frac{x + x^2}{x}",
+      "Simplify the expression: L = \\lim_{x \\to 0} \\frac{\\ln(1 + x + x^2)}{x}",
+      "Use the fact that \\lim_{u \\to 0} \\frac{\\ln(1 + u)}{u} = 1, so let u = x + x^2, then as x \\to 0, u \\to 0.",
+      "Thus, L = \\lim_{x \\to 0} \\frac{\\ln(1 + x + x^2)}{x + x^2} \\cdot (x + x^2) \\cdot \\frac{1}{x}",
+      "Note that \\frac{\\ln(1 + x + x^2)}{x + x^2} \\to 1 as x \\to 0, and \\frac{x + x^2}{x} = 1 + x \\to 1 as x \\to 0.",
+      "Therefore, L = 1 \\cdot 1 = 1"
+    ],
+    "answer": 1
+  },
+  {
+    "id": "Item3_Q119",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 119,
+    "khmer_question": "] (2 - 1)\nគណនាលីមីត ៤ “៣ ?",
+    "math_question": "$$\\lim _ { x \\rightarrow \\infty } \\frac { \\ln ( x + 1 ) } { \\ln x }$$",
+    "khmer_solution": "៕ |2៣(1 - 1/2)] _ ២2២៥៤ -។\nបាល ក្តី បាល\n\n។",
+    "math_steps": "ln[x(1 + 1/x)] = ln x + ln(1 + 1/x)",
+    "answer": "ln x + ln(1 + 1/x)"
+  },
+  {
+    "id": "Item3_Q120",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 120,
+    "khmer_question": "ុ ៕(1-2?)\nស រា\nគណនាលីមីត +-% ខា (2?) ?",
+    "math_question": "$$\\lim _ { x \\to 0 } \\frac { \\ln ( 1 + x ^ { 2 } ) } { \\tan ( x ^ { 2 } ) }$$",
+    "khmer_solution": "បំបែកជា\n\nយ (។ -| 22)\n\n2\n\nញា\n\n-»1.1=-",
+    "math_steps": [
+      "\\[ \\lim_{x \\to 0} \\frac{\\ln(1+x^2)}{x^2} \\cdot \\frac{x^2}{\\tan(x^2)} \\to 1 \\cdot 1 = 1 \\]"
+    ],
+    "answer": 1
+  },
+  {
+    "id": "Item3_Q121",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 121,
+    "khmer_question": "ឬ ហា ៕( ខយ 2) _\nគណនាលមត +-+7/2",
+    "math_question": "$$\\lim _ { x \\to \\pi / 2 } \\ln ( \\sin x )$$",
+    "khmer_solution": "ដំណោះស្រាយ\n\nកាលណា 2 - 7/2 នោះ\n\nនរំ 2 -» 1 នាំឱ្យបាន ២1 = 0។",
+    "math_steps": [
+      "\\lim_{x \\to \\pi/2} \\ln(\\sin x)",
+      "\\sin x \\to 1 \\text{ as } x \\to \\pi/2",
+      "\\ln 1 = 0"
+    ],
+    "answer": 0
+  },
+  {
+    "id": "Item3_Q122",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 122,
+    "khmer_question": "] យ (1 -- 22)\nគណនាលីមីត + 1 05 (22) ?",
+    "math_question": "$$\\lim _ { x \\to 0 } \\frac { \\ln ( 1 + x ^ { 2 } ) } { 1 - \\cos ( 2 x ) } ?$$",
+    "khmer_solution": "បំបែកជា\n\n៕ា (1 -- 22) 3\nក 1 -- 00822 ។\n\n1 -- 0082,\n0822 _\n\nដោយសារ 25 នាំឱ្យ\n\nលទ្ធផលគឺ 1 . 1/2 = 1/2។",
+    "math_steps": [
+      " \\lim_{x \\to 0} \\frac{\\ln(1+x^2)}{x^2} \\cdot \\frac{x^2}{1-\\cos 2x} ",
+      " = \\left( \\lim_{x \\to 0} \\frac{\\ln(1+x^2)}{x^2} \\right) \\cdot \\left( \\lim_{x \\to 0} \\frac{x^2}{1-\\cos 2x} \\right) ",
+      " = \\left( \\lim_{x \\to 0} \\frac{\\ln(1+x^2)}{x^2} \\right) \\cdot \\left( \\lim_{x \\to 0} \\frac{1}{\\frac{1-\\cos 2x}{x^2}} \\right) ",
+      " = \\left( \\lim_{x \\to 0} \\frac{\\ln(1+x^2)}{x^2} \\right) \\cdot \\left( \\lim_{x \\to 0} \\frac{1}{2} \\right) ",
+      " = \\left( \\lim_{x \\to 0} \\frac{\\ln(1+x^2)}{x^2} \\right) \\cdot \\frac{1}{2} ",
+      " = 1 \\cdot \\frac{1}{2} = \\frac{1}{2} "
+    ],
+    "answer": "\\frac{1}{2}"
+  },
+  {
+    "id": "Item3_Q123",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 123,
+    "khmer_question": "គណនាលីមីតនៃអនុគមន៍ខាងក្រោម៖\n\nខេ 2 -- (1 + 3) ខោ 2 - +\n\n1, =]\n2 នរំ 2 -- ,/3 (08 2",
+    "math_question": "L = \\lim_{x \\to \\frac{\\pi}{3}} \\frac{\\tan^{2} x - (1 + \\sqrt{3}) \\tan x + \\sqrt{3}}{\\sin x - \\sqrt{3} \\cos x}",
+    "khmer_solution": "0\nមានរាងមិនកំណត់ 0\n\nយើងបាន\n\nខែ 2 (1 + ម) ខែ 2 + 3\n\nរា ក\nថៃ នរ 2 -- +: 08 2\nុ ខែា$2 -- ខោ2 -- ‹ខីខោ2 -\nយា ង ក\n2 នរំ 2 -- + (០8 2\n (ខែរាវ2-- ខោ2) -- (+3ខោា2 -- ៩)\n= រា ៈ\nរ នា 2\n082\nុ ខោ2(ខោ2 -- 1) -- +ខ(ខោ2 -- 1)\n= រា ៈ\nនរ 2\n082 ។/\n082\n: (ខោ2--1)(ស8ា2 -- +3)\nយា\n(08 2(ខេល 2 -- +3)\nខោ2 -- 1\nរា\nជ 08 2\n3 -- 1\n។/\n2",
+    "math_steps": "The math steps are as follows:\n\\[\n\\lim_{x \\to \\frac{\\pi}{3}} \\frac{\\tan^2 x - (1 + \\sqrt{3}) \\tan x + \\sqrt{3}}{\\sin x - \\sqrt{3} \\cos x}\n\\]\n\\[\n= \\lim_{x \\to \\frac{\\pi}{3}} \\frac{\\tan^2 x - \\tan x - \\sqrt{3} \\tan x + \\sqrt{3}}{\\sin x - \\sqrt{3} \\cos x}\n\\]\n\\[\n= \\lim_{x \\to \\frac{\\pi}{3}} \\frac{(\\tan^2 x - \\tan x) - (\\sqrt{3} \\tan x - \\sqrt{3})}{\\cos x \\left( \\frac{\\sin x}{\\cos x} - \\sqrt{3} \\right)}\n\\]\n\\[\n= \\lim_{x \\to \\frac{\\pi}{3}} \\frac{\\tan x(\\tan x - 1) - \\sqrt{3}(\\tan x - 1)}{\\cos x \\left( \\frac{\\sin x}{\\cos x} - \\sqrt{3} \\right)}\n\\]\n\\[\n= \\lim_{x \\to \\frac{\\pi}{3}} \\frac{(\\tan x - 1)(\\tan x - \\sqrt{3})}{\\cos x(\\tan x - \\sqrt{3})}\n\\]\n\\[\n= \\lim_{x \\to \\frac{\\pi}{3}} \\frac{\\tan x - 1}{\\cos x}\n\\]\n\\[\n= \\frac{\\sqrt{3} - 1}{\\frac{\\sqrt{3}}{2}}\n\\]\n\\[\n= \\frac{2(3 - \\sqrt{3})}{3}\n\\]",
+    "answer": "\\frac{2(3 - \\sqrt{3})}{3}"
+  },
+  {
+    "id": "Item3_Q124",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 124,
+    "khmer_question": "គណនាលីមីតនៃអនុគមន៍ខាងក្រោម៖\n\nុ ខោះ2--3ខោ2 - 2\n។, = បា -------------------”\nរុំ នាា2 -- 0082",
+    "math_question": "L = \\lim_{x \\to \\frac{\\pi}{4}} \\frac{\\tan^{2} x - 3 \\tan x + 2}{\\sin x - \\cos x}",
+    "khmer_solution": "ខោ -- 3ខោ2 - 2\n2-+រ 2 -- 0082\n\n(ខេល2 -- 1)(ខេល2 -- 2)\n+ (082(ខោ2 -- 1)\n\nខែា2 -- 2\n2, 0082",
+    "math_steps": "\\\\[\\\\lim_{x \\to \\frac{\\pi}{4}} \\frac{\\tan^2 x - 3\\tan x + 2}{\\sin x - \\cos x} = \\lim_{x \\to \\frac{\\pi}{4}} \\frac{(\\tan x - 1)(\\tan x - 2)}{\\cos x(\\tan x - 1)} = \\lim_{x \\to \\frac{\\pi}{4}} \\frac{\\tan x - 2}{\\cos x} = \\frac{1 - 2}{\\frac{\\sqrt{2}}{2}} = -\\sqrt{2}\\\\]",
+    "answer": "-\\sqrt{2}"
+  },
+  {
+    "id": "Item3_Q125",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 125,
+    "khmer_question": "គណនាលីមីតនៃអនុគមន៍ខាងក្រោម៖",
+    "math_question": "L = \\lim_{x \\to \\frac{\\pi}{4}} \\frac{\\cos 2x}{\\cos^3 x - \\sin^3 x}",
+    "khmer_solution": "0\nរាងមិនកំណត់ 0\n\nយើងបាន\n\nនរ 2)(៤០# 2 -!- នរ 2)\n\n00822 ។ ន 2)\n\n0082--81ា2\nរា ក\n31-។5រា20082",
+    "math_steps": [
+      "\\lim_{x \\to \\frac{\\pi}{4}} \\frac{\\cos 2x}{\\cos^3 x - \\sin^3 x}",
+      "= \\lim_{x \\to \\frac{\\pi}{4}} \\frac{(\\cos x - \\sin x)(\\cos x + \\sin x)}{(\\cos^2 x + \\cos x \\sin x + \\sin^2 x)}",
+      "= \\lim_{x \\to \\frac{\\pi}{4}} \\frac{\\cos x + \\sin x}{1 + \\sin x \\cos x}",
+      "= \\frac{\\frac{\\sqrt{2}}{2} + \\frac{\\sqrt{2}}{2}}{1 + \\frac{\\sqrt{2}}{2} \\times \\frac{\\sqrt{2}}{2}}",
+      "= \\frac{2\\sqrt{2}}{3}"
+    ],
+    "answer": "\\frac{2\\sqrt{2}}{3}"
+  },
+  {
+    "id": "Item3_Q126",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 126,
+    "khmer_question": "គណនាលីមីតនៃអនុគមន៍ខាងក្រោម៖\n\nុ 400822--1\n1, =] --------- ៗ\n2» នរំា2 -- នរ 22",
+    "math_question": "L = \\lim_{x \\to \\frac{\\pi}{3}} \\frac{4 \\cos^2 x - 1}{\\sin x - \\sin 2x}",
+    "khmer_solution": "0\nក\n\nយើងបាន\n1\nយា\nុ (20082 --1)(20082 - 1)\n= ២ ---------ៗ-:\n+ នា 2 -- 2ន2\n: (20082 -1)(20082 -- 1)\n= ២ ------- ៗ”\nរ នរ 2(1\nយ 2៩០៩៣ 1\nនរ 2\n1 +1\n43\n3",
+    "math_steps": "\\\\[\\\\lim_{x \\to \\frac{\\pi}{3}} \\frac{4 \\cos^2 x - 1}{\\sin x - \\sin 2x} = \\\\lim_{x \\to \\frac{\\pi}{3}} \\frac{(2 \\cos x - 1)(2 \\cos x + 1)}{\\sin x - 2 \\sin x \\cos x} = \\\\lim_{x \\to \\frac{\\pi}{3}} \\frac{(2 \\cos x + 1)(2 \\cos x - 1)}{\\sin x(1 - 2 \\cos x)} = -\\\\lim_{x \\to \\frac{\\pi}{3}} \\frac{2 \\cos x + 1}{\\sin x} = -\\frac{1 + 1}{\\frac{\\sqrt{3}}{2}} = -\\frac{4\\sqrt{3}}{3}\\\\]",
+    "answer": "-\\frac{4\\sqrt{3}}{3}"
+  },
+  {
+    "id": "Item3_Q127",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 127,
+    "khmer_question": "គណនាលីមីតនៃអនុគមន៍ខាងក្រោម៖",
+    "math_question": "L = \\lim_{x \\to \\frac{\\pi}{4}} \\frac{1 - \\tan^3 x}{\\cos 2x}",
+    "khmer_solution": "0\nក\n\nយើងបាន\n\n1 -- ខោ 2\n\nរបា យ.\n\n4 05 2:\nក 1 -- ខោ 2\n\n=] -_ រយ.\n2-+៖ 008? 2 -- យ 2\nក 1 -- ខោ 2\nរយ -_ ៗ ក\n025 2 ខោ 2)\n\n: (1-ខោ2)(1-។ខេោា2 - ខោ 2)\nយា -----ៗ-- “7\nរ 05” 2(1 -- ខោ2)(1 -- ខោ2)\n1 -- ខោ2 -- ខោ 2\n\nយា កី\n+» (05 2(1 - ខោ2)\n\n1 1",
+    "math_steps": "\\\\[\\\\lim_{x \\to \\frac{\\pi}{4}} \\frac{1 - \\tan^3 x}{\\cos 2x} = \\lim_{x \\to \\frac{\\pi}{4}} \\frac{1 - \\tan^3 x}{\\cos^2 x - \\sin^2 x} = \\lim_{x \\to \\frac{\\pi}{4}} \\frac{1 - \\tan^3 x}{\\cos^2 x(1 - \\tan^2 x)} = \\lim_{x \\to \\frac{\\pi}{4}} \\frac{(1 - \\tan x)(1 + \\tan x + \\tan^2 x)}{\\cos^2 x(1 - \\tan x)(1 + \\tan x)} = \\lim_{x \\to \\frac{\\pi}{4}} \\frac{1 + \\tan x + \\tan^2 x}{\\cos^2 x(1 + \\tan x)} = \\frac{1 + 1 + 1}{\\left(\\frac{\\sqrt{2}}{2}\\right)^2 (1 + 1)} = 3\\\\]",
+    "answer": 3
+  },
+  {
+    "id": "Item3_Q128",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 128,
+    "khmer_question": "គណនាលីមីតនៃអនុគមន៍ខាងក្រោម៖\n\nហី 08 32\n1, = យា =:\n2»: 0082 -- នា 22",
+    "math_question": "L = \\lim_{x \\to \\frac{\\pi}{6}} \\frac{\\cos 3x}{\\cos x - \\sin 2x}",
+    "khmer_solution": "0\nរាងមិនកំណត់ 0\n\nយើងបាន\n\nក 085 32\nយា ក\n+» (082 -- 8 22\n\nក 4 (08 2 -- 30082\n\nរា ក\n\n+» (082 -- 282 0082\nព 08 2(4 008? 2 -- 3)\nរា ៈ\nរ 08 2(1 -- 28២2)\n4(1 -- #៕២ 2) -- 3\n\n1 -- 28រ៉ា2\n\n= | ២\n\n1482\nយា ដី\n+ 1-- 282\n: (1-2812)(1- 282)\n= ២  :ៈ\nរ 1 -- 28រ៉ា2\n\n= ២ (1 + 28រា2)\n\nគ",
+    "math_steps": "\\\\[\\\\lim_{x \\to \\frac{\\pi}{6}} \\frac{\\cos 3x}{\\cos x - \\sin 2x} = \\lim_{x \\to \\frac{\\pi}{6}} \\frac{4\\cos^3 x - 3\\cos x}{\\cos x - 2\\sin x \\cos x} = \\lim_{x \\to \\frac{\\pi}{6}} \\frac{\\cos x(4\\cos^2 x - 3)}{\\cos x(1 - 2\\sin x)} = \\lim_{x \\to \\frac{\\pi}{6}} \\frac{4(1 - \\sin^2 x) - 3}{1 - 2\\sin x} = \\lim_{x \\to \\frac{\\pi}{6}} \\frac{1 - 4\\sin^2 x}{1 - 2\\sin x} = \\lim_{x \\to \\frac{\\pi}{6}} \\frac{(1 - 2\\sin x)(1 + 2\\sin x)}{1 - 2\\sin x} = \\lim_{x \\to \\frac{\\pi}{6}} (1 + 2\\sin x) = 1 + 2\\left(\\frac{1}{2}\\right) = 1 + 1 = 2\\\\]",
+    "answer": 2
+  },
+  {
+    "id": "Item3_Q129",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 129,
+    "khmer_question": "គណនាលីមីតនៃអនុគមន៍ខាងក្រោម៖",
+    "math_question": "$$L = \\lim _ { x \\rightarrow \\frac { \\pi } { 4 } } \\frac { \\sin x - \\cos x } { 1 - \\tan ^ { 3 } x }$$",
+    "khmer_solution": "0\nលីមីតមានរាងមិនកំណត់ 0\n\nយើងបាន\n\nុ  #ាា2 -- 0082\nន ក\n1--ខោៈ 2\n\n(08 2(សខេា 2 -- 1)\n\n= រា\nម្រ\nកី 062(1 -- ខោ2)\n= -- |] ក\n+ (1 -- ខោ2)(1 -+ ខែា2 - ខៅ 2)\nក 082\nយា\n\n1 + ខោ2 - យៅ 2",
+    "math_steps": [
+      "\\lim_{x \\to \\frac{\\pi}{4}} \\frac{\\sin x - \\cos x}{1 - \\tan^3 x}",
+      "= \\lim_{x \\to \\frac{\\pi}{4}} \\frac{\\cos x(\\tan x - 1)}{1 - \\tan^3 x}",
+      "= -\\lim_{x \\to \\frac{\\pi}{4}} \\frac{\\cos x(1 - \\tan x)}{(1 - \\tan x)(1 + \\tan x + \\tan^2 x)}",
+      "= -\\lim_{x \\to \\frac{\\pi}{4}} \\frac{\\cos x}{1 + \\tan x + \\tan^2 x}",
+      "= -\\frac{\\sqrt{2}}{2} \\cdot \\frac{1}{1 + 1 + 1}",
+      "= -\\frac{\\sqrt{2}}{6}"
+    ],
+    "answer": "-\\frac{\\sqrt{2}}{6}"
+  },
+  {
+    "id": "Item3_Q130",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 130,
+    "khmer_question": "គណនាលីមីតនៃអនុគមន៍ខាងក្រោម៖\n\n1 -- 00522\n1, =] 53\n4 នរ 2 - នរ 2",
+    "math_question": "L = \\lim_{x \\to 0} \\frac{1 - \\cos 2x}{\\sin^2 x + \\sin^3 x}",
+    "khmer_solution": "0\nលីមីតមានរាងមិនកំណត់ 0\nយើងបាន\n\nកី 1 -- 00522\nយុ ---ៗ-- ៗ”\n2) នរ 2 -- #រ 2\n\n28? 2\n\n=:\n+ នរ 2(1 -/- នា 2)\n\nក 2\n= ២ -\n+ 1 -| រាន\n\nស\n170\n\n= 2",
+    "math_steps": [
+      "\\lim_{x \\to 0} \\frac{1 - \\cos 2x}{\\sin^2 x + \\sin^3 x}",
+      "= \\lim_{x \\to 0} \\frac{2 \\sin^2 x}{\\sin^2 x(1 + \\sin x)}",
+      "= \\lim_{x \\to 0} \\frac{2}{1 + \\sin x}",
+      "= \\frac{2}{1 + 0}",
+      "= 2"
+    ],
+    "answer": 2
+  },
+  {
+    "id": "Item3_Q131",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 131,
+    "khmer_question": "គណនាលីមីតនៃអនុគមន៍ខាងក្រោម៖",
+    "math_question": "L = \\lim_{x \\to \\frac{\\pi}{3}} \\frac{3 - 4 \\sin^2 x}{2 \\cos x - 1}",
+    "khmer_solution": "0\nលីមីតមានរាងមិនកំណត់ 0\n\nយើងបាន\n\n(20082 -- 1)(20082\n\nរា\n\n20082 -- 1\n\nឃា (2 0082 - 1)\n\nស\n\n1)",
+    "math_steps": "L = \\lim_{x \\to \\frac{\\pi}{3}} \\frac{3 - 4 \\sin^2 x}{2 \\cos x - 1} = \\lim_{x \\to \\frac{\\pi}{3}} \\frac{3 - 4(1 - \\cos^2 x)}{2 \\cos x - 1} = \\lim_{x \\to \\frac{\\pi}{3}} \\frac{4 \\cos^2 x - 1}{2 \\cos x - 1} = \\lim_{x \\to \\frac{\\pi}{3}} \\frac{(2 \\cos x - 1)(2 \\cos x + 1)}{2 \\cos x - 1} = \\lim_{x \\to \\frac{\\pi}{3}} (2 \\cos x + 1) = 1 + 1 = 2",
+    "answer": 2
+  },
+  {
+    "id": "Item3_Q132",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 132,
+    "khmer_question": "គណនាលីមីតនៃអនុគមន៍ខាងក្រោម៖\n\n2222 --នរាវំ2\n។, = ”---------------\n-%) (052 2 -- 1",
+    "math_question": "L = \\lim_{x \\to 0} \\frac{2x - x^2 - \\sin^2 x}{\\cos x + x - 1}",
+    "khmer_solution": "",
+    "math_steps": "\\\\[\\\\lim_{x \\to 0} \\frac{2x - x^2 - \\sin^2 x}{\\cos x + x - 1} = \\\\lim_{x \\to 0} \\frac{2x - x^2 - (1 - \\cos^2 x)}{\\cos x + x - 1} = \\\\lim_{x \\to 0} \\frac{\\cos^2 x - (x - 1)^2}{\\cos x + x - 1} = \\\\lim_{x \\to 0} \\frac{(\\cos x + x - 1)(\\cos x - x + 1)}{\\cos x + x - 1} = \\\\lim_{x \\to 0} (\\cos x - x + 1)\\\\]",
+    "answer": 2
+  },
+  {
+    "id": "Item3_Q133",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 133,
+    "khmer_question": "គណនាលីមីតនៃអនុគមន៍ខាងក្រោម៖\n\n08 2 -- នរ 27\n\n1, = -។\nយ 40085” 2 -- 3",
+    "math_question": "L = \\lim_{x \\to \\frac{\\pi}{6}} \\frac{\\cos x - \\sin 2x}{4 \\cos^2 x - 3}",
+    "khmer_solution": "0\nលីមីតមានរាងមិនកំណត់ 0\n\nយើងបាន\n\nុ 0052 --8122\nយា\n\n4008 2 -- 3\n\nុ 002--28យា20082\nយា គី ក\n2 4(1 -- #1 2) -- 3\n082(1 -- 282)\n\nរា ៗ\n1 -- 4#រា 2\n\n:% ៣2៣",
+    "math_steps": "The math steps are as follows:\n\\[\n\\lim_{x \\to \\frac{\\pi}{6}} \\frac{\\cos x - \\sin 2x}{4 \\cos^2 x - 3}\n\\]\n\\[\n= \\lim_{x \\to \\frac{\\pi}{6}} \\frac{\\cos x - 2 \\sin x \\cos x}{4(1 - \\sin^2 x) - 3}\n\\]\n\\[\n= \\lim_{x \\to \\frac{\\pi}{6}} \\frac{\\cos x(1 - 2 \\sin x)}{1 - 4 \\sin^2 x}\n\\]\n\\[\n= \\lim_{x \\to \\frac{\\pi}{6}} \\frac{\\cos x(1 - 2 \\sin x)}{(1 - 2 \\sin x)(1 + 2 \\sin x)}\n\\]\n\\[\n= \\lim_{x \\to \\frac{\\pi}{6}} \\frac{\\cos x}{1 + 2 \\sin x}\n\\]\n\\[\n= \\frac{\\frac{\\sqrt{3}}{2}}{1 + 1}\n\\]\n\\[\n= \\frac{\\sqrt{3}}{4}\n\\]",
+    "answer": "\\frac{\\sqrt{3}}{4}"
+  },
+  {
+    "id": "Item3_Q134",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 134,
+    "khmer_question": "គណនាលីមីតនៃអនុគមន៍ខាងក្រោម៖\n\nុ 0052 -- 25\n1, = ឈុ រ:\n2-% 2 2",
+    "math_question": "L = \\lim_{x \\to 0} \\frac{\\cos x - \\sqrt{x^2 + 1}}{x^2 + \\sin^2 x}",
+    "khmer_solution": "0\nលីមីតមានរាងមិនកំណត់ 0\n\nយើងបាន\n\n= យ 00532 = 2៦ = កកា\n\n2 +! (ខ្ល -|- នរ? 2) (08 2 -- %27 -- 1.\n\nឈុ 22 8ឃះ\n2 (2? -|- នរំ? 2) (08 2 - %/25 -|- 1)\n\n-- 1\n= ៤ --------- 7\n+ (082 -- %/2? -- 1",
+    "math_steps": "\\\\[\\\\lim_{x \\to 0} \\frac{\\cos x - \\sqrt{x^2 + 1}}{x^2 + \\sin^2 x} = \\\\lim_{x \\to 0} \\frac{\\cos^2 x - x^2 - 1}{(x^2 + \\sin^2 x)(\\cos x + \\sqrt{x^2 + 1})} = \\\\lim_{x \\to 0} \\frac{-x^2 - \\sin^2 x}{(x^2 + \\sin^2 x)(\\cos x + \\sqrt{x^2 + 1})} = \\\\lim_{x \\to 0} \\frac{-1}{\\cos x + \\sqrt{x^2 + 1}} = -\\frac{1}{2}\\\\]",
+    "answer": "-\\frac{1}{2}"
+  },
+  {
+    "id": "Item3_Q135",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 135,
+    "khmer_question": "គណនាលីមីតនៃអនុគមន៍ខាងក្រោម៖\n\n4 4\n= ៤ ខយ 2 + 02 -- 2\n\n+ 1 -- #២22",
+    "math_question": "$$L = \\lim _ { x \\to \\frac { \\pi } { 4 } } \\frac { \\tan ^ { 4 } x + \\cot ^ { 4 } x - 2 } { 1 - \\sin 2 x }$$",
+    "khmer_solution": "0\nលីមីតមានរាងមិនកំណត់ 0\n\nយើងបាន\n\n. (002 ខែា?2)៖\n\n= ]រា អ\n\n2 (082 -- 1 2)”\n(1 -- ខោ\n\nយា រ 2 ក\n: ខៅ 2 (0#” 2(1 -- ខោ2)”\n\n(1 -- ខោ2)?(1 -|- ខែ 2)? (1 -|- ខោ? 2)\n\nខោ 2 005” 2(1 -- ខោ2)*\n\nរា\n\n. (1+ខេោា2)?(1- ខេ:\nរា\n\nដី ខោ 2 005” 2",
+    "math_steps": "The math steps are as follows:\n\\[\n\\lim_{x \\to \\frac{\\pi}{4}} \\frac{\\tan^4 x + \\cot^4 x - 2}{1 - \\sin 2x}\n= \\lim_{x \\to \\frac{\\pi}{4}} \\frac{(\\cot^2 x - \\tan^2 x)^2}{(\\cos x - \\sin x)^2}\n= \\lim_{x \\to \\frac{\\pi}{4}} \\frac{(1 - \\tan^4 x)^2}{\\tan^4 x \\cos^2 x (1 - \\tan x)^2}\n= \\lim_{x \\to \\frac{\\pi}{4}} \\frac{(1 - \\tan x)^2 (1 + \\tan x)^2 (1 + \\tan^2 x)^2}{\\tan^4 x \\cos^2 x (1 - \\tan x)^2}\n= \\lim_{x \\to \\frac{\\pi}{4}} \\frac{(1 + \\tan x)^2 (1 + \\tan^2 x)^2}{\\tan^4 x \\cos^2 x}\n= \\frac{4 \\times 4}{\\frac{1}{2}} = 32\n\\]",
+    "answer": 32
+  },
+  {
+    "id": "Item3_Q136",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 136,
+    "khmer_question": "គណនាលីមីតនៃអនុគមន៍ខាងក្រោម៖\n\n2 -- 0082\n1, =]\n\n+ 1 -- ‹/ខែា2",
+    "math_question": "L = \\lim_{x \\to \\frac{\\pi}{4}} \\frac{\\sin x - \\cos x}{1 - \\sqrt[3]{\\tan x}}",
+    "khmer_solution": "0\nលីមីតមានរាងមិនកំណត់ 0\n\nយើងបាន\nក នរំ 2 -- 005 2\n2» 1--+/ខោ2\n082(ខេោា 2 -- 1)[1 - ‹/ខោ2 - ខេ 2)\n=]\nយ 7\n\n= -- (082 -- ខែ: - ។/ យោ 2)\n\n= រ៉",
+    "math_steps": [
+      "\\lim_{x \\to \\frac{\\pi}{4}} \\frac{\\sin x - \\cos x}{1 - \\sqrt[3]{\\tan x}}",
+      "= \\lim_{x \\to \\frac{\\pi}{4}} \\frac{\\cos x(\\tan x - 1)(1 + \\sqrt[3]{\\tan x} + \\sqrt[3]{\\tan^2 x})}{(1 - \\tan x)}",
+      "= -\\lim_{x \\to \\frac{\\pi}{4}} \\left[\\cos x(1 + \\sqrt[3]{\\tan x} + \\sqrt[3]{\\tan^2 x})\\right]",
+      "= -\\frac{\\sqrt{2}}{2} \\times 3",
+      "= -\\frac{3\\sqrt{2}}{2}"
+    ],
+    "answer": "-\\frac{3\\sqrt{2}}{2}"
+  },
+  {
+    "id": "Item3_Q137",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 137,
+    "khmer_question": "គណនាលីមីតនៃអនុគមន៍ខាងក្រោម៖\n\n1 - 881\nន ន 4005? 2 -- 3",
+    "math_question": "$$L = \\lim _ { x \\rightarrow \\frac { \\pi } { 6 } } \\frac { 1 - 8 \\sin ^ { 3 } x } { 4 \\cos ^ { 2 } x - 3 }$$",
+    "khmer_solution": "កី 1 - 2#រា2 - 48 2\n= ២ ----។---ៗ-\nខ្ញុំ 1282\n\n_ 111\n11\n\nស! យ",
+    "math_steps": "=\"\\lim_{x \\to \\frac{\\pi}{6}} \\frac{1 + 2 \\sin x + 4 \\sin^2 x}{1 + 2 \\sin x} = \\frac{1 + 1 + 1}{1 + 1} = \\frac{3}{2}\"",
+    "answer": "\\frac{3}{2}"
+  },
+  {
+    "id": "Item3_Q138",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 138,
+    "khmer_question": "គណនាលីមីតនៃអនុគមន៍ខាងក្រោម៖\n\n›4 _ រា\nុ 24 -- #រា 2\n1, =]\n\n+ 2? - 1 -- 0082",
+    "math_question": "L = \\lim_{x \\to 0} \\frac{x^4 - \\sin^4 x}{\\sqrt{x^2 + 1} - \\cos x}",
+    "khmer_solution": "0\nលីមីតមានរាងមិនកំណត់ 0\n\nយើងបាន\n\nុ 24 -- នរ 2\nរ\n\n2 + 25 -- 1 -- 0082\n\nង [22 នរំ? 2) 22 -- នរំ? 2) (1 -- 25 -- 008 2)\n= យា\n\n2- + 25 -។ 1 -- 008 2\n\nយ 2 -|- នរ 2) (2 -- 8? 2) (1 ៗ 25 -|- 0082)\n\n-%0 25 5 2\n= ឃុំ 2? -- ន? 2) %/ 1 -+ 2? -- 052)\n+»\n\n= 0",
+    "math_steps": [
+      " \\lim_{x \\to 0} \\frac{x^4 - \\sin^4 x}{\\sqrt{x^2 + 1} - \\cos x} ",
+      " = \\lim_{x \\to 0} \\frac{(x^2 + \\sin^2 x)(x^2 - \\sin^2 x)(\\sqrt{1 + x^2} + \\cos x)}{x^2 + 1 - \\cos^2 x} ",
+      " = \\lim_{x \\to 0} \\frac{(x^2 + \\sin^2 x)(x^2 - \\sin^2 x)(\\sqrt{1 + x^2} + \\cos x)}{x^2 + \\sin^2 x} ",
+      " = \\lim_{x \\to 0} (x^2 - \\sin^2 x)(\\sqrt{1 + x^2} + \\cos x) ",
+      " = 0 "
+    ],
+    "answer": 0
+  },
+  {
+    "id": "Item3_Q139",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 139,
+    "khmer_question": "គណនាលីមីតនៃអនុគមន៍ខាងក្រោម៖\n\nុ 00832 - នាវ 2\n1, = ២ -- ៗ”\n2-+រ  1--ខោ2",
+    "math_question": "$$L = \\lim _ { x \\to \\frac { \\pi } { 4 } } \\frac { \\cos ^ { 3 } x - \\sin ^ { 3 } x } { 1 - \\tan ^ { 2 } x }$$",
+    "khmer_solution": "0\nលីមីតមានរាងមិនកំណត់ 0\n\nយើងបាន\n\n083 2(1 -- ខោ 2)\n\n1 -- យៅ2\n\n= រា\n\nុ  008$2(1 -- ខោ2)(1 - ខែល2 -រ ខៅ 2)\nរា\n- +. (1 -- ខោ2)(1 - ខោ2)\nុ  (0082(1-ខែោា2 - ខៅ 2)\nរា\n\n1 ។ ខោ2",
+    "math_steps": [
+      " \\lim_{x \\to \\frac{\\pi}{4}} \\frac{\\cos^3 x - \\sin^3 x}{1 - \\tan^2 x} ",
+      " = \\lim_{x \\to \\frac{\\pi}{4}} \\frac{\\cos^3 x (1 - \\tan^3 x)}{1 - \\tan^2 x} ",
+      " = \\lim_{x \\to \\frac{\\pi}{4}} \\frac{\\cos^3 x (1 - \\tan x)(1 + \\tan x + \\tan^2 x)}{(1 - \\tan x)(1 + \\tan x)} ",
+      " = \\lim_{x \\to \\frac{\\pi}{4}} \\frac{\\cos^3 x (1 + \\tan x + \\tan^2 x)}{1 + \\tan x} ",
+      " = \\left( \\frac{\\sqrt{2}}{2} \\right)^3 \\times \\frac{3}{2} ",
+      " = \\frac{3\\sqrt{2}}{8} "
+    ],
+    "answer": "\\frac{3\\sqrt{2}}{8}"
+  },
+  {
+    "id": "Item3_Q140",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 140,
+    "khmer_question": "គណនាលីមីតនៃអនុគមន៍ខាងក្រោម៖",
+    "math_question": "$$L = \\lim _ { x \\to \\frac { \\pi } { 3 } } \\frac { 3 - 4 \\sin ^ { 2 } x } { 2 \\cos x - 1 }$$",
+    "khmer_solution": "ក\n0\n\nលីមីតមានរាងមិនកំណត់\nយើងបាន\n: 3- 482\nរា\n\n= ២ (20082 - 1)\n\nខុំ\n\n=1-។1=2",
+    "math_steps": "\\\\[\\\\lim_{x \\to \\frac{\\pi}{3}} \\frac{3 - 4 \\sin^2 x}{2 \\cos x - 1} = \\lim_{x \\to \\frac{\\pi}{3}} \\frac{3 - 4(1 - \\cos^2 x)}{2 \\cos x - 1} = \\lim_{x \\to \\frac{\\pi}{3}} \\frac{4 \\cos^2 x - 1}{2 \\cos x - 1} = \\lim_{x \\to \\frac{\\pi}{3}} (2 \\cos x + 1) = 1 + 1 = 2\\\\]",
+    "answer": 2
+  },
+  {
+    "id": "Item3_Q141",
+    "chapter": "2",
+    "item": "Item3",
+    "question_number": 141,
+    "khmer_question": "គណនាលីមីតនៃអនុគមន៍ខាងក្រោម៖\n\n4 008? 2 -- 3\n+ 1--28រា2\n\n1, = យា",
+    "math_question": "L = \\lim_{x \\to \\frac{\\pi}{6}} \\frac{4 \\cos^2 x - 3}{1 - 2 \\sin x}",
+    "khmer_solution": "ស\n0\n\nលីមីតមានរាងមិនកំណត់\nយើងបាន\n400822-3\nរ\n\n= ២ (1 + 282)\n\n=1-។1=2",
+    "math_steps": [
+      "\\lim_{x \\to \\frac{\\pi}{6}} \\frac{4 \\cos^2 x - 3}{1 - 2 \\sin x}",
+      "= \\lim_{x \\to \\frac{\\pi}{6}} \\frac{4(1 - \\sin^2 x) - 3}{1 - 2 \\sin x}",
+      "= \\lim_{x \\to \\frac{\\pi}{6}} \\frac{1 - 4 \\sin^2 x}{1 - 2 \\sin x}",
+      "= \\lim_{x \\to \\frac{\\pi}{6}} (1 + 2 \\sin x)",
+      "= 1 + 1 = 2"
+    ],
+    "answer": 2
+  }
+]

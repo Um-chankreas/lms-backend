@@ -1,0 +1,4 @@
+question,option_1,option_2,option_3,option_4,correct_answer,explanation,question_type
+"What is the capital of France?","Paris","London","Berlin","Madrid","Paris","Paris is the capital and most populous city of France.",multiple_choice
+"The sky is blue on a clear day.","True","False","","","True","",multiple_choice
+"Which planet is known as the Red Planet?","Earth","Mars","Jupiter","Venus","Mars","",multiple_choice
