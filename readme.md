@@ -32,13 +32,24 @@ npm install
 
 ### 2. Setup Environment Variables
 
-Copy `.env` file and fill in your credentials:
+Config is loaded by `src/config/loadEnv.js` from a single **`.env`** file in the
+project root (real host env vars — systemd / pm2 / Docker — always take priority).
+
+**One `.env` per machine:**
+
+| Machine | `.env` contents |
+|---|---|
+| your laptop | `NODE_ENV=development` + **your personal Supabase project** |
+| production server | `NODE_ENV=production` + **the company Supabase project** |
 
 ```bash
-cp .env .env.local
+cp .env.example .env     # then fill in the values for this machine
 ```
 
-Edit `.env` with:
+`.env` is gitignored; only `.env.example` is committed. Using a different
+Supabase project on each machine keeps dev data/tests away from production.
+
+Variables:
 
 ```env
 # Server
@@ -224,11 +235,44 @@ Server runs on: **http://localhost:5000**
 
 ### Authentication
 ```
-POST   /api/auth/signup              - Register new user
-POST   /api/auth/login               - Login user
+POST   /api/auth/signup              - Register new user (email/password or phone/password)
+POST   /api/auth/login               - Login user ({ identifier, password }; identifier = email or phone)
 GET    /api/auth/profile             - Get user profile (Protected)
 PUT    /api/auth/profile             - Update profile (Protected)
+POST   /api/auth/deactivate          - Deactivate own account, reversible by logging back in (Protected, needs { password })
+DELETE /api/auth/account             - Request permanent deletion, 30-day grace period (Protected, needs { password })
+POST   /api/auth/account/restore     - Cancel deletion / reactivate within the grace period ({ identifier, password })
 ```
+
+**Phone numbers** — users may type a local number (`092123456`, `92123456`) or
+an international one (`+85592123456`). The API normalizes everything to E.164
+(`src/utils/phone.js`): no `+` means Cambodia (`+855`) is assumed and the
+leading `0` is dropped, so all forms map to the same stored value and
+signup/login always match. Override the assumed country with
+`PHONE_DEFAULT_COUNTRY_CODE` in `.env`. Login is via password — no SMS
+verification.
+
+Note: `admin.routes.js` still uses the older loose phone validation for
+portal-created students — align it with `utils/phone.js` if admins enter
+numbers in local format.
+
+**Account deactivation & deletion (mobile app-store requirement)**
+
+- `POST /api/auth/deactivate` — sets `is_active = false` + `deactivated_at`. The
+  user is signed out and blocked from logging in; the next successful login
+  automatically reactivates the account. Body: `{ "password": "..." }`.
+- `DELETE /api/auth/account` — sets `deletion_requested_at` and
+  `deletion_scheduled_at = now + 30 days` and disables the account. Body:
+  `{ "password": "..." }`. Returns `deletion_scheduled_at`.
+- `POST /api/auth/account/restore` — reactivates a self-deactivated or
+  pending-deletion account before the grace period ends. Body:
+  `{ "identifier": "<email or phone>", "password": "..." }`. Returns a fresh token.
+- `login` returns `403` with `code: "ACCOUNT_PENDING_DELETION"` while a deletion
+  is pending, and `410` once the account has been purged.
+- Run `node scripts/purge-deleted-accounts.js` on a daily schedule. After the
+  grace period it scrubs PII from the `users` row (name/email/phone/password/
+  avatar/bio) and stamps `deleted_at`; learning history is kept but anonymized.
+- Migration: `sql/017_account_lifecycle.sql`.
 
 ### Courses
 ```

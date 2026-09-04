@@ -9,7 +9,7 @@
  * Admins can log in via POST /api/auth/login like anyone else; the returned
  * JWT carries role:"admin", which unlocks /api/admin/*.
  */
-require('dotenv').config();
+require('../src/config/loadEnv');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const supabase = require('../src/config/supabase');

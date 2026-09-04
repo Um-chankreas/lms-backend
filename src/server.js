@@ -1,10 +1,9 @@
+// Must be first: loads .env.<NODE_ENV> then .env before anything reads process.env
+require('./config/loadEnv');
+
 const express = require('express');
 const http = require('http');
 const cors = require('cors');
-const dotenv = require('dotenv');
-
-// Load environment variables
-dotenv.config();
 
 const app = express();
 const { initLiveClassRealtime } = require('./realtime/liveClassSocket');

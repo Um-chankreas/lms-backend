@@ -11,7 +11,7 @@
  * Pro). Run this once after deploying, or set it in the dashboard:
  *   Storage -> course-materials -> Settings -> File size limit.
  */
-require('dotenv').config();
+require('../src/config/loadEnv');
 const supabase = require('../src/config/supabase');
 
 async function main() {

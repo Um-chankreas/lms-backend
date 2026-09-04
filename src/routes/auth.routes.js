@@ -4,6 +4,7 @@ const multer = require('multer');
 const supabase = require('../config/supabase');
 const { generateToken } = require('../utils/jwt');
 const { authenticateToken } = require('../middleware/auth');
+const { normalizePhone, isValidPhone } = require('../utils/phone');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 
@@ -21,10 +22,9 @@ const avatarUpload = multer({
 });
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const PHONE_REGEX = /^\+?[0-9]{8,15}$/;
+const PHONE_HELP = 'Enter a valid phone number, e.g. 092123456 or +85592123456';
 
 const normalizeEmail = (email) => String(email).trim().toLowerCase();
-const normalizePhone = (phone) => String(phone).replace(/[\s\-()]/g, '');
 
 const sanitizeUser = (user) => ({
   id: user.id,
@@ -36,6 +36,48 @@ const sanitizeUser = (user) => ({
   bio: user.bio || null,
   created_at: user.created_at
 });
+
+/**
+ * Checks whether an authenticated user (correct password / verified OTP) is
+ * actually allowed to start a session. Returns { status, body } to send when
+ * they are blocked, or null when the login may proceed.
+ */
+const accountLoginGate = (user) => {
+  if (user.deleted_at) {
+    return { status: 410, body: { success: false, error: 'This account has been permanently deleted' } };
+  }
+  if (user.deletion_scheduled_at) {
+    return {
+      status: 403,
+      body: {
+        success: false,
+        code: 'ACCOUNT_PENDING_DELETION',
+        error: `This account is scheduled for deletion on ${String(user.deletion_scheduled_at).slice(0, 10)}. `
+          + 'Restore it via POST /api/auth/account/restore to cancel.',
+        data: { deletion_scheduled_at: user.deletion_scheduled_at }
+      }
+    };
+  }
+  if (user.is_active === false && !user.deactivated_at) {
+    return { status: 403, body: { success: false, error: 'This account has been deactivated. Contact your administrator.' } };
+  }
+  return null;
+};
+
+/**
+ * A user who deactivated their own account reactivates it just by
+ * authenticating again (password or OTP). Mutates `user` in place.
+ */
+const reactivateIfSelfDeactivated = async (user) => {
+  if (user.is_active === false && user.deactivated_at) {
+    await supabase
+      .from('users')
+      .update({ is_active: true, deactivated_at: null })
+      .eq('id', user.id);
+    user.is_active = true;
+    user.deactivated_at = null;
+  }
+};
 
 /**
  * POST /api/auth/signup
@@ -96,10 +138,10 @@ router.post('/signup', async (req, res) => {
     let normalizedPhone = null;
     if (phone) {
       normalizedPhone = normalizePhone(phone);
-      if (!PHONE_REGEX.test(normalizedPhone)) {
+      if (!isValidPhone(normalizedPhone)) {
         return res.status(400).json({
           success: false,
-          error: 'Invalid phone number'
+          error: PHONE_HELP
         });
       }
     }
@@ -220,12 +262,10 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    if (user.is_active === false) {
-      return res.status(403).json({
-        success: false,
-        error: 'This account has been deactivated. Contact your administrator.'
-      });
-    }
+    const gate = accountLoginGate(user);
+    if (gate) return res.status(gate.status).json(gate.body);
+
+    await reactivateIfSelfDeactivated(user);
 
     // Generate JWT token
     const token = generateToken(user.id, user.role);
@@ -314,10 +354,10 @@ router.put('/profile', authenticateToken, async (req, res) => {
 
     if (phone) {
       const normalizedPhone = normalizePhone(phone);
-      if (!PHONE_REGEX.test(normalizedPhone)) {
+      if (!isValidPhone(normalizedPhone)) {
         return res.status(400).json({
           success: false,
-          error: 'Invalid phone number'
+          error: PHONE_HELP
         });
       }
 
@@ -431,6 +471,203 @@ router.put('/profile/avatar', authenticateToken, avatarUpload.single('avatar'), 
       success: false,
       error: 'Failed to update avatar: ' + error.message
     });
+  }
+});
+
+// Days between requesting deletion and the account being permanently purged.
+const DELETION_GRACE_DAYS = 30;
+
+/**
+ * Loads the authenticated user's row and checks the supplied password.
+ * On failure it sends the error response and returns null.
+ */
+async function verifyCurrentPassword(req, res) {
+  const { password } = req.body;
+  if (!password) {
+    res.status(400).json({ success: false, error: 'Current password is required' });
+    return null;
+  }
+
+  const { data: user, error } = await supabase
+    .from('users')
+    .select('*')
+    .eq('id', req.user.userId)
+    .single();
+
+  if (error || !user) {
+    res.status(404).json({ success: false, error: 'User not found' });
+    return null;
+  }
+
+  const passwordMatch = await bcrypt.compare(password, user.password);
+  if (!passwordMatch) {
+    res.status(401).json({ success: false, error: 'Incorrect password' });
+    return null;
+  }
+
+  return user;
+}
+
+/**
+ * POST /api/auth/deactivate
+ * Temporarily disable the current user's account. They are signed out and
+ * can't log in until they reactivate — which happens automatically the next
+ * time they log in with the correct credentials. No data is removed.
+ * Body: { password }
+ */
+router.post('/deactivate', authenticateToken, async (req, res) => {
+  try {
+    const user = await verifyCurrentPassword(req, res);
+    if (!user) return;
+
+    if (user.deletion_scheduled_at) {
+      return res.status(409).json({
+        success: false,
+        error: 'This account is already scheduled for deletion'
+      });
+    }
+
+    const { error } = await supabase
+      .from('users')
+      .update({ is_active: false, deactivated_at: new Date() })
+      .eq('id', user.id);
+    if (error) throw error;
+
+    res.json({
+      success: true,
+      message: 'Your account has been deactivated. Log in again anytime to reactivate it.'
+    });
+  } catch (error) {
+    console.error('Deactivate account error:', error);
+    res.status(500).json({ success: false, error: 'Failed to deactivate account: ' + error.message });
+  }
+});
+
+/**
+ * DELETE /api/auth/account
+ * Request permanent deletion of the current user's account. It is disabled
+ * immediately and permanently erased after a 30-day grace period
+ * (scripts/purge-deleted-accounts.js). The user can cancel any time before
+ * then via POST /api/auth/account/restore.
+ * Body: { password }
+ */
+router.delete('/account', authenticateToken, async (req, res) => {
+  try {
+    const user = await verifyCurrentPassword(req, res);
+    if (!user) return;
+
+    if (user.deletion_scheduled_at) {
+      return res.json({
+        success: true,
+        message: 'This account is already scheduled for deletion',
+        data: { deletion_scheduled_at: user.deletion_scheduled_at }
+      });
+    }
+
+    const now = new Date();
+    const scheduledAt = new Date(now.getTime() + DELETION_GRACE_DAYS * 24 * 60 * 60 * 1000);
+
+    const { error } = await supabase
+      .from('users')
+      .update({
+        is_active: false,
+        deactivated_at: user.deactivated_at || now,
+        deletion_requested_at: now,
+        deletion_scheduled_at: scheduledAt
+      })
+      .eq('id', user.id);
+    if (error) throw error;
+
+    res.json({
+      success: true,
+      message: `Your account has been scheduled for deletion and will be permanently erased on `
+        + `${scheduledAt.toISOString().slice(0, 10)}. Log in and restore it before then to cancel.`,
+      data: { deletion_scheduled_at: scheduledAt.toISOString() }
+    });
+  } catch (error) {
+    console.error('Delete account error:', error);
+    res.status(500).json({ success: false, error: 'Failed to delete account: ' + error.message });
+  }
+});
+
+/**
+ * POST /api/auth/account/restore
+ * Reactivate an account the user deactivated or scheduled for deletion,
+ * provided the 30-day grace period hasn't elapsed. No token required — the
+ * user can't log in while the account is disabled.
+ * Body: { identifier | email | phone, password }
+ */
+router.post('/account/restore', async (req, res) => {
+  try {
+    const { identifier, email, phone, password } = req.body;
+    const rawIdentifier = String(identifier || email || phone || '').trim();
+
+    if (!rawIdentifier || !password) {
+      return res.status(400).json({
+        success: false,
+        error: 'Email/phone and password are required'
+      });
+    }
+
+    const isEmail = rawIdentifier.includes('@');
+    let query = supabase.from('users').select('*');
+    query = isEmail
+      ? query.eq('email', normalizeEmail(rawIdentifier))
+      : query.eq('phone', normalizePhone(rawIdentifier));
+
+    const { data: user } = await query.maybeSingle();
+
+    if (!user || !(await bcrypt.compare(password, user.password))) {
+      return res.status(401).json({ success: false, error: 'Invalid credentials' });
+    }
+
+    if (user.deleted_at) {
+      return res.status(410).json({
+        success: false,
+        error: 'This account has already been permanently deleted'
+      });
+    }
+
+    const selfDisabled = !!user.deactivated_at || !!user.deletion_scheduled_at;
+    if (user.is_active === false && !selfDisabled) {
+      return res.status(403).json({
+        success: false,
+        error: 'This account has been deactivated by an administrator. Please contact support.'
+      });
+    }
+
+    if (user.is_active !== false && !user.deletion_scheduled_at) {
+      // Nothing to restore — hand back a fresh token so the client can just log in.
+      const token = generateToken(user.id, user.role);
+      return res.json({
+        success: true,
+        message: 'Account is already active',
+        data: { user: sanitizeUser(user), token }
+      });
+    }
+
+    const { data: restored, error } = await supabase
+      .from('users')
+      .update({
+        is_active: true,
+        deactivated_at: null,
+        deletion_requested_at: null,
+        deletion_scheduled_at: null
+      })
+      .eq('id', user.id)
+      .select()
+      .single();
+    if (error) throw error;
+
+    const token = generateToken(restored.id, restored.role);
+    res.json({
+      success: true,
+      message: 'Your account has been restored.',
+      data: { user: sanitizeUser(restored), token }
+    });
+  } catch (error) {
+    console.error('Restore account error:', error);
+    res.status(500).json({ success: false, error: 'Failed to restore account: ' + error.message });
   }
 });
 
