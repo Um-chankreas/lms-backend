@@ -284,25 +284,92 @@ DELETE /api/courses/:id              - Delete course (Teacher)
 POST   /api/courses/:id/enroll       - Enroll in course (Student)
 ```
 
-### Lessons
+### Lessons (chapters) & Units
+
+Content model: **course** (a class) → **lesson** = *chapter* (`ជំពូកទី១ …`) →
+**unit** = *section* (`Unit 1: …`). A chapter can carry an optional intro video
+(no PDFs). Completion / XP stay at the **chapter** level (`lesson_completions`).
+
 ```
-POST   /api/lessons                  - Create lesson with file (Teacher)
-GET    /api/lessons/:id              - Get lesson details (Protected)
-GET    /api/lessons/course/:courseId - Get all course lessons (Protected)
-PUT    /api/lessons/:id              - Update lesson (Teacher)
-DELETE /api/lessons/:id              - Delete lesson (Teacher)
-POST   /api/lessons/:id/mark-complete - Mark lesson complete (Student)
+POST   /api/lessons                  - Create chapter (Teacher)
+GET    /api/lessons/:id              - Get chapter details (Protected)
+GET    /api/lessons/course/:courseId - Get all course chapters (Protected)
+PUT    /api/lessons/:id              - Update chapter (Teacher)
+DELETE /api/lessons/:id              - Delete chapter (Teacher)
+POST   /api/lessons/:id/mark-complete - Mark chapter complete (Student)
+
+GET    /api/units?lesson_id=         - List a chapter's units (title + preview; content if unlocked)
+GET    /api/units/search?q=&course_id= - Browse/search units the caller can see
+GET    /api/units/:id               - One unit, full Markdown content (Protected)
+POST   /api/units                   - Add a unit { lesson_id, title, content, is_free? } (Teacher)
+POST   /api/units/bulk              - Import { lesson_id, markdown, replace? } — splits on each `## ` (Teacher)
+POST   /api/units/reorder           - { lesson_id, order: [unitId, ...] } (Teacher)
+PUT    /api/units/:id               - Edit a unit (Teacher)
+DELETE /api/units/:id               - Remove a unit (Teacher)
 ```
 
+**Unit content format** — Markdown, one column for every subject:
+- history etc. → plain Markdown prose (`##` units, `**bold**`, paragraphs) — no LaTeX
+- maths only → the same Markdown, with `$ … $` / `$$ … $$` where a formula is needed
+
+The client should render with a math-aware Markdown pipeline (`markdown-it` +
+`markdown-it-katex`, or `remark-math` + `rehype-katex`) so maths units display
+correctly; history content is unaffected either way.
+
+**Upload flow (portal)** — teacher picks course + chapter, pastes the chapter's
+`.md`, `POST /api/units/bulk` splits it on `## ` headings into units (text before
+the first `##` — the `#` title, `---` rules — is ignored). Migration:
+`sql/018_lesson_units.sql`.
+
 ### Quizzes
+
+A quiz attaches to a **course**, optionally a **chapter** (`lesson_id`), and
+optionally a **unit** (`unit_id` — implies its chapter). So a chapter can have
+its overall quiz *and* each unit its own practice quiz.
+
 ```
-POST   /api/quizzes                  - Create quiz (Teacher)
+POST   /api/quizzes                  - Create quiz { course_id, lesson_id?, unit_id?, ... } (Teacher)
 POST   /api/quizzes/:id/questions    - Add question (Teacher)
+POST   /api/quizzes/:id/questions/import - Import questions into THIS quiz from CSV (Teacher)
+GET    /api/quizzes/questions/import/template - Download the question CSV template (Teacher)
 GET    /api/quizzes/:id              - Get quiz with questions (Protected)
+GET    /api/quizzes/lesson/:lessonId - Get a chapter's quizzes (Protected)
+GET    /api/quizzes/unit/:unitId     - Get a unit's quizzes (Protected)
 GET    /api/quizzes/course/:courseId - Get course quizzes (Protected)
 POST   /api/quizzes/:id/submit       - Submit quiz (Student)
 GET    /api/quizzes/:id/results      - Get quiz results (Protected)
+
+GET    /api/quizzes/import/units/template - Download the chapter-wide CSV template (Teacher)
+POST   /api/quizzes/import/units     - Import a chapter's whole practice bank, split per unit (Teacher)
 ```
+
+**CSV format** — one clean layout, used by both importers:
+
+| column | required | notes |
+|---|---|---|
+| `question` | yes | the stem; wrap maths in `$…$` |
+| `question_type` | no | `QCM` or `number_input`. Omit to infer (has options → `QCM`, none → `number_input`) |
+| `option_a` … `option_f` | 2+ for `QCM` | leave all blank for `number_input` |
+| `correct` | for `QCM` | a letter (`A`/`B`/…) **or** the full option text |
+| `input_answer` | for `number_input` | the number the student must type (falls back to `correct` if empty) |
+| `tier` | no | `Easy` / `Medium` / `Hard` → `quiz_questions.difficulty` |
+| `explanation` | no | shown after the student answers |
+| `unit` | only for the chapter-wide import | `U1`, `U2`, … → the unit's position in the chapter |
+
+Both `correct` and `input_answer` end up in the one `quiz_questions.correct_answer`
+column. `quiz_questions.question_type` is stored as `QCM` or `number_input`;
+aliases accepted in the CSV: `MCQ` / `MCQ-4` / `multiple_choice` → `QCM`;
+`numeric` / `numeric entry` / `number` → `number_input`. Older column names
+(`stem in khmer`, `option a`, `correct answer`, `what each wrong option
+catches`, `unit id`) are also accepted.
+
+- **Per-quiz** (`POST /api/quizzes/:id/questions/import`) — the portal picks the
+  chapter/unit; the CSV just needs `question, option_*, correct, tier, explanation`.
+- **Chapter-wide** (`POST /api/quizzes/import/units`, multipart: `file`,
+  `lesson_id`, `publish?`, `replace?`, `pass_percentage?`, `time_limit?`) — one
+  CSV with a `unit` column; creates/reuses one quiz per unit.
+- Migration: `sql/019_unit_quizzes.sql`. Note: imported unit quizzes are normal
+  graded quizzes — passing awards QUIZ_PASS XP like any other.
 
 ### Assignments
 ```

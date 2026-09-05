@@ -27,6 +27,7 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use('/api/auth', require('./routes/auth.routes'));
 app.use('/api/courses', require('./routes/courses.routes'));
 app.use('/api/lessons', require('./routes/lessons.routes'));
+app.use('/api/units', require('./routes/units.routes'));
 app.use('/api/quizzes', require('./routes/quizzes.routes'));
 app.use('/api/assignments', require('./routes/assignments.routes'));
 app.use('/api/live-classes', require('./routes/liveClass.routes'));

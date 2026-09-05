@@ -1,4 +1,4 @@
-question,option_1,option_2,option_3,option_4,correct_answer,explanation,question_type
-"What is the capital of France?","Paris","London","Berlin","Madrid","Paris","Paris is the capital and most populous city of France.",multiple_choice
-"The sky is blue on a clear day.","True","False","","","True","",multiple_choice
-"Which planet is known as the Red Planet?","Earth","Mars","Jupiter","Venus","Mars","",multiple_choice
+question,question_type,option_a,option_b,option_c,option_d,correct,input_answer,tier,explanation
+"តើរដ្ឋធានីនៃប្រទេសបារាំងគឺជាអ្វី?",QCM,"ប៉ារីស","ឡុងដ៍","ប៊ែរឡាំង","ម៉ាឌ្រីត",A,,Easy,"ប៉ារីសជារដ្ឋធានី និងជាទីក្រុងធំជាងគេនៃប្រទេសបារាំង។"
+"តម្លៃនៃ $2^3$ គឺ?",QCM,"6","8","9","12",B,,Medium,"$2^3 = 2 \times 2 \times 2 = 8$"
+"គណនា $\lim_{x \to 0} \frac{\sin x}{x}$",number_input,,,,,,1,Hard,"នេះជាលីមីតមូលដ្ឋាន ស្មើនឹង ១។"

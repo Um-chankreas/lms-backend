@@ -186,11 +186,14 @@ router.get('/:id', optionalAuth, async (req, res) => {
     // /api/quizzes/:id, fetched only when the student actually opens one.
     const quizzesByLesson = {};
     if (lessons.length > 0) {
+      // Chapter-level quizzes only. Per-unit practice quizzes (unit_id set) are
+      // managed from the chapter reader, not this list.
       let quizQuery = supabase
         .from('quizzes')
-        .select('id, lesson_id, title, status, quiz_questions(count)')
+        .select('id, lesson_id, unit_id, title, status, quiz_questions(count)')
         .eq('course_id', id)
-        .not('lesson_id', 'is', null);
+        .not('lesson_id', 'is', null)
+        .is('unit_id', null);
 
       if (req.user?.role !== 'teacher') {
         quizQuery = quizQuery.eq('status', 'published');
@@ -204,6 +207,7 @@ router.get('/:id', optionalAuth, async (req, res) => {
           id: quiz.id,
           title: quiz.title,
           status: quiz.status,
+          unit_id: quiz.unit_id || null,
           total_questions: quiz.quiz_questions?.[0]?.count || 0
         });
       });

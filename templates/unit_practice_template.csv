@@ -1,0 +1,4 @@
+unit,question,question_type,option_a,option_b,option_c,option_d,correct,input_answer,tier,explanation
+U1,"សំណួរជ្រើសរើសចម្លើយសម្រាប់ ឯកតា ១ ...",QCM,"ជម្រើស ក","ជម្រើស ខ","ជម្រើស គ","ជម្រើស ឃ",B,,Easy,"ពន្យល់ថាហេតុអ្វីជម្រើសខុសនីមួយៗខុស"
+U1,"សំណួរមួយទៀត ...",QCM,"A text","B text","C text","D text",C,,Medium,"explanation of the distractors"
+U2,"គណនាតម្លៃ ... (ចម្លើយជាលេខ)",number_input,,,,,,44,Hard,"ពន្យល់ពីរបៀបគណនា"
