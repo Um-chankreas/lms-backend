@@ -2,11 +2,24 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const { authenticateToken, isStudent } = require('../middleware/auth');
+const { getStreak } = require('../utils/achievements');
+
+// This week's XP / quiz / assignment / live-class targets shown on the home
+// screen "This Week" card. Static for now — no per-student goal setting yet.
+const WEEK_GOALS = { xp: 100, quizzes: 3, assignments: 2, live_classes: 2 };
+
+// Monday 00:00 (server local) of the week containing `now`.
+function weekStart(now = new Date()) {
+  const d = new Date(now);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); // Sun->6, Mon->0, ...
+  return d;
+}
 
 /**
  * GET /api/dashboard
- * Student home screen summary: XP, lessons completed, and overall progress
- * across enrolled courses.
+ * Student home screen summary: XP, lessons completed, overall progress,
+ * daily-quiz streak, quizzes passed, and this-week activity vs. goals.
  */
 router.get('/', authenticateToken, isStudent, async (req, res) => {
   try {
@@ -126,15 +139,45 @@ router.get('/', authenticateToken, isStudent, async (req, res) => {
 
     const percentage = totalLessons > 0 ? Math.round((completedLessons / totalLessons) * 100) : 0;
 
+    // Streak, total quizzes passed, and this-week counters.
+    const sinceIso = weekStart().toISOString();
+    const [
+      streak,
+      { data: passedSubs },
+      { data: weekXpRows },
+      { data: weekQuizRows },
+      { data: weekAssignRows },
+      { data: weekLiveRows },
+    ] = await Promise.all([
+      getStreak(studentId),
+      supabase.from('quiz_submissions').select('quiz_id').eq('student_id', studentId).eq('passed', true),
+      supabase.from('xp_events').select('amount').eq('student_id', studentId).gte('created_at', sinceIso),
+      supabase.from('quiz_submissions').select('id').eq('student_id', studentId).gte('submitted_at', sinceIso),
+      supabase.from('assignment_submissions').select('id').eq('student_id', studentId).gte('submitted_at', sinceIso),
+      supabase.from('live_class_participants').select('id').eq('user_id', studentId).gte('joined_at', sinceIso),
+    ]);
+
+    const quizzesPassed = new Set((passedSubs || []).map(s => s.quiz_id)).size;
+    const weekXp = (weekXpRows || []).reduce((sum, r) => sum + (r.amount || 0), 0);
+
     res.json({
       success: true,
       data: {
         xp: userRow.xp || 0,
         lessons_completed: completedLessons,
+        quizzes_passed: quizzesPassed,
+        streak,
         progress: {
           completed_lessons: completedLessons,
           total_lessons: totalLessons,
           percentage
+        },
+        week: {
+          xp_earned: weekXp,
+          quizzes_attempted: (weekQuizRows || []).length,
+          assignments_submitted: (weekAssignRows || []).length,
+          live_classes_attended: (weekLiveRows || []).length,
+          goals: WEEK_GOALS
         },
         continue_lesson: continueLesson,
         all_caught_up: totalLessons > 0 && completedLessons === totalLessons
@@ -146,6 +189,78 @@ router.get('/', authenticateToken, isStudent, async (req, res) => {
       success: false,
       error: 'Failed to fetch dashboard: ' + error.message
     });
+  }
+});
+
+/**
+ * GET /api/dashboard/activity?limit=8
+ * A small "friend activity" feed for the home screen: recent milestones of
+ * students the caller shares a course with (same set the friends leaderboard
+ * uses) — quizzes passed, chests opened, lessons finished, badges earned.
+ * Sorted newest-first. Nothing is stored; it's assembled from the ledgers.
+ */
+router.get('/activity', authenticateToken, isStudent, async (req, res) => {
+  try {
+    const me = req.user.userId;
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 8, 1), 30);
+
+    const { data: myEnr } = await supabase
+      .from('course_enrollments').select('course_id').eq('student_id', me);
+    const courseIds = (myEnr || []).map(e => e.course_id);
+    if (courseIds.length === 0) return res.json({ success: true, data: { activity: [] } });
+
+    const { data: peers } = await supabase
+      .from('course_enrollments').select('student_id').in('course_id', courseIds);
+    const peerIds = [...new Set((peers || []).map(p => p.student_id))].filter(id => id !== me);
+    if (peerIds.length === 0) return res.json({ success: true, data: { activity: [] } });
+
+    const sinceIso = new Date(Date.now() - 14 * 86400000).toISOString();
+    const MEANINGFUL_XP = ['quiz_pass', 'path_chest', 'daily_quiz'];
+
+    const [{ data: xpRows }, { data: lessonRows }, { data: badgeRows }, { data: users }] = await Promise.all([
+      supabase.from('xp_events').select('student_id, amount, reason, created_at')
+        .in('student_id', peerIds).in('reason', MEANINGFUL_XP)
+        .gte('created_at', sinceIso).order('created_at', { ascending: false }).limit(40),
+      supabase.from('lesson_completions').select('student_id, lesson_id, completed_at')
+        .in('student_id', peerIds).gte('completed_at', sinceIso)
+        .order('completed_at', { ascending: false }).limit(20),
+      supabase.from('achievements').select('student_id, badge_code, earned_at')
+        .in('student_id', peerIds).gte('earned_at', sinceIso)
+        .order('earned_at', { ascending: false }).limit(20),
+      supabase.from('users').select('id, name, avatar_url').in('id', peerIds),
+    ]);
+
+    const userById = Object.fromEntries((users || []).map(u => [u.id, u]));
+    const lessonIds = [...new Set((lessonRows || []).map(r => r.lesson_id))];
+    const { data: lessons } = lessonIds.length
+      ? await supabase.from('lessons').select('id, title').in('id', lessonIds)
+      : { data: [] };
+    const lessonTitle = Object.fromEntries((lessons || []).map(l => [l.id, l.title]));
+
+    const actor = (id) => {
+      const u = userById[id];
+      return u ? { id: u.id, name: u.name, avatar_url: u.avatar_url } : null;
+    };
+
+    const items = [];
+    (xpRows || []).forEach(r => {
+      const a = actor(r.student_id);
+      if (a) items.push({ type: 'xp', actor: a, amount: r.amount, reason: r.reason, at: r.created_at });
+    });
+    (lessonRows || []).forEach(r => {
+      const a = actor(r.student_id);
+      if (a) items.push({ type: 'lesson', actor: a, lesson_title: lessonTitle[r.lesson_id] || null, at: r.completed_at });
+    });
+    (badgeRows || []).forEach(r => {
+      const a = actor(r.student_id);
+      if (a) items.push({ type: 'badge', actor: a, badge_code: r.badge_code, at: r.earned_at });
+    });
+
+    items.sort((x, y) => new Date(y.at) - new Date(x.at));
+    res.json({ success: true, data: { activity: items.slice(0, limit) } });
+  } catch (error) {
+    console.error('Dashboard activity error:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch activity: ' + error.message });
   }
 });
 

@@ -9,6 +9,7 @@ const { v4: uuidv4 } = require('uuid');
 const { awardXp, XP_VALUES } = require('../utils/xp');
 const { evaluateAchievements } = require('../utils/achievements');
 const { hasCourseAccess, ensureEnrolled } = require('../utils/access');
+const { checkChapterAutoComplete } = require('../utils/progress');
 
 // Configure multer for quiz question CSV imports
 const csvUpload = multer({
@@ -25,6 +26,36 @@ function pickRandom(arr, n) {
     picked.push(pool.splice(idx, 1)[0]);
   }
   return picked;
+}
+
+// A unit/lesson quiz question bank can hold more than this (e.g. the CSV
+// import gives every unit 6); a student only ever takes a random draw of
+// this many per attempt. Teachers still see the full bank when building it.
+const QUIZ_TAKE_SIZE = 5;
+
+// Shared gate for the two student-facing "play" endpoints (per-question
+// /check and final /submit): the quiz must be published and the caller must
+// have course access (or the parent lesson is a free preview). Returns
+// { ok: true } or { ok: false, status, error } ready to send.
+async function checkQuizPlayAccess(quiz, user) {
+  if (!quiz || quiz.status !== 'published') {
+    return { ok: false, status: 404, error: 'Quiz is not available' };
+  }
+  let lessonIsFree = false;
+  if (quiz.lesson_id) {
+    const { data: lesson } = await supabase
+      .from('lessons')
+      .select('is_free')
+      .eq('id', quiz.lesson_id)
+      .maybeSingle();
+    lessonIsFree = !!lesson?.is_free;
+  }
+  await ensureEnrolled({ supabase, course: quiz.courses, user });
+  const courseAccess = await hasCourseAccess({ supabase, course: quiz.courses, user });
+  if (!courseAccess && !lessonIsFree) {
+    return { ok: false, status: 403, error: 'You do not have access to this quiz yet' };
+  }
+  return { ok: true };
 }
 
 /**
@@ -811,12 +842,26 @@ router.get('/daily', authenticateToken, isStudent, async (req, res) => {
 
     let attempt = existingAttempt;
 
-    if (!attempt) {
-      const { data: enrollments } = await supabase
-        .from('course_enrollments')
-        .select('course_id')
-        .eq('student_id', studentId);
-      const courseIds = (enrollments || []).map(e => e.course_id);
+    // Self-heal a stuck attempt: today's row exists but was created empty
+    // (e.g. before the student had any reachable course) and isn't started.
+    const emptyUnstarted = attempt
+      && (!Array.isArray(attempt.question_ids) || attempt.question_ids.length === 0)
+      && !attempt.completed_at
+      && !attempt.answers;
+
+    if (!attempt || emptyUnstarted) {
+      // Pool = every course the student can actually reach: the ones they're
+      // enrolled in, plus every free course (open to everyone, same as
+      // hasCourseAccess treats them elsewhere). Without the free-course part
+      // a brand-new student with no enrollments yet gets an empty daily quiz.
+      const [{ data: enrollments }, { data: freeCourses }] = await Promise.all([
+        supabase.from('course_enrollments').select('course_id').eq('student_id', studentId),
+        supabase.from('courses').select('id').eq('is_free', true)
+      ]);
+      const courseIds = [...new Set([
+        ...(enrollments || []).map(e => e.course_id),
+        ...(freeCourses || []).map(c => c.id)
+      ])];
 
       let questionPool = [];
       if (courseIds.length > 0) {
@@ -838,20 +883,27 @@ router.get('/daily', authenticateToken, isStudent, async (req, res) => {
 
       const questionIds = pickRandom(questionPool, 5).map(q => q.id);
 
-      const { data: newAttempt, error } = await supabase
-        .from('daily_quiz_attempts')
-        .insert({
-          id: uuidv4(),
-          student_id: studentId,
-          quiz_date: today,
-          question_ids: questionIds,
-          created_at: new Date()
-        })
-        .select()
-        .single();
+      const { data: savedAttempt, error } = emptyUnstarted
+        ? await supabase
+            .from('daily_quiz_attempts')
+            .update({ question_ids: questionIds })
+            .eq('id', attempt.id)
+            .select()
+            .single()
+        : await supabase
+            .from('daily_quiz_attempts')
+            .insert({
+              id: uuidv4(),
+              student_id: studentId,
+              quiz_date: today,
+              question_ids: questionIds,
+              created_at: new Date()
+            })
+            .select()
+            .single();
 
       if (error) throw error;
-      attempt = newAttempt;
+      attempt = savedAttempt;
     }
 
     const questionIds = Array.isArray(attempt.question_ids) ? attempt.question_ids : [];
@@ -1051,16 +1103,30 @@ router.get('/:id', authenticateToken, async (req, res) => {
       });
     }
 
-    const { data: questions } = await supabase
+    const { data: allQuestions } = await supabase
       .from('quiz_questions')
       .select('*')
       .eq('quiz_id', id)
       .order('order_number', { ascending: true });
 
-    const questionsWithParsedOptions = (questions || []).map(q => ({
-      ...q,
-      options: typeof q.options === 'string' ? JSON.parse(q.options) : q.options
-    }));
+    const isTeacher = req.user?.role === 'teacher';
+
+    // A student takes a random draw of QUIZ_TAKE_SIZE from the bank (varies
+    // every attempt), never the correct_answer/explanation up front — those
+    // are only revealed in the submit response / results review. A teacher
+    // previewing or editing the quiz still sees the full bank with answers.
+    const forStudent = (allQuestions || []).length > QUIZ_TAKE_SIZE
+      ? pickRandom(allQuestions, QUIZ_TAKE_SIZE).sort((a, b) => (a.order_number || 0) - (b.order_number || 0))
+      : (allQuestions || []);
+
+    const questionsToSend = isTeacher ? (allQuestions || []) : forStudent;
+
+    const questionsWithParsedOptions = questionsToSend.map(q => {
+      const options = typeof q.options === 'string' ? JSON.parse(q.options) : q.options;
+      if (isTeacher) return { ...q, options };
+      const { correct_answer, explanation, ...safe } = q;
+      return { ...safe, options };
+    });
 
     res.json({
       success: true,
@@ -1068,7 +1134,8 @@ router.get('/:id', authenticateToken, async (req, res) => {
         quiz: {
           ...quiz,
           questions: questionsWithParsedOptions,
-          total_questions: questionsWithParsedOptions.length
+          total_questions: questionsWithParsedOptions.length,
+          bank_size: (allQuestions || []).length
         }
       }
     });
@@ -1078,6 +1145,62 @@ router.get('/:id', authenticateToken, async (req, res) => {
       success: false,
       error: 'Failed to fetch quiz: ' + error.message
     });
+  }
+});
+
+/**
+ * POST /api/quizzes/:id/check   (Student)
+ * Grade ONE question mid-quiz for the Duolingo-style flow: the client sends
+ * { question_id, answer } when the student taps "Check", and gets back
+ * whether it was right, the correct answer, and the explanation to reveal
+ * inline before moving on. Persists nothing — the whole attempt is still
+ * recorded (and re-graded, authoritatively) by POST /:id/submit at the end.
+ */
+router.post('/:id/check', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { question_id, answer } = req.body;
+
+    if (!question_id) {
+      return res.status(400).json({ success: false, error: 'question_id is required' });
+    }
+
+    const { data: quiz } = await supabase
+      .from('quizzes')
+      .select('*, courses(*)')
+      .eq('id', id)
+      .single();
+
+    const access = await checkQuizPlayAccess(quiz, req.user);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
+    }
+
+    const { data: question } = await supabase
+      .from('quiz_questions')
+      .select('id, correct_answer, explanation, question_type')
+      .eq('id', question_id)
+      .eq('quiz_id', id)
+      .maybeSingle();
+
+    if (!question) {
+      return res.status(404).json({ success: false, error: 'Question not found in this quiz' });
+    }
+
+    const isCorrect = answersMatch(answer, question.correct_answer, question.question_type);
+
+    res.json({
+      success: true,
+      data: {
+        question_id: question.id,
+        is_correct: isCorrect,
+        correct_answer: question.correct_answer,
+        explanation: question.explanation || null
+      }
+    });
+  } catch (error) {
+    console.error('Quiz check error:', error);
+    res.status(500).json({ success: false, error: 'Failed to check answer: ' + error.message });
   }
 });
 
@@ -1103,36 +1226,20 @@ router.post('/:id/submit', authenticateToken, async (req, res) => {
       .eq('id', id)
       .single();
 
-    if (!quiz || quiz.status !== 'published') {
-      return res.status(404).json({
-        success: false,
-        error: 'Quiz is not available'
-      });
+    const access = await checkQuizPlayAccess(quiz, req.user);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error });
     }
 
-    let lessonIsFree = false;
-    if (quiz.lesson_id) {
-      const { data: lesson } = await supabase
-        .from('lessons')
-        .select('is_free')
-        .eq('id', quiz.lesson_id)
-        .maybeSingle();
-      lessonIsFree = !!lesson?.is_free;
-    }
-
-    await ensureEnrolled({ supabase, course: quiz.courses, user: req.user });
-    const courseAccess = await hasCourseAccess({ supabase, course: quiz.courses, user: req.user });
-    if (!courseAccess && !lessonIsFree) {
-      return res.status(403).json({
-        success: false,
-        error: 'You do not have access to this quiz yet'
-      });
-    }
-
-    const { data: questions } = await supabase
-      .from('quiz_questions')
-      .select('*')
-      .eq('quiz_id', id);
+    // Grade only the questions this attempt actually presented — the
+    // student was only ever given the ids of their random QUIZ_TAKE_SIZE
+    // draw (see GET /:id), so the answer keys they can possibly submit are
+    // exactly that draw. Scoping the query the same way means the score is
+    // out of however many were actually served, not the whole bank.
+    const answeredIds = Object.keys(answers || {});
+    const { data: questions } = answeredIds.length > 0
+      ? await supabase.from('quiz_questions').select('*').eq('quiz_id', id).in('id', answeredIds)
+      : { data: [] };
 
     let correctCount = 0;
     const totalCount = questions?.length || 0;
@@ -1199,6 +1306,15 @@ router.post('/:id/submit', authenticateToken, async (req, res) => {
     }
     await evaluateAchievements(req.user.userId);
 
+    // A passed quiz that belongs to a chapter — whether it's a unit's
+    // practice quiz or the chapter's own end-of-lesson quiz — is a path step.
+    // Check whether it was the last thing needed to auto-complete the chapter.
+    // (No-op for a chapter with no authored units.)
+    let chapterCompleted = false;
+    if (passed && quiz.lesson_id) {
+      chapterCompleted = await checkChapterAutoComplete({ lessonId: quiz.lesson_id, studentId: req.user.userId });
+    }
+
     res.json({
       success: true,
       message: passed ? 'Quiz passed!' : 'Quiz failed. Try again.',
@@ -1210,7 +1326,8 @@ router.post('/:id/submit', authenticateToken, async (req, res) => {
           answers: typeof submission.answers === 'string' ? JSON.parse(submission.answers) : submission.answers
         },
         review,
-        xp_awarded: xpAwarded
+        xp_awarded: xpAwarded,
+        chapter_completed: chapterCompleted
       }
     });
   } catch (error) {
@@ -1250,11 +1367,18 @@ router.get('/:id/results', authenticateToken, async (req, res) => {
       ? JSON.parse(submission.answers)
       : (submission.answers || {});
 
-    const { data: questions } = await supabase
-      .from('quiz_questions')
-      .select('id, question, correct_answer, explanation, order_number, question_type')
-      .eq('quiz_id', id)
-      .order('order_number', { ascending: true });
+    // Only the questions this particular attempt actually served (its
+    // random QUIZ_TAKE_SIZE draw) — the bank may hold more, or have changed
+    // since this submission.
+    const answeredIds = Object.keys(submittedAnswers);
+    const { data: questions } = answeredIds.length > 0
+      ? await supabase
+          .from('quiz_questions')
+          .select('id, question, correct_answer, explanation, order_number, question_type')
+          .eq('quiz_id', id)
+          .in('id', answeredIds)
+          .order('order_number', { ascending: true })
+      : { data: [] };
 
     const review = (questions || []).map(question => {
       const studentAnswer = submittedAnswers[question.id];

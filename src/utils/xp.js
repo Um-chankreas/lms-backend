@@ -3,8 +3,10 @@ const supabase = require('../config/supabase');
 
 const XP_VALUES = {
   LESSON_COMPLETE: 10,
+  UNIT_COMPLETE: 5,
   QUIZ_PASS: 20,
-  DAILY_QUIZ_PER_CORRECT: 5
+  DAILY_QUIZ_PER_CORRECT: 5,
+  PATH_CHEST: 30
 };
 
 const XP_PER_LEVEL = 100;

@@ -8,6 +8,7 @@ const { PDFDocument } = require('pdf-lib');
 const { awardXp, XP_VALUES } = require('../utils/xp');
 const { evaluateAchievements } = require('../utils/achievements');
 const { hasCourseAccess, ensureEnrolled } = require('../utils/access');
+const { starsForScore } = require('../utils/progress');
 
 // Safe resolver for pdf-parse module interop issues
 const rawPdfParse = require('pdf-parse');
@@ -267,6 +268,196 @@ router.get('/:id', authenticateToken, async (req, res) => {
       success: false,
       error: 'Failed to fetch lesson: ' + error.message
     });
+  }
+});
+
+/**
+ * GET /api/lessons/:id/path
+ * The step-by-step Duolingo path for ONE lesson only: its units, each unit's
+ * own practice quiz (if it has one), then the chapter's end-of-lesson quiz
+ * (if it has one), then a "surprise box" chest. This is what opens when a
+ * student taps a lesson from the outer, course-level list — GET
+ * /api/courses/:id/path — not the whole course flattened together.
+ */
+router.get('/:id/path', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const studentId = req.user.userId;
+
+    const { data: lesson, error: lessonErr } = await supabase
+      .from('lessons')
+      .select('id, title, is_free, order_number, course_id, courses(*)')
+      .eq('id', id)
+      .single();
+    if (lessonErr || !lesson) {
+      return res.status(404).json({ success: false, error: 'Lesson not found' });
+    }
+
+    const course = lesson.courses;
+    await ensureEnrolled({ supabase, course, user: req.user });
+    const courseAccess = await hasCourseAccess({ supabase, course, user: req.user });
+    const lessonAccess = courseAccess || lesson.is_free;
+
+    // This lesson's position among its course siblings — must match the
+    // numbering GET /api/courses/:id/path uses for chest_index — plus
+    // whether the previous lesson is done (is THIS lesson reachable at all).
+    const { data: siblings } = await supabase
+      .from('lessons')
+      .select('id')
+      .eq('course_id', lesson.course_id)
+      .order('order_number', { ascending: true })
+      .order('created_at', { ascending: true });
+    const lessonIdx = (siblings || []).findIndex(s => s.id === id);
+    const chestIndex = lessonIdx >= 0 ? lessonIdx : 0;
+    const previousLessonId = lessonIdx > 0 ? siblings[lessonIdx - 1].id : null;
+
+    let previousLessonDone = true;
+    if (previousLessonId) {
+      const { data: prevCompletion } = await supabase
+        .from('lesson_completions').select('id')
+        .eq('student_id', studentId).eq('lesson_id', previousLessonId).maybeSingle();
+      previousLessonDone = !!prevCompletion;
+    }
+    const lessonReachable = lessonAccess && previousLessonDone;
+
+    const { data: units } = await supabase
+      .from('lesson_units')
+      .select('id, title, order_number')
+      .eq('lesson_id', id)
+      .order('order_number', { ascending: true });
+    const unitIds = (units || []).map(u => u.id);
+
+    const [{ data: unitCompletions }, { data: unitQuizzes }, { data: lessonQuizzes }, { data: chestClaim }] = await Promise.all([
+      unitIds.length
+        ? supabase.from('unit_completions').select('unit_id').eq('student_id', studentId).in('unit_id', unitIds)
+        : Promise.resolve({ data: [] }),
+      unitIds.length
+        ? supabase.from('quizzes').select('id, unit_id').in('unit_id', unitIds).eq('status', 'published').order('created_at', { ascending: true })
+        : Promise.resolve({ data: [] }),
+      // The chapter's own end-of-lesson quiz (lesson_id set, no unit_id) —
+      // always a step now: its own node before the chest when the lesson has
+      // units, or the single fallback step's quiz when it has none.
+      supabase.from('quizzes').select('id, title').eq('lesson_id', id).is('unit_id', null).eq('status', 'published').order('created_at', { ascending: true }).limit(1),
+      supabase.from('path_chest_claims').select('chest_index').eq('student_id', studentId).eq('course_id', lesson.course_id).eq('chest_index', chestIndex).maybeSingle()
+    ]);
+
+    const canonicalQuizByUnit = new Map();
+    (unitQuizzes || []).forEach(q => { if (!canonicalQuizByUnit.has(q.unit_id)) canonicalQuizByUnit.set(q.unit_id, q.id); });
+    const lessonQuiz = (lessonQuizzes && lessonQuizzes[0]) ? lessonQuizzes[0] : null;
+    const lessonQuizId = lessonQuiz ? lessonQuiz.id : null;
+
+    const allQuizIds = [...canonicalQuizByUnit.values(), ...(lessonQuizId ? [lessonQuizId] : [])];
+    const bestScoreByQuiz = new Map();
+    const passedQuizSet = new Set();
+    if (allQuizIds.length > 0) {
+      const { data: submissions } = await supabase
+        .from('quiz_submissions').select('quiz_id, score, passed')
+        .eq('student_id', studentId).in('quiz_id', allQuizIds);
+      (submissions || []).forEach(s => {
+        const prev = bestScoreByQuiz.get(s.quiz_id);
+        if (prev == null || s.score > prev) bestScoreByQuiz.set(s.quiz_id, s.score);
+        if (s.passed) passedQuizSet.add(s.quiz_id);
+      });
+    }
+
+    const completedUnitSet = new Set((unitCompletions || []).map(c => c.unit_id));
+    const { data: lessonCompletion } = await supabase
+      .from('lesson_completions').select('id')
+      .eq('student_id', studentId).eq('lesson_id', id).maybeSingle();
+    const lessonDone = !!lessonCompletion;
+
+    const nodes = [];
+    let previousStepDone = true; // this lesson's own first step, gated separately by lessonReachable
+    let currentAssigned = false;
+    let totalSteps = 0, completedSteps = 0, starsEarned = 0, starsPossible = 0;
+
+    const placeStep = ({ done, scorable, score, node }) => {
+      totalSteps++;
+      const locked = !lessonReachable || !previousStepDone;
+      let status = 'locked';
+      if (!locked) {
+        if (done) status = 'completed';
+        else if (!currentAssigned) { status = 'current'; currentAssigned = true; }
+        else status = 'available';
+      }
+      if (done) completedSteps++;
+      if (scorable) {
+        starsPossible += 3;
+        if (done) starsEarned += starsForScore(score) ?? 1;
+      }
+      previousStepDone = done;
+      nodes.push({ ...node, status, stars: scorable ? (done ? starsForScore(score) ?? 1 : 0) : null });
+    };
+
+    if (!units || units.length === 0) {
+      // No authored units yet — one single legacy step for the whole lesson.
+      const score = lessonQuizId ? bestScoreByQuiz.get(lessonQuizId) ?? null : null;
+      placeStep({
+        done: lessonDone,
+        scorable: !!lessonQuizId,
+        score,
+        node: { type: 'lesson', id: lesson.id, lesson_id: lesson.id, title: lesson.title, has_quiz: !!lessonQuizId, quiz_best_score: score }
+      });
+    } else {
+      units.forEach(unit => {
+        placeStep({
+          done: completedUnitSet.has(unit.id),
+          scorable: false,
+          score: null,
+          node: { type: 'unit', id: unit.id, lesson_id: id, unit_id: unit.id, order_number: unit.order_number, title: unit.title }
+        });
+
+        const quizId = canonicalQuizByUnit.get(unit.id);
+        if (quizId) {
+          const score = bestScoreByQuiz.get(quizId) ?? null;
+          placeStep({
+            done: passedQuizSet.has(quizId),
+            scorable: true,
+            score,
+            node: { type: 'unit_quiz', id: quizId, lesson_id: id, unit_id: unit.id, quiz_id: quizId, title: `${unit.title} — Practice`, quiz_best_score: score }
+          });
+        }
+      });
+
+      // The chapter's end-of-lesson quiz: the last step before the chest.
+      // Required — the chapter won't auto-complete (and the chest stays
+      // locked) until it's passed. See utils/progress.js.
+      if (lessonQuizId) {
+        const score = bestScoreByQuiz.get(lessonQuizId) ?? null;
+        placeStep({
+          done: passedQuizSet.has(lessonQuizId),
+          scorable: true,
+          score,
+          node: { type: 'lesson_quiz', id: lessonQuizId, lesson_id: id, quiz_id: lessonQuizId, title: lessonQuiz.title || 'Lesson Quiz', quiz_best_score: score }
+        });
+      }
+    }
+
+    nodes.push({
+      type: 'chest',
+      chest_index: chestIndex,
+      lesson_id: id,
+      status: chestClaim ? 'claimed' : lessonDone ? 'unlocked' : 'locked',
+      xp_reward: XP_VALUES.PATH_CHEST
+    });
+
+    res.json({
+      success: true,
+      data: {
+        lesson: { id: lesson.id, title: lesson.title, course_id: lesson.course_id, locked: !lessonReachable },
+        progress: {
+          completed_steps: completedSteps,
+          total_steps: totalSteps,
+          percentage: totalSteps > 0 ? Math.round((completedSteps / totalSteps) * 100) : 0,
+          stars_earned: starsEarned,
+          stars_possible: starsPossible
+        },
+        nodes
+      }
+    });
+  } catch (error) {
+    console.error('Lesson path error:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch lesson path: ' + error.message });
   }
 });
 

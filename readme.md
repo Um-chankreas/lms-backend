@@ -282,7 +282,54 @@ GET    /api/courses/:id              - Get course details (Protected)
 PUT    /api/courses/:id              - Update course (Teacher)
 DELETE /api/courses/:id              - Delete course (Teacher)
 POST   /api/courses/:id/enroll       - Enroll in course (Student)
+
+GET    /api/courses/:id/path                       - OUTER: lesson list for the drawer (Protected)
+GET    /api/lessons/:id/path                       - INNER: one lesson's own step-by-step path (Protected)
+POST   /api/courses/:id/path/chest/:chestIndex/claim - Claim a chest's XP reward (Student)
 ```
+
+**Learning path** (mobile CLASS tab, Duolingo-style) is two nested views —
+the step-by-step path shows **only one lesson at a time**, never the whole
+course flattened together:
+
+1. **`GET /api/courses/:id/path`** — the drawer/"pick a lesson" list. One
+   node per lesson + a chest right after each (claiming it unlocks the next
+   lesson):
+   ```json
+   {
+     "course": { "id": "...", "title": "...", "has_access": true },
+     "progress": { "completed_lessons": 1, "total_lessons": 2, "percentage": 50, "stars_earned": 3, "stars_possible": 6 },
+     "nodes": [
+       { "type": "lesson", "id": "...", "order_number": 1, "title": "Lesson 01", "status": "completed", "stars": 3, "has_quiz": true, "quiz_best_avg": 100 },
+       { "type": "chest", "chest_index": 0, "lesson_id": "...", "status": "unlocked", "xp_reward": 30 },
+       { "type": "lesson", "order_number": 2, "title": "Lesson 02", "status": "current", "stars": 0 },
+       { "type": "chest", "chest_index": 1, "status": "locked", "xp_reward": 30 }
+     ]
+   }
+   ```
+   Lesson *N* unlocks once lesson *N-1* is `lesson_completions`-complete. Stars (0-3) = the lesson's best average quiz score (its own quiz + all its units' quizzes — any `quizzes.lesson_id` match); no quiz on it → full 3 stars for completing it. `status`: `locked` | `current` | `available` (edge case) | `completed`.
+
+2. **Tap a lesson → `GET /api/lessons/:id/path`** — that ONE lesson's own steps, nothing from any other lesson: each unit is a step, that unit's own **practice** quiz (if it has one) is the next step, then — after every unit — the chapter's **end-of-lesson quiz** (if it has one), then the same chest again:
+   ```json
+   {
+     "lesson": { "id": "...", "title": "Lesson 01", "course_id": "...", "locked": false },
+     "progress": { "completed_steps": 7, "total_steps": 7, "percentage": 100, "stars_earned": 12, "stars_possible": 12 },
+     "nodes": [
+       { "type": "unit", "id": "...", "unit_id": "...", "title": "Unit 1", "status": "completed" },
+       { "type": "unit_quiz", "quiz_id": "...", "unit_id": "...", "title": "Unit 1 — Practice", "status": "completed", "stars": 3, "quiz_best_score": 100 },
+       ...
+       { "type": "lesson_quiz", "quiz_id": "...", "lesson_id": "...", "title": "Lesson 01 Quiz", "status": "completed", "stars": 3, "quiz_best_score": 100 },
+       { "type": "chest", "chest_index": 0, "lesson_id": "...", "status": "unlocked", "xp_reward": 30 }
+     ]
+   }
+   ```
+   `unit_quiz` is a unit's own practice quiz (`quizzes.unit_id` set); `lesson_quiz` is the single end-of-lesson quiz (`quizzes.lesson_id` set, `unit_id` null) and is always the last step before the chest. e.g. 3 units each with a practice + one end-of-lesson quiz = 7 steps, then the chest. A lesson with no authored units yet is a single `lesson`-type step (pre-units content) whose own quiz, if any, is folded into that step. `lesson.locked: true` (previous lesson not finished, and no free-preview access) means every step comes back `locked` — the client should already have prevented navigating here from a locked node in the outer list, this is just a server-side backstop.
+
+Shared rules for both:
+- A `unit` step is done once the student calls `POST /api/units/:id/complete`; a `unit_quiz` / `lesson_quiz` step is done once they pass that quiz.
+- **Lesson auto-complete**: the moment every unit in a lesson is read AND every unit's practice quiz is passed AND the end-of-lesson quiz (if the lesson has one) is passed, the backend inserts `lesson_completions` automatically (awards `LESSON_COMPLETE` XP) — see `checkChapterAutoComplete` in `src/utils/progress.js`, called from both `POST /api/units/:id/complete` and `POST /api/quizzes/:id/submit` (for any passed quiz carrying a `lesson_id`). The client never has to call lesson mark-complete itself for units-based content.
+- **Chest**: `locked` → `unlocked` (once its lesson is done) → `claimed`. `chest_index` == that lesson's position (0-based) — the same number in both the outer list and the inner view's trailing chest. `POST .../chest/:chestIndex/claim` re-verifies via `lesson_completions` and awards `XP_VALUES.PATH_CHEST` once (`path_chest_claims`, migration `sql/020_path_chest_claims.sql`).
+- Per-unit completion tracked in `unit_completions` (migration `sql/021_unit_completions.sql`), awarding `XP_VALUES.UNIT_COMPLETE` once per unit.
 
 ### Lessons (chapters) & Units
 
@@ -293,6 +340,7 @@ Content model: **course** (a class) → **lesson** = *chapter* (`ជំពូក
 ```
 POST   /api/lessons                  - Create chapter (Teacher)
 GET    /api/lessons/:id              - Get chapter details (Protected)
+GET    /api/lessons/:id/path         - This lesson's own step-by-step path (Protected) — see "Learning path" above
 GET    /api/lessons/course/:courseId - Get all course chapters (Protected)
 PUT    /api/lessons/:id              - Update chapter (Teacher)
 DELETE /api/lessons/:id              - Delete chapter (Teacher)
@@ -301,6 +349,7 @@ POST   /api/lessons/:id/mark-complete - Mark chapter complete (Student)
 GET    /api/units?lesson_id=         - List a chapter's units (title + preview; content if unlocked)
 GET    /api/units/search?q=&course_id= - Browse/search units the caller can see
 GET    /api/units/:id               - One unit, full Markdown content (Protected)
+POST   /api/units/:id/complete      - Mark a unit read/done — one path step (Student)
 POST   /api/units                   - Add a unit { lesson_id, title, content, is_free? } (Teacher)
 POST   /api/units/bulk              - Import { lesson_id, markdown, replace? } — splits on each `## ` (Teacher)
 POST   /api/units/reorder           - { lesson_id, order: [unitId, ...] } (Teacher)
@@ -336,12 +385,46 @@ GET    /api/quizzes/:id              - Get quiz with questions (Protected)
 GET    /api/quizzes/lesson/:lessonId - Get a chapter's quizzes (Protected)
 GET    /api/quizzes/unit/:unitId     - Get a unit's quizzes (Protected)
 GET    /api/quizzes/course/:courseId - Get course quizzes (Protected)
+POST   /api/quizzes/:id/check        - Grade ONE question mid-quiz, reveal its answer (Student)
 POST   /api/quizzes/:id/submit       - Submit quiz (Student)
 GET    /api/quizzes/:id/results      - Get quiz results (Protected)
+GET    /api/quizzes/daily            - Today's 5-question daily quiz (Student)
+POST   /api/quizzes/daily/submit     - Submit the daily quiz (Student)
 
 GET    /api/quizzes/import/units/template - Download the chapter-wide CSV template (Teacher)
 POST   /api/quizzes/import/units     - Import a chapter's whole practice bank, split per unit (Teacher)
 ```
+
+**Random draw per attempt** — a student never gets the whole question bank.
+`GET /api/quizzes/:id` gives a student a random draw of `QUIZ_TAKE_SIZE` (5)
+questions when the bank has more than that (varies every time they open it),
+with `correct_answer`/`explanation` stripped out; a teacher still gets the
+full bank with answers, for building/editing. The response also carries
+`bank_size` (total in the bank) alongside `total_questions` (how many were
+actually sent this time).
+
+`POST /api/quizzes/:id/submit` and `GET /api/quizzes/:id/results` grade/review
+only the questions in the submitted `answers` map — i.e. whatever this
+attempt actually served — not the full bank. **Client contract:** include a
+key for every question you showed, even if left blank (`""`/`null`) — a
+missing key drops that question from the score entirely instead of counting
+it wrong.
+
+**Per-question feedback** (Duolingo-style) — `POST /api/quizzes/:id/check`
+with `{ question_id, answer }` returns `{ is_correct, correct_answer,
+explanation }` for that one question so the client can highlight the right
+answer + show the explanation before moving on. It **persists nothing**; the
+mobile client still calls `POST /:id/submit` with the full `answers` map at
+the end, which re-grades authoritatively and is what records the attempt,
+score and XP. `answer` is the exact text of the chosen option, same as the
+`answers` map values.
+
+**Daily quiz** (`GET /api/quizzes/daily`) — 5 random questions per calendar
+day, drawn from every course the student can reach: the ones they're
+enrolled in **plus every `is_free` course** (open to everyone). One
+`daily_quiz_attempts` row per (student, day); if that row was somehow
+created empty and not started, the next `GET` regenerates it rather than
+leaving the student stuck with "no questions" for the day.
 
 **CSV format** — one clean layout, used by both importers:
 

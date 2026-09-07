@@ -1,9 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
-const { authenticateToken, isTeacher } = require('../middleware/auth');
+const { authenticateToken, isTeacher, isStudent } = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
 const { hasCourseAccess, ensureEnrolled } = require('../utils/access');
+const { awardXp, XP_VALUES } = require('../utils/xp');
+const { checkChapterAutoComplete } = require('../utils/progress');
 
 /**
  * Units (sections) live inside a chapter (a `lessons` row). See
@@ -414,6 +416,60 @@ router.get('/:id', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Unit fetch error:', error);
     res.status(500).json({ success: false, error: 'Failed to fetch unit: ' + error.message });
+  }
+});
+
+/**
+ * POST /api/units/:id/complete   (Student)
+ * Mark a unit as read/done — one path step. Idempotent: awards
+ * UNIT_COMPLETE XP only the first time. If this was the last thing needed
+ * (every unit in the chapter read + every one of their quizzes passed), the
+ * chapter itself auto-completes (see utils/progress.js).
+ */
+router.post('/:id/complete', authenticateToken, isStudent, async (req, res) => {
+  try {
+    const { data: unit } = await supabase
+      .from('lesson_units')
+      .select('id, lesson_id, is_free, lessons(is_free, courses(*))')
+      .eq('id', req.params.id)
+      .single();
+    if (!unit) return res.status(404).json({ success: false, error: 'Unit not found' });
+
+    const chapter = unit.lessons;
+    const course = chapter?.courses;
+    await ensureEnrolled({ supabase, course, user: req.user });
+    const courseAccess = await hasCourseAccess({ supabase, course, user: req.user });
+    if (!courseAccess && !chapter?.is_free && !unit.is_free) {
+      return res.status(403).json({ success: false, error: 'Enroll in this course to complete this unit' });
+    }
+
+    const { data: existing } = await supabase
+      .from('unit_completions')
+      .select('id')
+      .eq('unit_id', unit.id)
+      .eq('student_id', req.user.userId)
+      .maybeSingle();
+
+    let xpAwarded = 0;
+    if (!existing) {
+      const { error } = await supabase
+        .from('unit_completions')
+        .insert({ id: uuidv4(), unit_id: unit.id, student_id: req.user.userId, completed_at: new Date() });
+      if (error) throw error;
+      xpAwarded = XP_VALUES.UNIT_COMPLETE;
+      await awardXp(req.user.userId, xpAwarded, 'unit_complete');
+    }
+
+    const chapterCompleted = await checkChapterAutoComplete({ lessonId: unit.lesson_id, studentId: req.user.userId });
+
+    res.json({
+      success: true,
+      message: existing ? 'Unit already completed' : 'Unit marked as complete',
+      data: { xp_awarded: xpAwarded, chapter_completed: chapterCompleted }
+    });
+  } catch (error) {
+    console.error('Unit complete error:', error);
+    res.status(500).json({ success: false, error: 'Failed to complete unit: ' + error.message });
   }
 });
 

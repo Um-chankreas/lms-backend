@@ -2,8 +2,10 @@
 const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
-const { authenticateToken, optionalAuth, isTeacher } = require('../middleware/auth');
+const { authenticateToken, optionalAuth, isTeacher, isStudent } = require('../middleware/auth');
 const { hasCourseAccess, ensureEnrolled } = require('../utils/access');
+const { awardXp, XP_VALUES } = require('../utils/xp');
+const { starsForScore } = require('../utils/progress');
 const { v4: uuidv4 } = require('uuid');
 
 /**
@@ -514,6 +516,217 @@ router.post('/:id/enroll', authenticateToken, async (req, res) => {
       success: false,
       error: 'Failed to enroll: ' + error.message
     });
+  }
+});
+
+// ── Learning path — OUTER, course-level (drawer body: "pick a lesson") ───
+// One node per LESSON, in order, with its own "surprise box" chest right
+// after it — claiming a chest is what unlocks the next lesson. This is the
+// list a student picks a lesson from; tapping one opens its own granular
+// step-by-step path: GET /api/lessons/:id/path (units, their quizzes, then
+// the same chest again for confirmation).
+
+/**
+ * GET /api/courses/:id/path
+ */
+router.get('/:id/path', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const studentId = req.user.userId;
+
+    const { data: course, error: courseError } = await supabase
+      .from('courses')
+      .select('*')
+      .eq('id', id)
+      .single();
+    if (courseError || !course) {
+      return res.status(404).json({ success: false, error: 'Course not found' });
+    }
+
+    await ensureEnrolled({ supabase, course, user: req.user });
+    const courseAccess = await hasCourseAccess({ supabase, course, user: req.user });
+
+    const { data: lessons, error: lErr } = await supabase
+      .from('lessons')
+      .select('id, title, is_free, order_number, thumbnail_url')
+      .eq('course_id', id)
+      .order('order_number', { ascending: true })
+      .order('created_at', { ascending: true });
+    if (lErr) throw lErr;
+
+    if (!lessons || lessons.length === 0) {
+      return res.json({ success: true, data: { course: { id: course.id, title: course.title }, progress: null, nodes: [] } });
+    }
+
+    const lessonIds = lessons.map(l => l.id);
+
+    const [{ data: completions }, { data: quizzes }, { data: claims }] = await Promise.all([
+      supabase.from('lesson_completions').select('lesson_id').eq('student_id', studentId).in('lesson_id', lessonIds),
+      // Published quizzes tied to any of these lessons — a unit quiz still
+      // carries its parent lesson_id, so this naturally includes both.
+      supabase.from('quizzes').select('id, lesson_id').eq('course_id', id).eq('status', 'published').in('lesson_id', lessonIds),
+      supabase.from('path_chest_claims').select('chest_index').eq('student_id', studentId).eq('course_id', id)
+    ]);
+
+    const completedSet = new Set((completions || []).map(c => c.lesson_id));
+    const claimedSet = new Set((claims || []).map(c => c.chest_index));
+
+    const quizIds = (quizzes || []).map(q => q.id);
+    const quizIdsByLesson = new Map();
+    (quizzes || []).forEach(q => {
+      if (!quizIdsByLesson.has(q.lesson_id)) quizIdsByLesson.set(q.lesson_id, []);
+      quizIdsByLesson.get(q.lesson_id).push(q.id);
+    });
+
+    const bestScoreByQuiz = new Map();
+    if (quizIds.length > 0) {
+      const { data: submissions } = await supabase
+        .from('quiz_submissions').select('quiz_id, score')
+        .eq('student_id', studentId).in('quiz_id', quizIds);
+      (submissions || []).forEach(s => {
+        const prev = bestScoreByQuiz.get(s.quiz_id);
+        if (prev == null || s.score > prev) bestScoreByQuiz.set(s.quiz_id, s.score);
+      });
+    }
+
+    let previousDone = true; // lesson 1 is always reachable (subject to access)
+    let currentAssigned = false;
+    let starsEarned = 0, starsPossible = 0;
+
+    const nodes = [];
+    lessons.forEach((lesson, idx) => {
+      const lessonAccess = courseAccess || lesson.is_free;
+      const positioned = idx === 0 || previousDone;
+      const locked = !lessonAccess || !positioned;
+
+      const completed = completedSet.has(lesson.id);
+      const quizIdsHere = quizIdsByLesson.get(lesson.id) || [];
+      const scores = quizIdsHere.map(qid => bestScoreByQuiz.get(qid)).filter(s => s != null);
+      const quizAvg = scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null;
+
+      let status = 'locked';
+      let stars = 0;
+      if (!locked) {
+        if (completed) status = 'completed';
+        else if (!currentAssigned) { status = 'current'; currentAssigned = true; }
+        else status = 'available';
+        if (completed) stars = quizAvg == null ? 3 : (starsForScore(quizAvg) ?? 1);
+      }
+      starsPossible += 3;
+      starsEarned += stars;
+
+      nodes.push({
+        type: 'lesson',
+        id: lesson.id,
+        order_number: lesson.order_number ?? idx + 1,
+        title: lesson.title,
+        thumbnail_url: lesson.thumbnail_url || null,
+        status,       // 'locked' | 'current' | 'available' | 'completed'
+        stars,        // 0-3
+        has_quiz: quizIdsHere.length > 0,
+        quiz_best_avg: quizAvg
+      });
+
+      nodes.push({
+        type: 'chest',
+        chest_index: idx,
+        lesson_id: lesson.id,
+        status: claimedSet.has(idx) ? 'claimed' : completed ? 'unlocked' : 'locked',
+        xp_reward: XP_VALUES.PATH_CHEST
+      });
+
+      previousDone = completed;
+    });
+
+    const completedLessons = lessons.filter(l => completedSet.has(l.id)).length;
+
+    res.json({
+      success: true,
+      data: {
+        course: { id: course.id, title: course.title, is_free: course.is_free, has_access: courseAccess },
+        progress: {
+          completed_lessons: completedLessons,
+          total_lessons: lessons.length,
+          percentage: Math.round((completedLessons / lessons.length) * 100),
+          stars_earned: starsEarned,
+          stars_possible: starsPossible
+        },
+        nodes
+      }
+    });
+  } catch (error) {
+    console.error('Course path error:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch course path: ' + error.message });
+  }
+});
+
+/**
+ * POST /api/courses/:id/path/chest/:chestIndex/claim
+ * Claim a chest's XP reward. chest_index === that chapter's position in the
+ * course. A chapter is "done" iff it has a lesson_completions row — which is
+ * either the manual chapter mark-complete (legacy, no units) or the
+ * auto-complete in utils/progress.js (every unit + unit quiz done) — so this
+ * check is a single source of truth either way.
+ */
+router.post('/:id/path/chest/:chestIndex/claim', authenticateToken, isStudent, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const chestIndex = parseInt(req.params.chestIndex, 10);
+    if (!Number.isFinite(chestIndex) || chestIndex < 0) {
+      return res.status(400).json({ success: false, error: 'Invalid chest index' });
+    }
+    const studentId = req.user.userId;
+
+    const { data: existingClaim } = await supabase
+      .from('path_chest_claims')
+      .select('chest_index')
+      .eq('student_id', studentId)
+      .eq('course_id', id)
+      .eq('chest_index', chestIndex)
+      .maybeSingle();
+    if (existingClaim) {
+      return res.status(409).json({ success: false, error: 'This chest has already been claimed' });
+    }
+
+    const { data: chapters } = await supabase
+      .from('lessons')
+      .select('id')
+      .eq('course_id', id)
+      .order('order_number', { ascending: true })
+      .order('created_at', { ascending: true })
+      .limit(chestIndex + 1);
+
+    if (!chapters || chapters.length <= chestIndex) {
+      return res.status(400).json({ success: false, error: 'This chest is not reachable yet' });
+    }
+
+    const chapter = chapters[chestIndex];
+    const { data: completion } = await supabase
+      .from('lesson_completions')
+      .select('id')
+      .eq('student_id', studentId)
+      .eq('lesson_id', chapter.id)
+      .maybeSingle();
+
+    if (!completion) {
+      return res.status(403).json({ success: false, error: 'Finish this chapter first' });
+    }
+
+    const { error: claimError } = await supabase
+      .from('path_chest_claims')
+      .insert({ student_id: studentId, course_id: id, chest_index: chestIndex });
+    if (claimError) throw claimError;
+
+    await awardXp(studentId, XP_VALUES.PATH_CHEST, 'path_chest');
+
+    res.status(201).json({
+      success: true,
+      message: `Chest opened! +${XP_VALUES.PATH_CHEST} XP`,
+      data: { xp_awarded: XP_VALUES.PATH_CHEST }
+    });
+  } catch (error) {
+    console.error('Chest claim error:', error);
+    res.status(500).json({ success: false, error: 'Failed to claim chest: ' + error.message });
   }
 });
 
