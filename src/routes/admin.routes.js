@@ -31,6 +31,19 @@ const publicUser = u => ({
   created_at: u.created_at
 });
 
+// Teachers have no subscription / XP — a leaner shape than publicUser.
+const publicTeacher = (u, courseCount) => ({
+  id: u.id,
+  name: u.name,
+  email: u.email || null,
+  phone: u.phone || null,
+  role: u.role,
+  avatar_url: u.avatar_url || null,
+  is_active: u.is_active !== false,
+  course_count: courseCount ?? undefined,
+  created_at: u.created_at
+});
+
 // Every route here is admin-only.
 router.use(authenticateToken, isAdmin);
 
@@ -368,6 +381,254 @@ router.post('/students/:id/subscription', async (req, res) => {
   } catch (error) {
     console.error('Admin set subscription error:', error);
     res.status(500).json({ success: false, error: 'Failed to update subscription: ' + error.message });
+  }
+});
+
+// ─────────────────────────── TEACHERS ───────────────────────────
+// Same account model as students (users row, bcrypt password, JWT login),
+// just role:"teacher". No subscription. Email is required — teachers sign in
+// with it, matching POST /api/auth/register. Removal is a soft deactivate;
+// their courses and content are left untouched.
+
+/**
+ * GET /api/admin/teachers
+ *   ?search=                name / email / phone (partial, case-insensitive)
+ *   ?include_inactive=true  include deactivated accounts
+ *   ?page=1 &limit=20
+ * Each row also carries course_count (courses they own).
+ */
+router.get('/teachers', async (req, res) => {
+  try {
+    const search = (req.query.search || '').trim();
+    const includeInactive = req.query.include_inactive === 'true';
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+    const from = (page - 1) * limit;
+
+    let query = supabase
+      .from('users')
+      .select('id, name, email, phone, avatar_url, is_active, created_at', { count: 'exact' })
+      .eq('role', 'teacher')
+      .order('created_at', { ascending: false });
+
+    if (!includeInactive) query = query.eq('is_active', true);
+
+    if (search) {
+      const esc = search.replace(/[^a-zA-Z0-9 @._+-]/g, '').trim();
+      if (esc) query = query.or(`name.ilike.%${esc}%,email.ilike.%${esc}%,phone.ilike.%${esc}%`);
+    }
+
+    const { data: teachers, count, error } = await query.range(from, from + limit - 1);
+    if (error) throw error;
+
+    // Course counts for the teachers on this page.
+    const ids = (teachers || []).map(t => t.id);
+    const countByTeacher = {};
+    if (ids.length) {
+      const { data: courseRows } = await supabase
+        .from('courses').select('teacher_id').in('teacher_id', ids);
+      (courseRows || []).forEach(c => {
+        countByTeacher[c.teacher_id] = (countByTeacher[c.teacher_id] || 0) + 1;
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        teachers: (teachers || []).map(t => publicTeacher(t, countByTeacher[t.id] || 0)),
+        pagination: { page, limit, total: count || 0, total_pages: Math.ceil((count || 0) / limit) }
+      }
+    });
+  } catch (error) {
+    console.error('Admin list teachers error:', error);
+    res.status(500).json({ success: false, error: 'Failed to list teachers: ' + error.message });
+  }
+});
+
+/**
+ * POST /api/admin/teachers
+ * body: { name, email, password, phone? }  — email + password required.
+ */
+router.post('/teachers', async (req, res) => {
+  try {
+    const { name, email, phone, password } = req.body;
+
+    if (!name || !password) {
+      return res.status(400).json({ success: false, error: 'Name and password are required' });
+    }
+    if (String(password).length < 6) {
+      return res.status(400).json({ success: false, error: 'Password must be at least 6 characters' });
+    }
+    if (!email) {
+      return res.status(400).json({ success: false, error: 'Email is required for a teacher account' });
+    }
+
+    const normalizedEmail = normalizeEmail(email);
+    if (!EMAIL_REGEX.test(normalizedEmail)) {
+      return res.status(400).json({ success: false, error: 'Invalid email address' });
+    }
+
+    let normalizedPhone = null;
+    if (phone) {
+      normalizedPhone = normalizePhone(phone);
+      if (!PHONE_REGEX.test(normalizedPhone)) {
+        return res.status(400).json({ success: false, error: 'Invalid phone number' });
+      }
+    }
+
+    const { data: emailDupe } = await supabase.from('users').select('id').eq('email', normalizedEmail).maybeSingle();
+    if (emailDupe) return res.status(409).json({ success: false, error: 'Email already registered' });
+    if (normalizedPhone) {
+      const { data: phoneDupe } = await supabase.from('users').select('id').eq('phone', normalizedPhone).maybeSingle();
+      if (phoneDupe) return res.status(409).json({ success: false, error: 'Phone number already registered' });
+    }
+
+    const hashed = await bcrypt.hash(password, 10);
+    const { data: newUser, error } = await supabase
+      .from('users')
+      .insert({
+        id: uuidv4(),
+        name,
+        email: normalizedEmail,
+        phone: normalizedPhone,
+        password: hashed,
+        role: 'teacher',
+        created_at: new Date()
+      })
+      .select()
+      .single();
+    if (error) throw error;
+
+    res.status(201).json({ success: true, message: 'Teacher created', data: { teacher: publicTeacher(newUser, 0) } });
+  } catch (error) {
+    console.error('Admin create teacher error:', error);
+    res.status(500).json({ success: false, error: 'Failed to create teacher: ' + error.message });
+  }
+});
+
+/**
+ * GET /api/admin/teachers/:id
+ * Teacher detail + the courses they own.
+ */
+router.get('/teachers/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { data: teacher } = await supabase
+      .from('users')
+      .select('id, name, email, phone, avatar_url, role, is_active, created_at')
+      .eq('id', id)
+      .eq('role', 'teacher')
+      .maybeSingle();
+    if (!teacher) return res.status(404).json({ success: false, error: 'Teacher not found' });
+
+    const { data: courses } = await supabase
+      .from('courses')
+      .select('id, title, is_free, live_enabled, code, created_at')
+      .eq('teacher_id', id)
+      .order('created_at', { ascending: false });
+
+    res.json({
+      success: true,
+      data: {
+        teacher: publicTeacher(teacher, (courses || []).length),
+        courses: courses || []
+      }
+    });
+  } catch (error) {
+    console.error('Admin teacher detail error:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch teacher: ' + error.message });
+  }
+});
+
+/**
+ * PATCH /api/admin/teachers/:id
+ * body: { name?, email?, phone?, password?, is_active? }
+ */
+router.patch('/teachers/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, email, phone, password } = req.body;
+
+    const { data: teacher } = await supabase
+      .from('users').select('id').eq('id', id).eq('role', 'teacher').maybeSingle();
+    if (!teacher) return res.status(404).json({ success: false, error: 'Teacher not found' });
+
+    const updates = {};
+    if (name !== undefined) updates.name = name;
+    if (typeof req.body.is_active === 'boolean') updates.is_active = req.body.is_active;
+
+    if (email !== undefined) {
+      // A teacher must always keep an email — clearing it is rejected.
+      if (email === null || email === '') {
+        return res.status(400).json({ success: false, error: 'A teacher account must have an email' });
+      }
+      const e = normalizeEmail(email);
+      if (!EMAIL_REGEX.test(e)) return res.status(400).json({ success: false, error: 'Invalid email address' });
+      const { data: dupe } = await supabase.from('users').select('id').eq('email', e).neq('id', id).maybeSingle();
+      if (dupe) return res.status(409).json({ success: false, error: 'Email already registered' });
+      updates.email = e;
+    }
+
+    if (phone !== undefined) {
+      if (phone === null || phone === '') {
+        updates.phone = null;
+      } else {
+        const p = normalizePhone(phone);
+        if (!PHONE_REGEX.test(p)) return res.status(400).json({ success: false, error: 'Invalid phone number' });
+        const { data: dupe } = await supabase.from('users').select('id').eq('phone', p).neq('id', id).maybeSingle();
+        if (dupe) return res.status(409).json({ success: false, error: 'Phone number already registered' });
+        updates.phone = p;
+      }
+    }
+
+    if (password !== undefined) {
+      if (String(password).length < 6) {
+        return res.status(400).json({ success: false, error: 'Password must be at least 6 characters' });
+      }
+      updates.password = await bcrypt.hash(password, 10);
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ success: false, error: 'No fields to update' });
+    }
+
+    const { data: updated, error } = await supabase
+      .from('users').update(updates).eq('id', id).select().single();
+    if (error) throw error;
+
+    res.json({ success: true, message: 'Teacher updated', data: { teacher: publicTeacher(updated) } });
+  } catch (error) {
+    console.error('Admin update teacher error:', error);
+    res.status(500).json({ success: false, error: 'Failed to update teacher: ' + error.message });
+  }
+});
+
+/**
+ * DELETE /api/admin/teachers/:id
+ * Soft delete — is_active = false. Courses and content the teacher owns are
+ * left in place; restore with PATCH { is_active: true }.
+ */
+router.delete('/teachers/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { data: teacher } = await supabase
+      .from('users').select('id').eq('id', id).eq('role', 'teacher').maybeSingle();
+    if (!teacher) return res.status(404).json({ success: false, error: 'Teacher not found' });
+
+    const { data: updated, error } = await supabase
+      .from('users')
+      .update({ is_active: false })
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw error;
+
+    res.json({ success: true, message: 'Teacher deactivated', data: { teacher: publicTeacher(updated) } });
+  } catch (error) {
+    console.error('Admin delete teacher error:', error);
+    res.status(500).json({ success: false, error: 'Failed to deactivate teacher: ' + error.message });
   }
 });
 
