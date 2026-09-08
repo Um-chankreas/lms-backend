@@ -72,6 +72,75 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
 });
 
 /**
+ * GET /api/assignments/mine
+ * Every assignment across the courses the current student is enrolled in,
+ * each with its course and the student's own submission (or null). Sorted by
+ * due date (soonest first; undated last), then newest.
+ */
+router.get('/mine', authenticateToken, async (req, res) => {
+  try {
+    const studentId = req.user.userId;
+
+    const { data: enrollments } = await supabase
+      .from('course_enrollments')
+      .select('course_id')
+      .eq('student_id', studentId);
+
+    const courseIds = [...new Set((enrollments || []).map(e => e.course_id))];
+    if (courseIds.length === 0) {
+      return res.json({ success: true, data: { assignments: [] } });
+    }
+
+    const [{ data: assignments, error }, { data: courses }] = await Promise.all([
+      supabase.from('assignments').select('*').in('course_id', courseIds),
+      supabase.from('courses').select('id, title, color, icon').in('id', courseIds),
+    ]);
+    if (error) throw error;
+
+    const courseById = Object.fromEntries((courses || []).map(c => [c.id, c]));
+
+    const assignmentIds = (assignments || []).map(a => a.id);
+    let submissionByAssignment = {};
+    if (assignmentIds.length > 0) {
+      const { data: subs } = await supabase
+        .from('assignment_submissions')
+        .select('id, assignment_id, submission_text, file_url, grade, feedback, submitted_at, graded_at')
+        .eq('student_id', studentId)
+        .in('assignment_id', assignmentIds);
+      submissionByAssignment = Object.fromEntries((subs || []).map(s => [s.assignment_id, s]));
+    }
+
+    const withMeta = (assignments || []).map(a => {
+      const s = submissionByAssignment[a.id] || null;
+      return {
+        ...a,
+        course: courseById[a.course_id] || { id: a.course_id, title: null, color: null, icon: null },
+        submission: s
+          ? {
+              ...s,
+              file_url: s.file_url
+                ? `${process.env.SUPABASE_URL}/storage/v1/object/public/assignments/${s.file_url}`
+                : null
+            }
+          : null
+      };
+    });
+
+    withMeta.sort((x, y) => {
+      const dx = x.due_date ? Date.parse(x.due_date) : Infinity;
+      const dy = y.due_date ? Date.parse(y.due_date) : Infinity;
+      if (dx !== dy) return dx - dy;
+      return Date.parse(y.created_at) - Date.parse(x.created_at);
+    });
+
+    res.json({ success: true, data: { assignments: withMeta } });
+  } catch (error) {
+    console.error('My assignments error:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch assignments: ' + error.message });
+  }
+});
+
+/**
  * GET /api/assignments/course/:courseId
  * Get all assignments for a course
  */
@@ -121,6 +190,9 @@ router.get('/:id', authenticateToken, async (req, res) => {
       });
     }
 
+    const resolveFileUrl = (fileUrl) =>
+      fileUrl ? `${process.env.SUPABASE_URL}/storage/v1/object/public/assignments/${fileUrl}` : null;
+
     // Get submissions if teacher
     let submissions = [];
     if (req.user.role === 'teacher') {
@@ -128,7 +200,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
         .from('assignment_submissions')
         .select('*, users(name, email)')
         .eq('assignment_id', id);
-      submissions = subs || [];
+      submissions = (subs || []).map(s => ({ ...s, file_url: resolveFileUrl(s.file_url) }));
     } else {
       // If student, get only their submission
       const { data: subs } = await supabase
@@ -136,14 +208,22 @@ router.get('/:id', authenticateToken, async (req, res) => {
         .select('*')
         .eq('assignment_id', id)
         .eq('student_id', req.user.userId);
-      submissions = subs || [];
+      submissions = (subs || []).map(s => ({ ...s, file_url: resolveFileUrl(s.file_url) }));
     }
+
+    const { data: course } = await supabase
+      .from('courses')
+      .select('id, title, color, icon')
+      .eq('id', assignment.course_id)
+      .maybeSingle();
 
     res.json({
       success: true,
       data: {
         assignment: {
           ...assignment,
+          course: course || { id: assignment.course_id, title: null, color: null, icon: null },
+          submission: submissions.find(s => s.student_id === req.user.userId) || null,
           submissions
         }
       }
@@ -210,24 +290,56 @@ router.post('/:id/submit', authenticateToken, upload.single('file'), async (req,
       fileUrl = `submissions/${fileName}`;
     }
 
-    // Create submission
-    const submissionId = uuidv4();
-    const { data: submission, error } = await supabase
+    // One submission per student per assignment: update the existing one
+    // (re-submit before the deadline / before it's graded) instead of
+    // inserting a duplicate.
+    const { data: existing } = await supabase
       .from('assignment_submissions')
-      .insert({
-        id: submissionId,
-        assignment_id: id,
-        student_id: req.user.userId,
-        submission_text: submission_text || '',
-        file_url: fileUrl,
-        submitted_at: new Date(),
-        grade: null,
-        feedback: null
-      })
-      .select()
-      .single();
+      .select('id, grade')
+      .eq('assignment_id', id)
+      .eq('student_id', req.user.userId)
+      .maybeSingle();
 
-    if (error) throw error;
+    if (existing && existing.grade !== null && existing.grade !== undefined) {
+      return res.status(409).json({
+        success: false,
+        error: 'This assignment has already been graded and can no longer be changed'
+      });
+    }
+
+    let submission;
+    if (existing) {
+      const patch = {
+        submission_text: submission_text || '',
+        submitted_at: new Date()
+      };
+      if (fileUrl) patch.file_url = fileUrl;
+      const { data, error } = await supabase
+        .from('assignment_submissions')
+        .update(patch)
+        .eq('id', existing.id)
+        .select()
+        .single();
+      if (error) throw error;
+      submission = data;
+    } else {
+      const { data, error } = await supabase
+        .from('assignment_submissions')
+        .insert({
+          id: uuidv4(),
+          assignment_id: id,
+          student_id: req.user.userId,
+          submission_text: submission_text || '',
+          file_url: fileUrl,
+          submitted_at: new Date(),
+          grade: null,
+          feedback: null
+        })
+        .select()
+        .single();
+      if (error) throw error;
+      submission = data;
+    }
 
     res.status(201).json({
       success: true,
@@ -235,7 +347,9 @@ router.post('/:id/submit', authenticateToken, upload.single('file'), async (req,
       data: {
         submission: {
           ...submission,
-          file_url: fileUrl ? `${process.env.SUPABASE_URL}/storage/v1/object/public/assignments/${fileUrl}` : null
+          file_url: submission.file_url
+            ? `${process.env.SUPABASE_URL}/storage/v1/object/public/assignments/${submission.file_url}`
+            : null
         }
       }
     });

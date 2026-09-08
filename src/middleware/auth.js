@@ -22,13 +22,10 @@ const authenticateToken = async (req, res, next) => {
       });
     }
 
-    // A token stays valid for days, so re-check the account still exists and
-    // is active on every request — this is what makes self-service
-    // deactivation / deletion take effect immediately instead of when the
-    // token happens to expire.
+    // A token stays valid for days, so re-check the account on every request.
     const { data: account, error } = await supabase
       .from('users')
-      .select('id, role, is_active')
+      .select('id, role, is_active, deactivated_at, deletion_requested_at, deletion_scheduled_at, deleted_at')
       .eq('id', decoded.userId)
       .maybeSingle();
 
@@ -36,19 +33,51 @@ const authenticateToken = async (req, res, next) => {
     if (!account) {
       return res.status(403).json({
         success: false,
+        code: 'ACCOUNT_NOT_FOUND',
         error: 'This account no longer exists'
       });
     }
-    if (account.is_active === false) {
+
+    // Fully purged — nothing to come back to.
+    if (account.deleted_at) {
       return res.status(403).json({
         success: false,
-        error: 'This account has been deactivated'
+        code: 'ACCOUNT_DELETED',
+        error: 'This account has been permanently deleted'
       });
     }
 
-    // Attach user info to request
+    // Deletion grace window has elapsed (purge job hasn't run yet) — treat as
+    // gone.
+    if (account.deletion_scheduled_at && new Date(account.deletion_scheduled_at) <= new Date()) {
+      return res.status(403).json({
+        success: false,
+        code: 'ACCOUNT_DELETED',
+        error: 'This account has been permanently deleted'
+      });
+    }
+
+    // Disabled by an admin (is_active false, and the user didn't do it to
+    // themselves via deactivate/delete) — a hard block.
+    if (account.is_active === false && !account.deactivated_at && !account.deletion_scheduled_at) {
+      return res.status(403).json({
+        success: false,
+        code: 'ACCOUNT_SUSPENDED',
+        error: 'This account has been deactivated. Contact your administrator.'
+      });
+    }
+
+    // Self-deactivated or pending self-deletion (still inside the grace
+    // window): the session keeps working so the app can show a banner and let
+    // the user undo it. req.account carries the state for anything that wants
+    // to surface it.
     req.user = decoded;
     req.account = account;
+    req.accountState = account.deletion_scheduled_at
+      ? 'pending_deletion'
+      : account.deactivated_at
+        ? 'deactivated'
+        : 'active';
     next();
   } catch (error) {
     res.status(500).json({

@@ -34,7 +34,11 @@ const sanitizeUser = (user) => ({
   role: user.role,
   avatar_url: user.avatar_url || null,
   bio: user.bio || null,
-  created_at: user.created_at
+  created_at: user.created_at,
+  // Self-service account state — lets the client show a "reactivate" /
+  // "cancel deletion" banner instead of forcing a logout.
+  deactivated_at: user.deactivated_at || null,
+  deletion_scheduled_at: user.deletion_scheduled_at || null
 });
 
 /**
@@ -46,19 +50,14 @@ const accountLoginGate = (user) => {
   if (user.deleted_at) {
     return { status: 410, body: { success: false, error: 'This account has been permanently deleted' } };
   }
-  if (user.deletion_scheduled_at) {
-    return {
-      status: 403,
-      body: {
-        success: false,
-        code: 'ACCOUNT_PENDING_DELETION',
-        error: `This account is scheduled for deletion on ${String(user.deletion_scheduled_at).slice(0, 10)}. `
-          + 'Restore it via POST /api/auth/account/restore to cancel.',
-        data: { deletion_scheduled_at: user.deletion_scheduled_at }
-      }
-    };
+  // A pending self-deletion no longer blocks login: the user keeps full access
+  // during the 30-day grace window and the app shows a "cancel deletion"
+  // banner. Only once the grace window has elapsed (purge hasn't run yet) do
+  // we refuse — the account is effectively gone.
+  if (user.deletion_scheduled_at && new Date(user.deletion_scheduled_at) <= new Date()) {
+    return { status: 410, body: { success: false, error: 'This account has been permanently deleted' } };
   }
-  if (user.is_active === false && !user.deactivated_at) {
+  if (user.is_active === false && !user.deactivated_at && !user.deletion_scheduled_at) {
     return { status: 403, body: { success: false, error: 'This account has been deactivated. Contact your administrator.' } };
   }
   return null;
@@ -69,6 +68,9 @@ const accountLoginGate = (user) => {
  * authenticating again (password or OTP). Mutates `user` in place.
  */
 const reactivateIfSelfDeactivated = async (user) => {
+  // Leave a pending-deletion account alone — that's undone explicitly from the
+  // "cancel deletion" banner, not implicitly by logging in.
+  if (user.deletion_scheduled_at) return;
   if (user.is_active === false && user.deactivated_at) {
     await supabase
       .from('users')
@@ -295,7 +297,7 @@ router.get('/profile', authenticateToken, async (req, res) => {
   try {
     const { data: user, error } = await supabase
       .from('users')
-      .select('id, name, email, phone, role, avatar_url, bio, created_at')
+      .select('id, name, email, phone, role, avatar_url, bio, created_at, deactivated_at, deletion_scheduled_at')
       .eq('id', req.user.userId)
       .single();
 
@@ -535,7 +537,9 @@ router.post('/deactivate', authenticateToken, async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Your account has been deactivated. Log in again anytime to reactivate it.'
+      message: 'Your account is now deactivated — you are hidden from other students. '
+        + 'Reactivate it any time from the banner or Settings.',
+      data: { deactivated_at: new Date().toISOString() }
     });
   } catch (error) {
     console.error('Deactivate account error:', error);
@@ -567,11 +571,13 @@ router.delete('/account', authenticateToken, async (req, res) => {
     const now = new Date();
     const scheduledAt = new Date(now.getTime() + DELETION_GRACE_DAYS * 24 * 60 * 60 * 1000);
 
+    // The account keeps working normally during the 30-day grace window — we
+    // only stamp the deletion timestamps. The app shows a "cancel deletion"
+    // banner; purge-deleted-accounts.js anonymizes the row once the window
+    // elapses. (is_active / deactivated_at are left untouched.)
     const { error } = await supabase
       .from('users')
       .update({
-        is_active: false,
-        deactivated_at: user.deactivated_at || now,
         deletion_requested_at: now,
         deletion_scheduled_at: scheduledAt
       })
@@ -580,8 +586,9 @@ router.delete('/account', authenticateToken, async (req, res) => {
 
     res.json({
       success: true,
-      message: `Your account has been scheduled for deletion and will be permanently erased on `
-        + `${scheduledAt.toISOString().slice(0, 10)}. Log in and restore it before then to cancel.`,
+      message: `Your account is scheduled to be permanently deleted on `
+        + `${scheduledAt.toISOString().slice(0, 10)}. You can keep using it until then — `
+        + `cancel the deletion any time before that date to keep your account.`,
       data: { deletion_scheduled_at: scheduledAt.toISOString() }
     });
   } catch (error) {
@@ -668,6 +675,64 @@ router.post('/account/restore', async (req, res) => {
   } catch (error) {
     console.error('Restore account error:', error);
     res.status(500).json({ success: false, error: 'Failed to restore account: ' + error.message });
+  }
+});
+
+/**
+ * POST /api/auth/account/reactivate
+ * Undo a self-deactivation and/or a pending self-deletion for the CURRENT
+ * (still logged-in) user — this is what the in-app "Reactivate" / "Cancel
+ * deletion" banner calls. No password needed: they already hold a valid token.
+ */
+router.post('/account/reactivate', authenticateToken, async (req, res) => {
+  try {
+    const { data: user, error: loadErr } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', req.user.userId)
+      .single();
+    if (loadErr || !user) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    if (user.deleted_at) {
+      return res.status(410).json({ success: false, error: 'This account has already been permanently deleted' });
+    }
+
+    // Admin-disabled (not self): the user can't lift this themselves.
+    if (user.is_active === false && !user.deactivated_at && !user.deletion_scheduled_at) {
+      return res.status(403).json({
+        success: false,
+        code: 'ACCOUNT_SUSPENDED',
+        error: 'This account has been deactivated by an administrator. Please contact support.'
+      });
+    }
+
+    if (user.is_active !== false && !user.deactivated_at && !user.deletion_scheduled_at) {
+      return res.json({ success: true, message: 'Account is already active', data: { user: sanitizeUser(user) } });
+    }
+
+    const { data: restored, error } = await supabase
+      .from('users')
+      .update({
+        is_active: true,
+        deactivated_at: null,
+        deletion_requested_at: null,
+        deletion_scheduled_at: null
+      })
+      .eq('id', user.id)
+      .select()
+      .single();
+    if (error) throw error;
+
+    res.json({
+      success: true,
+      message: 'Your account is active again.',
+      data: { user: sanitizeUser(restored) }
+    });
+  } catch (error) {
+    console.error('Reactivate account error:', error);
+    res.status(500).json({ success: false, error: 'Failed to reactivate account: ' + error.message });
   }
 });
 
