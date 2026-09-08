@@ -14,3 +14,4 @@ create index if not exists push_tokens_user_idx on public.push_tokens (user_id);
 
 grant all on public.push_tokens to service_role;
 grant all on public.push_tokens to anon, authenticated;
+
