@@ -6,6 +6,7 @@ const { authenticateToken, optionalAuth, isTeacher, isStudent } = require('../mi
 const { hasCourseAccess, ensureEnrolled } = require('../utils/access');
 const { awardXp, XP_VALUES } = require('../utils/xp');
 const { starsForScore } = require('../utils/progress');
+const { GUEST_FREE_STEPS } = require('../utils/guest');
 const { v4: uuidv4 } = require('uuid');
 
 /**
@@ -529,10 +530,11 @@ router.post('/:id/enroll', authenticateToken, async (req, res) => {
 /**
  * GET /api/courses/:id/path
  */
-router.get('/:id/path', authenticateToken, async (req, res) => {
+router.get('/:id/path', optionalAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const studentId = req.user.userId;
+    const isGuest = !req.user;
+    const studentId = req.user?.userId || null;
 
     const { data: course, error: courseError } = await supabase
       .from('courses')
@@ -543,8 +545,11 @@ router.get('/:id/path', authenticateToken, async (req, res) => {
       return res.status(404).json({ success: false, error: 'Course not found' });
     }
 
-    await ensureEnrolled({ supabase, course, user: req.user });
-    const courseAccess = await hasCourseAccess({ supabase, course, user: req.user });
+    let courseAccess = false;
+    if (!isGuest) {
+      await ensureEnrolled({ supabase, course, user: req.user });
+      courseAccess = await hasCourseAccess({ supabase, course, user: req.user });
+    }
 
     const { data: lessons, error: lErr } = await supabase
       .from('lessons')
@@ -561,11 +566,15 @@ router.get('/:id/path', authenticateToken, async (req, res) => {
     const lessonIds = lessons.map(l => l.id);
 
     const [{ data: completions }, { data: quizzes }, { data: claims }] = await Promise.all([
-      supabase.from('lesson_completions').select('lesson_id').eq('student_id', studentId).in('lesson_id', lessonIds),
+      studentId
+        ? supabase.from('lesson_completions').select('lesson_id').eq('student_id', studentId).in('lesson_id', lessonIds)
+        : Promise.resolve({ data: [] }),
       // Published quizzes tied to any of these lessons — a unit quiz still
       // carries its parent lesson_id, so this naturally includes both.
       supabase.from('quizzes').select('id, lesson_id').eq('course_id', id).eq('status', 'published').in('lesson_id', lessonIds),
-      supabase.from('path_chest_claims').select('chest_index').eq('student_id', studentId).eq('course_id', id)
+      studentId
+        ? supabase.from('path_chest_claims').select('chest_index').eq('student_id', studentId).eq('course_id', id)
+        : Promise.resolve({ data: [] })
     ]);
 
     const completedSet = new Set((completions || []).map(c => c.lesson_id));
@@ -579,7 +588,7 @@ router.get('/:id/path', authenticateToken, async (req, res) => {
     });
 
     const bestScoreByQuiz = new Map();
-    if (quizIds.length > 0) {
+    if (quizIds.length > 0 && studentId) {
       const { data: submissions } = await supabase
         .from('quiz_submissions').select('quiz_id, score')
         .eq('student_id', studentId).in('quiz_id', quizIds);
@@ -595,7 +604,7 @@ router.get('/:id/path', authenticateToken, async (req, res) => {
 
     const nodes = [];
     lessons.forEach((lesson, idx) => {
-      const lessonAccess = courseAccess || lesson.is_free;
+      const lessonAccess = isGuest || courseAccess || lesson.is_free;
       const positioned = idx === 0 || previousDone;
       const locked = !lessonAccess || !positioned;
 
@@ -615,13 +624,17 @@ router.get('/:id/path', authenticateToken, async (req, res) => {
       starsPossible += 3;
       starsEarned += stars;
 
+      // A guest can only ever open lesson 1 (they can't complete it to unlock
+      // the next); mark everything else, and every chest, guest-walled.
+      const guestWalled = isGuest && (idx > 0);
       nodes.push({
         type: 'lesson',
         id: lesson.id,
         order_number: lesson.order_number ?? idx + 1,
         title: lesson.title,
         thumbnail_url: lesson.thumbnail_url || null,
-        status,       // 'locked' | 'current' | 'available' | 'completed'
+        status: guestWalled ? 'locked' : status,
+        ...(guestWalled ? { lock_reason: 'guest_wall' } : {}),
         stars,        // 0-3
         has_quiz: quizIdsHere.length > 0,
         quiz_best_avg: quizAvg
@@ -631,7 +644,8 @@ router.get('/:id/path', authenticateToken, async (req, res) => {
         type: 'chest',
         chest_index: idx,
         lesson_id: lesson.id,
-        status: claimedSet.has(idx) ? 'claimed' : completed ? 'unlocked' : 'locked',
+        status: claimedSet.has(idx) ? 'claimed' : (!isGuest && completed) ? 'unlocked' : 'locked',
+        ...(isGuest ? { lock_reason: 'guest_wall' } : {}),
         xp_reward: XP_VALUES.PATH_CHEST
       });
 
@@ -644,6 +658,7 @@ router.get('/:id/path', authenticateToken, async (req, res) => {
       success: true,
       data: {
         course: { id: course.id, title: course.title, is_free: course.is_free, has_access: courseAccess },
+        guest: isGuest ? { free_steps: GUEST_FREE_STEPS } : undefined,
         progress: {
           completed_lessons: completedLessons,
           total_lessons: lessons.length,
@@ -717,7 +732,7 @@ router.post('/:id/path/chest/:chestIndex/claim', authenticateToken, isStudent, a
       .insert({ student_id: studentId, course_id: id, chest_index: chestIndex });
     if (claimError) throw claimError;
 
-    await awardXp(studentId, XP_VALUES.PATH_CHEST, 'path_chest');
+    await awardXp(studentId, XP_VALUES.PATH_CHEST, 'path_chest', id);
 
     res.status(201).json({
       success: true,

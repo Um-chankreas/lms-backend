@@ -2,13 +2,15 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const supabase = require('../config/supabase');
-const { authenticateToken, isTeacher } = require('../middleware/auth');
+const { authenticateToken, optionalAuth, isTeacher } = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
 const { PDFDocument } = require('pdf-lib');
 const { awardXp, XP_VALUES } = require('../utils/xp');
 const { evaluateAchievements } = require('../utils/achievements');
 const { hasCourseAccess, ensureEnrolled } = require('../utils/access');
 const { starsForScore } = require('../utils/progress');
+const { guestCanAccessStep, guestFreeStepKeys, sendGuestWall } = require('../utils/guest');
+const { notifyLessonComplete } = require('../utils/notifyEvents');
 
 // Safe resolver for pdf-parse module interop issues
 const rawPdfParse = require('pdf-parse');
@@ -211,7 +213,7 @@ router.post('/', authenticateToken, isTeacher, upload.single('file'), async (req
  * GET /api/lessons/:id
  * Get lesson details
  */
-router.get('/:id', authenticateToken, async (req, res) => {
+router.get('/:id', optionalAuth, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -230,13 +232,21 @@ router.get('/:id', authenticateToken, async (req, res) => {
 
     const { courses: course, ...lessonFields } = lesson;
 
-    await ensureEnrolled({ supabase, course, user: req.user });
-    const courseAccess = await hasCourseAccess({ supabase, course, user: req.user });
-    if (!courseAccess && !lesson.is_free) {
-      return res.status(403).json({
-        success: false,
-        error: 'Enroll in this course to access this lesson'
-      });
+    if (!req.user) {
+      // A guest reaches this endpoint for a unit-less (legacy) chapter — its
+      // single path step is `lesson:<id>`.
+      if (!course || !(await guestCanAccessStep(course.id, `lesson:${id}`))) {
+        return sendGuestWall(res);
+      }
+    } else {
+      await ensureEnrolled({ supabase, course, user: req.user });
+      const courseAccess = await hasCourseAccess({ supabase, course, user: req.user });
+      if (!courseAccess && !lesson.is_free) {
+        return res.status(403).json({
+          success: false,
+          error: 'Enroll in this course to access this lesson'
+        });
+      }
     }
 
     const { data: attachments } = await supabase
@@ -279,10 +289,11 @@ router.get('/:id', authenticateToken, async (req, res) => {
  * student taps a lesson from the outer, course-level list — GET
  * /api/courses/:id/path — not the whole course flattened together.
  */
-router.get('/:id/path', authenticateToken, async (req, res) => {
+router.get('/:id/path', optionalAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const studentId = req.user.userId;
+    const isGuest = !req.user;
+    const studentId = req.user?.userId || null;
 
     const { data: lesson, error: lessonErr } = await supabase
       .from('lessons')
@@ -294,9 +305,27 @@ router.get('/:id/path', authenticateToken, async (req, res) => {
     }
 
     const course = lesson.courses;
-    await ensureEnrolled({ supabase, course, user: req.user });
-    const courseAccess = await hasCourseAccess({ supabase, course, user: req.user });
-    const lessonAccess = courseAccess || lesson.is_free;
+    // A guest can preview the path of any course — the individual nodes past
+    // the free allowance are locked below.
+    const guestFree = isGuest && course
+      ? new Set(await guestFreeStepKeys(course.id))
+      : null;
+    // Guests don't have server-side progress, so the client passes back the
+    // step keys it has already walked (`?guest_done=unit:x,quiz:y`). Only keys
+    // inside the free allowance count.
+    const guestDone = new Set();
+    if (isGuest && guestFree && req.query.guest_done) {
+      String(req.query.guest_done).split(',').forEach(k => {
+        const key = k.trim();
+        if (key && guestFree.has(key)) guestDone.add(key);
+      });
+    }
+    let courseAccess = false;
+    if (!isGuest) {
+      await ensureEnrolled({ supabase, course, user: req.user });
+      courseAccess = await hasCourseAccess({ supabase, course, user: req.user });
+    }
+    const lessonAccess = isGuest || courseAccess || lesson.is_free;
 
     // This lesson's position among its course siblings — must match the
     // numbering GET /api/courses/:id/path uses for chest_index — plus
@@ -312,11 +341,15 @@ router.get('/:id/path', authenticateToken, async (req, res) => {
     const previousLessonId = lessonIdx > 0 ? siblings[lessonIdx - 1].id : null;
 
     let previousLessonDone = true;
-    if (previousLessonId) {
+    if (previousLessonId && studentId) {
       const { data: prevCompletion } = await supabase
         .from('lesson_completions').select('id')
         .eq('student_id', studentId).eq('lesson_id', previousLessonId).maybeSingle();
       previousLessonDone = !!prevCompletion;
+    } else if (previousLessonId && isGuest) {
+      // A guest can't complete a lesson, so only the first lesson's steps are
+      // ever reachable for them.
+      previousLessonDone = false;
     }
     const lessonReachable = lessonAccess && previousLessonDone;
 
@@ -328,7 +361,7 @@ router.get('/:id/path', authenticateToken, async (req, res) => {
     const unitIds = (units || []).map(u => u.id);
 
     const [{ data: unitCompletions }, { data: unitQuizzes }, { data: lessonQuizzes }, { data: chestClaim }] = await Promise.all([
-      unitIds.length
+      unitIds.length && studentId
         ? supabase.from('unit_completions').select('unit_id').eq('student_id', studentId).in('unit_id', unitIds)
         : Promise.resolve({ data: [] }),
       unitIds.length
@@ -338,7 +371,9 @@ router.get('/:id/path', authenticateToken, async (req, res) => {
       // always a step now: its own node before the chest when the lesson has
       // units, or the single fallback step's quiz when it has none.
       supabase.from('quizzes').select('id, title').eq('lesson_id', id).is('unit_id', null).eq('status', 'published').order('created_at', { ascending: true }).limit(1),
-      supabase.from('path_chest_claims').select('chest_index').eq('student_id', studentId).eq('course_id', lesson.course_id).eq('chest_index', chestIndex).maybeSingle()
+      studentId
+        ? supabase.from('path_chest_claims').select('chest_index').eq('student_id', studentId).eq('course_id', lesson.course_id).eq('chest_index', chestIndex).maybeSingle()
+        : Promise.resolve({ data: null })
     ]);
 
     const canonicalQuizByUnit = new Map();
@@ -349,7 +384,7 @@ router.get('/:id/path', authenticateToken, async (req, res) => {
     const allQuizIds = [...canonicalQuizByUnit.values(), ...(lessonQuizId ? [lessonQuizId] : [])];
     const bestScoreByQuiz = new Map();
     const passedQuizSet = new Set();
-    if (allQuizIds.length > 0) {
+    if (allQuizIds.length > 0 && studentId) {
       const { data: submissions } = await supabase
         .from('quiz_submissions').select('quiz_id, score, passed')
         .eq('student_id', studentId).in('quiz_id', allQuizIds);
@@ -361,10 +396,21 @@ router.get('/:id/path', authenticateToken, async (req, res) => {
     }
 
     const completedUnitSet = new Set((unitCompletions || []).map(c => c.unit_id));
-    const { data: lessonCompletion } = await supabase
-      .from('lesson_completions').select('id')
-      .eq('student_id', studentId).eq('lesson_id', id).maybeSingle();
-    const lessonDone = !!lessonCompletion;
+    const { data: lessonCompletion } = studentId
+      ? await supabase.from('lesson_completions').select('id')
+          .eq('student_id', studentId).eq('lesson_id', id).maybeSingle()
+      : { data: null };
+    let lessonDone = !!lessonCompletion;
+
+    // Fold the guest's client-reported progress into the "done" sets so the
+    // path's `current` marker advances through their free steps.
+    if (isGuest && guestDone.size > 0) {
+      guestDone.forEach(k => {
+        if (k.startsWith('unit:')) completedUnitSet.add(k.slice(5));
+        else if (k.startsWith('quiz:')) passedQuizSet.add(k.slice(5));
+        else if (k.startsWith('lesson:') && k.slice(7) === id) lessonDone = true;
+      });
+    }
 
     const nodes = [];
     let previousStepDone = true; // this lesson's own first step, gated separately by lessonReachable
@@ -441,10 +487,31 @@ router.get('/:id/path', authenticateToken, async (req, res) => {
       xp_reward: XP_VALUES.PATH_CHEST
     });
 
+    // Guest wall: every node past the free preview steps (and every chest) is
+    // locked with a reason the app turns into a "create account" prompt. The
+    // first `GUEST_FREE_STEPS` nodes keep the status placeStep gave them
+    // (current / available).
+    if (isGuest) {
+      const stepKeyOf = (n) => {
+        if (n.type === 'unit') return `unit:${n.unit_id}`;
+        if (n.type === 'unit_quiz' || n.type === 'lesson_quiz') return `quiz:${n.quiz_id}`;
+        if (n.type === 'lesson') return `lesson:${n.id}`;
+        return null;
+      };
+      for (const n of nodes) {
+        const key = n.type === 'chest' ? null : stepKeyOf(n);
+        if (n.type === 'chest' || !key || !guestFree.has(key)) {
+          n.status = 'locked';
+          n.lock_reason = 'guest_wall';
+        }
+      }
+    }
+
     res.json({
       success: true,
       data: {
-        lesson: { id: lesson.id, title: lesson.title, course_id: lesson.course_id, locked: !lessonReachable },
+        lesson: { id: lesson.id, title: lesson.title, course_id: lesson.course_id, locked: !lessonReachable && !isGuest },
+        guest: isGuest ? { free_steps: guestFree ? guestFree.size : 0 } : undefined,
         progress: {
           completed_steps: completedSteps,
           total_steps: totalSteps,
@@ -1170,10 +1237,10 @@ router.delete('/:id/attachments/:attachmentId', authenticateToken, isTeacher, as
  * POST /api/lessons/:id/mark-complete
  * Mark lesson as complete (Student)
  */
-router.post('/:id/mark-complete', authenticateToken, async (req, res) => {
+router.post('/:id/mark-complete', optionalAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const studentId = req.user.userId;
+    const studentId = req.user?.userId || null;
 
     const { data: lesson, error: lessonError } = await supabase
       .from('lessons')
@@ -1185,6 +1252,19 @@ router.post('/:id/mark-complete', authenticateToken, async (req, res) => {
       return res.status(404).json({
         success: false,
         error: 'Lesson not found'
+      });
+    }
+
+    // Guest: acknowledge the step without persisting anything, or wall.
+    if (!req.user) {
+      const courseId = lesson.courses?.id;
+      if (!courseId || !(await guestCanAccessStep(courseId, `lesson:${id}`))) {
+        return sendGuestWall(res);
+      }
+      return res.json({
+        success: true,
+        message: 'Lesson marked as complete',
+        data: { completion: null, xp_awarded: 0, guest: true }
       });
     }
 
@@ -1225,8 +1305,9 @@ router.post('/:id/mark-complete', authenticateToken, async (req, res) => {
 
     if (error) throw error;
 
-    await awardXp(studentId, XP_VALUES.LESSON_COMPLETE, 'lesson_complete');
+    await awardXp(studentId, XP_VALUES.LESSON_COMPLETE, 'lesson_complete', lesson.courses?.id || null);
     await evaluateAchievements(studentId);
+    notifyLessonComplete(studentId, id);
 
     res.json({
       success: true,

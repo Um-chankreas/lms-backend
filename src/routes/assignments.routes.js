@@ -3,6 +3,8 @@ const router = express.Router();
 const multer = require('multer');
 const supabase = require('../config/supabase');
 const { authenticateToken, isTeacher } = require('../middleware/auth');
+const { awardXp, XP_VALUES } = require('../utils/xp');
+const { evaluateAchievements } = require('../utils/achievements');
 const { v4: uuidv4 } = require('uuid');
 
 // Configure multer for file uploads
@@ -257,7 +259,7 @@ router.post('/:id/submit', authenticateToken, upload.single('file'), async (req,
     // Check if assignment exists
     const { data: assignment } = await supabase
       .from('assignments')
-      .select('id')
+      .select('id, course_id, due_date')
       .eq('id', id)
       .single();
 
@@ -341,10 +343,21 @@ router.post('/:id/submit', authenticateToken, upload.single('file'), async (req,
       submission = data;
     }
 
+    // XP on the FIRST submission only (re-submits don't re-award). On time =
+    // before the due date, or the assignment has no due date.
+    let xpAwarded = 0;
+    if (!existing) {
+      const onTime = !assignment.due_date || new Date() <= new Date(assignment.due_date);
+      xpAwarded = onTime ? XP_VALUES.ASSIGNMENT_ONTIME : XP_VALUES.ASSIGNMENT_LATE;
+      await awardXp(req.user.userId, xpAwarded, onTime ? 'assignment_ontime' : 'assignment_late', assignment.course_id || null);
+      await evaluateAchievements(req.user.userId);
+    }
+
     res.status(201).json({
       success: true,
       message: 'Assignment submitted successfully',
       data: {
+        xp_awarded: xpAwarded,
         submission: {
           ...submission,
           file_url: submission.file_url

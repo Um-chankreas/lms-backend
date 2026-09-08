@@ -3,6 +3,7 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const { authenticateToken, isStudent } = require('../middleware/auth');
 const { getStreak } = require('../utils/achievements');
+const { levelInfo, getXpBreakdown } = require('../utils/xp');
 
 // This week's XP / quiz / assignment / live-class targets shown on the home
 // screen "This Week" card. Static for now — no per-student goal setting yet.
@@ -159,14 +160,17 @@ router.get('/', authenticateToken, isStudent, async (req, res) => {
 
     const quizzesPassed = new Set((passedSubs || []).map(s => s.quiz_id)).size;
     const weekXp = (weekXpRows || []).reduce((sum, r) => sum + (r.amount || 0), 0);
+    const xpBreakdown = await getXpBreakdown(studentId);
 
     res.json({
       success: true,
       data: {
         xp: userRow.xp || 0,
+        level: levelInfo(userRow.xp || 0),
         lessons_completed: completedLessons,
         quizzes_passed: quizzesPassed,
         streak,
+        xp_breakdown: xpBreakdown,
         progress: {
           completed_lessons: completedLessons,
           total_lessons: totalLessons,
@@ -215,7 +219,7 @@ router.get('/activity', authenticateToken, isStudent, async (req, res) => {
     if (peerIds.length === 0) return res.json({ success: true, data: { activity: [] } });
 
     const sinceIso = new Date(Date.now() - 14 * 86400000).toISOString();
-    const MEANINGFUL_XP = ['quiz_pass', 'path_chest', 'daily_quiz'];
+    const MEANINGFUL_XP = ['quiz_pass', 'path_chest', 'daily_quiz', 'assignment_ontime', 'assignment_late', 'live_class'];
 
     const [{ data: xpRows }, { data: lessonRows }, { data: badgeRows }, { data: users }] = await Promise.all([
       supabase.from('xp_events').select('student_id, amount, reason, created_at')

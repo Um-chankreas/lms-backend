@@ -3,6 +3,7 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const { authenticateToken, isStudent } = require('../middleware/auth');
 const { getStreak } = require('../utils/achievements');
+const { levelInfo, getXpBreakdown } = require('../utils/xp');
 
 // Order badges appear in the "Achievements" grid (earned + locked alike).
 const BADGE_DISPLAY_ORDER = [
@@ -96,12 +97,13 @@ router.get('/', authenticateToken, isStudent, async (req, res) => {
       totalLessons = count || 0;
     }
 
-    const [lessonsRes, streak, activity, badgesRes, earnedRes] = await Promise.all([
+    const [lessonsRes, streak, activity, badgesRes, earnedRes, xpBreakdown] = await Promise.all([
       supabase.from('lesson_completions').select('id', { count: 'exact', head: true }).eq('student_id', studentId),
       getStreak(studentId),
       weeklyActivity(studentId, 0),
       supabase.from('badges').select('code, label, description'),
-      supabase.from('achievements').select('badge_code, earned_at').eq('student_id', studentId)
+      supabase.from('achievements').select('badge_code, earned_at').eq('student_id', studentId),
+      getXpBreakdown(studentId)
     ]);
 
     const lessonsCompleted = lessonsRes.count || 0;
@@ -136,6 +138,7 @@ router.get('/', authenticateToken, isStudent, async (req, res) => {
         },
         summary: {
           xp: user.xp || 0,
+          level: levelInfo(user.xp || 0),
           day_streak: streak,
           complete_percentage: completePercentage
         },
@@ -145,6 +148,7 @@ router.get('/', authenticateToken, isStudent, async (req, res) => {
           total_xp: user.xp || 0,
           saved_lessons: 0 // no bookmark feature yet
         },
+        xp_breakdown: xpBreakdown,
         achievements,
         activity
       }

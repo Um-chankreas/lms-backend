@@ -1,6 +1,7 @@
 const { v4: uuidv4 } = require('uuid');
 const supabase = require('../config/supabase');
 const { awardXp, XP_VALUES } = require('./xp');
+const { notifyLessonComplete } = require('./notifyEvents');
 
 /**
  * A chapter auto-completes (inserts lesson_completions + awards
@@ -89,7 +90,10 @@ async function checkChapterAutoComplete({ lessonId, studentId }) {
     .insert({ id: uuidv4(), lesson_id: lessonId, student_id: studentId, completed_at: new Date() });
   if (error) return false; // lost a race with a duplicate call — harmless
 
-  await awardXp(studentId, XP_VALUES.LESSON_COMPLETE, 'lesson_complete');
+  const { data: lessonRow } = await supabase
+    .from('lessons').select('course_id').eq('id', lessonId).maybeSingle();
+  await awardXp(studentId, XP_VALUES.LESSON_COMPLETE, 'lesson_complete', lessonRow?.course_id || null);
+  notifyLessonComplete(studentId, lessonId); // owner + friends "lesson complete"
   return true;
 }
 

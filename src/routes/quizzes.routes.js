@@ -4,9 +4,11 @@ const path = require('path');
 const multer = require('multer');
 const { parse: parseCsv } = require('csv-parse/sync');
 const supabase = require('../config/supabase');
-const { authenticateToken, isTeacher, isStudent } = require('../middleware/auth');
+const { authenticateToken, optionalAuth, isTeacher, isStudent } = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
-const { awardXp, XP_VALUES } = require('../utils/xp');
+const { awardXp, XP_VALUES, xpForQuizScore } = require('../utils/xp');
+const { guestCanAccessStep, sendGuestWall } = require('../utils/guest');
+const { notifyQuizComplete } = require('../utils/notifyEvents');
 const { evaluateAchievements } = require('../utils/achievements');
 const { hasCourseAccess, ensureEnrolled } = require('../utils/access');
 const { checkChapterAutoComplete } = require('../utils/progress');
@@ -41,6 +43,16 @@ async function checkQuizPlayAccess(quiz, user) {
   if (!quiz || quiz.status !== 'published') {
     return { ok: false, status: 404, error: 'Quiz is not available' };
   }
+
+  // Signed-out guest: only the first couple of steps of the course, then wall.
+  if (!user) {
+    const courseId = quiz.course_id || quiz.courses?.id;
+    if (courseId && await guestCanAccessStep(courseId, `quiz:${quiz.id}`)) {
+      return { ok: true, guest: true };
+    }
+    return { ok: false, status: 403, code: 'GUEST_WALL', error: 'Create a free account to keep learning.' };
+  }
+
   let lessonIsFree = false;
   if (quiz.lesson_id) {
     const { data: lesson } = await supabase
@@ -1039,7 +1051,9 @@ router.post('/daily/submit', authenticateToken, isStudent, async (req, res) => {
     }
 
     const score = totalCount > 0 ? Math.round((correctCount / totalCount) * 100) : 0;
-    const xpAwarded = correctCount * XP_VALUES.DAILY_QUIZ_PER_CORRECT;
+    // Flat reward for finishing the daily practice set — it's practice, so
+    // it's not scored by accuracy. Course-agnostic (course_id stays null).
+    const xpAwarded = XP_VALUES.DAILY_QUIZ_COMPLETE;
 
     const { data: updatedAttempt, error } = await supabase
       .from('daily_quiz_attempts')
@@ -1086,7 +1100,7 @@ router.post('/daily/submit', authenticateToken, isStudent, async (req, res) => {
  * GET /api/quizzes/:id
  * Get quiz details with questions
  */
-router.get('/:id', authenticateToken, async (req, res) => {
+router.get('/:id', optionalAuth, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -1101,6 +1115,13 @@ router.get('/:id', authenticateToken, async (req, res) => {
         success: false,
         error: 'Quiz not found'
       });
+    }
+
+    // Signed-out guest: only quizzes within this course's free preview steps.
+    if (!req.user) {
+      if (!quiz.course_id || !(await guestCanAccessStep(quiz.course_id, `quiz:${quiz.id}`))) {
+        return sendGuestWall(res);
+      }
     }
 
     const { data: allQuestions } = await supabase
@@ -1156,7 +1177,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
  * inline before moving on. Persists nothing — the whole attempt is still
  * recorded (and re-graded, authoritatively) by POST /:id/submit at the end.
  */
-router.post('/:id/check', authenticateToken, async (req, res) => {
+router.post('/:id/check', optionalAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const { question_id, answer } = req.body;
@@ -1173,7 +1194,7 @@ router.post('/:id/check', authenticateToken, async (req, res) => {
 
     const access = await checkQuizPlayAccess(quiz, req.user);
     if (!access.ok) {
-      return res.status(access.status).json({ success: false, error: access.error });
+      return res.status(access.status).json({ success: false, error: access.error, code: access.code });
     }
 
     const { data: question } = await supabase
@@ -1208,7 +1229,7 @@ router.post('/:id/check', authenticateToken, async (req, res) => {
  * POST /api/quizzes/:id/submit
  * Submit quiz answers (Student)
  */
-router.post('/:id/submit', authenticateToken, async (req, res) => {
+router.post('/:id/submit', optionalAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const { answers } = req.body;
@@ -1228,7 +1249,7 @@ router.post('/:id/submit', authenticateToken, async (req, res) => {
 
     const access = await checkQuizPlayAccess(quiz, req.user);
     if (!access.ok) {
-      return res.status(access.status).json({ success: false, error: access.error });
+      return res.status(access.status).json({ success: false, error: access.error, code: access.code });
     }
 
     // Grade only the questions this attempt actually presented — the
@@ -1266,22 +1287,45 @@ router.post('/:id/submit', authenticateToken, async (req, res) => {
     const score = totalCount > 0 ? Math.round((correctCount / totalCount) * 100) : 0;
     const passed = score >= quiz.pass_percentage;
 
+    // Guest: grade + return the review, but persist nothing (no submission
+    // row, no XP, no achievements, no chapter auto-complete). The client
+    // tracks the guest's step locally.
+    if (!req.user) {
+      return res.json({
+        success: true,
+        message: passed ? 'Quiz passed!' : 'Quiz failed. Try again.',
+        data: {
+          submission: {
+            quiz_id: id,
+            score,
+            passed,
+            correct_answers: correctCount,
+            total_questions: totalCount,
+            answers,
+          },
+          review,
+          xp_awarded: 0,
+          chapter_completed: false,
+          guest: true,
+        }
+      });
+    }
+
+    // Has this student ever submitted this quiz before? (drives "first
+    // attempt" notifications + the passed-before XP guard)
+    const { data: priorSubs } = await supabase
+      .from('quiz_submissions')
+      .select('passed')
+      .eq('quiz_id', id)
+      .eq('student_id', req.user.userId);
+    const firstAttempt = (priorSubs || []).length === 0;
+    const passedBefore = (priorSubs || []).some(s => s.passed);
+
     // Only award XP the first time this student passes this quiz, so
     // retaking an already-passed quiz doesn't farm infinite XP.
     let xpAwarded = 0;
-    if (passed) {
-      const { data: priorPass } = await supabase
-        .from('quiz_submissions')
-        .select('id')
-        .eq('quiz_id', id)
-        .eq('student_id', req.user.userId)
-        .eq('passed', true)
-        .limit(1)
-        .maybeSingle();
-
-      if (!priorPass) {
-        xpAwarded = XP_VALUES.QUIZ_PASS;
-      }
+    if (passed && !passedBefore) {
+      xpAwarded = xpForQuizScore(score);
     }
 
     const submissionId = uuidv4();
@@ -1302,9 +1346,10 @@ router.post('/:id/submit', authenticateToken, async (req, res) => {
     if (error) throw error;
 
     if (xpAwarded > 0) {
-      await awardXp(req.user.userId, xpAwarded, 'quiz_pass');
+      await awardXp(req.user.userId, xpAwarded, 'quiz_pass', quiz.course_id || null);
     }
     await evaluateAchievements(req.user.userId);
+    notifyQuizComplete(req.user.userId, id, score, { firstAttempt, xpAwarded });
 
     // A passed quiz that belongs to a chapter — whether it's a unit's
     // practice quiz or the chapter's own end-of-lesson quiz — is a path step.

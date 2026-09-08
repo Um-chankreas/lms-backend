@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
-const { authenticateToken, isTeacher, isStudent } = require('../middleware/auth');
+const { authenticateToken, optionalAuth, isTeacher } = require('../middleware/auth');
+const { guestCanAccessStep, guestFreeStepKeys, sendGuestWall } = require('../utils/guest');
 const { v4: uuidv4 } = require('uuid');
 const { hasCourseAccess, ensureEnrolled } = require('../utils/access');
 const { awardXp, XP_VALUES } = require('../utils/xp');
@@ -323,7 +324,7 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
  * A chapter's units — titles, order and preview. Full `content` only for
  * units the caller can access (course access, or a free unit).
  */
-router.get('/', authenticateToken, async (req, res) => {
+router.get('/', optionalAuth, async (req, res) => {
   try {
     const lessonId = req.query.lesson_id ? String(req.query.lesson_id) : null;
     if (!lessonId) {
@@ -333,8 +334,15 @@ router.get('/', authenticateToken, async (req, res) => {
     const chapter = await loadChapter(lessonId);
     if (!chapter) return res.status(404).json({ success: false, error: 'Chapter not found' });
 
-    await ensureEnrolled({ supabase, course: chapter.courses, user: req.user });
-    const courseAccess = await hasCourseAccess({ supabase, course: chapter.courses, user: req.user });
+    let courseAccess = false;
+    let guestFreeUnits = null; // Set of unit ids a guest may read
+    if (!req.user) {
+      const free = chapter.courses ? await guestFreeStepKeys(chapter.courses.id) : [];
+      guestFreeUnits = new Set(free.filter(k => k.startsWith('unit:')).map(k => k.slice(5)));
+    } else {
+      await ensureEnrolled({ supabase, course: chapter.courses, user: req.user });
+      courseAccess = await hasCourseAccess({ supabase, course: chapter.courses, user: req.user });
+    }
 
     const { data: units, error } = await supabase
       .from('lesson_units')
@@ -353,7 +361,8 @@ router.get('/', authenticateToken, async (req, res) => {
         },
         course_access: courseAccess,
         units: (units || []).map(u => {
-          const unlocked = courseAccess || chapter.is_free || u.is_free;
+          const unlocked = courseAccess || chapter.is_free || u.is_free
+            || (guestFreeUnits ? guestFreeUnits.has(u.id) : false);
           return {
             id: u.id,
             title: u.title,
@@ -377,7 +386,7 @@ router.get('/', authenticateToken, async (req, res) => {
  * GET /api/units/:id
  * One unit with its full Markdown content (access-checked via the course).
  */
-router.get('/:id', authenticateToken, async (req, res) => {
+router.get('/:id', optionalAuth, async (req, res) => {
   try {
     const { data: unit, error } = await supabase
       .from('lesson_units')
@@ -392,10 +401,18 @@ router.get('/:id', authenticateToken, async (req, res) => {
     const chapter = unit.lessons;
     const course = chapter?.courses;
 
-    await ensureEnrolled({ supabase, course, user: req.user });
-    const courseAccess = await hasCourseAccess({ supabase, course, user: req.user });
-    if (!courseAccess && !chapter?.is_free && !unit.is_free) {
-      return res.status(403).json({ success: false, error: 'Enroll in this course to read this unit' });
+    // Signed-out guest: allowed only for the first couple of steps of this
+    // course (a preview), then the sign-up wall.
+    if (!req.user) {
+      if (!course || !(await guestCanAccessStep(course.id, `unit:${unit.id}`))) {
+        return sendGuestWall(res);
+      }
+    } else {
+      await ensureEnrolled({ supabase, course, user: req.user });
+      const courseAccess = await hasCourseAccess({ supabase, course, user: req.user });
+      if (!courseAccess && !chapter?.is_free && !unit.is_free) {
+        return res.status(403).json({ success: false, error: 'Enroll in this course to read this unit' });
+      }
     }
 
     res.json({
@@ -426,7 +443,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
  * (every unit in the chapter read + every one of their quizzes passed), the
  * chapter itself auto-completes (see utils/progress.js).
  */
-router.post('/:id/complete', authenticateToken, isStudent, async (req, res) => {
+router.post('/:id/complete', optionalAuth, async (req, res) => {
   try {
     const { data: unit } = await supabase
       .from('lesson_units')
@@ -437,6 +454,24 @@ router.post('/:id/complete', authenticateToken, isStudent, async (req, res) => {
 
     const chapter = unit.lessons;
     const course = chapter?.courses;
+
+    // Guest: no persistence — just acknowledge the step (client tracks it
+    // locally) if it's within the free preview, otherwise the wall.
+    if (!req.user) {
+      if (!course || !(await guestCanAccessStep(course.id, `unit:${unit.id}`))) {
+        return sendGuestWall(res);
+      }
+      return res.json({
+        success: true,
+        message: 'Unit marked as complete',
+        data: { xp_awarded: 0, chapter_completed: false, guest: true }
+      });
+    }
+
+    if (req.user.role !== 'student') {
+      return res.status(403).json({ success: false, error: 'This action requires student privileges' });
+    }
+
     await ensureEnrolled({ supabase, course, user: req.user });
     const courseAccess = await hasCourseAccess({ supabase, course, user: req.user });
     if (!courseAccess && !chapter?.is_free && !unit.is_free) {
@@ -457,7 +492,7 @@ router.post('/:id/complete', authenticateToken, isStudent, async (req, res) => {
         .insert({ id: uuidv4(), unit_id: unit.id, student_id: req.user.userId, completed_at: new Date() });
       if (error) throw error;
       xpAwarded = XP_VALUES.UNIT_COMPLETE;
-      await awardXp(req.user.userId, xpAwarded, 'unit_complete');
+      await awardXp(req.user.userId, xpAwarded, 'unit_complete', course?.id || null);
     }
 
     const chapterCompleted = await checkChapterAutoComplete({ lessonId: unit.lesson_id, studentId: req.user.userId });

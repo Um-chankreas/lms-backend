@@ -4,6 +4,8 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const { authenticateToken, isTeacher } = require('../middleware/auth');
 const { hasActiveSubscription } = require('../utils/access');
+const { awardXp, XP_VALUES } = require('../utils/xp');
+const { evaluateAchievements } = require('../utils/achievements');
 const { generateAgoraToken, appId } = require('../utils/agoraToken');
 const { generateAgoraUid } = require('../utils/agoraUid');
 const {
@@ -443,6 +445,16 @@ router.post('/:id/token', authenticateToken, async (req, res) => {
         .update({ joined_at: new Date() })
         .eq('id', openRow.id);
     } else {
+      // First time this user joins this class ever? (No row at all — an open
+      // row was ruled out above, so check for any closed one.)
+      const { data: priorRow } = await supabase
+        .from('live_class_participants')
+        .select('id')
+        .eq('live_class_id', id)
+        .eq('user_id', req.user.userId)
+        .limit(1)
+        .maybeSingle();
+
       await supabase
         .from('live_class_participants')
         .insert({
@@ -453,6 +465,13 @@ router.post('/:id/token', authenticateToken, async (req, res) => {
           joined_at: new Date()
         });
       await emitParticipantsChanged(id);
+
+      // Attendance XP — students only, once per class, for a class that has
+      // actually started.
+      if (access.role === 'student' && !priorRow && liveClass.status === 'active') {
+        await awardXp(req.user.userId, XP_VALUES.LIVE_CLASS_ATTEND, 'live_class', liveClass.course_id || null);
+        await evaluateAchievements(req.user.userId);
+      }
     }
 
     res.json({
