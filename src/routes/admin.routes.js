@@ -750,4 +750,166 @@ router.get('/live-classes', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/admin/analytics
+ * School-wide teacher dashboard: headline KPIs, weekly signups, and the
+ * "most improved" / "at-risk" student lists. All aggregation is in JS over a
+ * handful of bulk reads — fine at a single school's scale.
+ */
+router.get('/analytics', async (req, res) => {
+  try {
+    const now = new Date();
+    const ms = 86400000;
+    const daysAgo = (n) => new Date(now.getTime() - n * ms);
+    const iso = (d) => d.toISOString();
+    const ymd = (d) => d.toISOString().slice(0, 10);
+    const d7 = daysAgo(7), d14 = daysAgo(14), d30 = daysAgo(30), d45 = daysAgo(45), d60 = daysAgo(60);
+    const WEEKS = 12;
+    const mondayOf = (d) => {
+      const x = new Date(d); x.setUTCHours(0, 0, 0, 0);
+      x.setUTCDate(x.getUTCDate() - ((x.getUTCDay() + 6) % 7));
+      return x;
+    };
+    const firstWeek = mondayOf(daysAgo(WEEKS * 7));
+
+    const [
+      { data: students },
+      { data: subs },
+      { data: xpRows },
+      { data: lessons },
+      { data: enrolls },
+    ] = await Promise.all([
+      supabase.from('users').select('id, name, avatar_url, created_at, is_active, paid_until').eq('role', 'student'),
+      supabase.from('quiz_submissions').select('student_id, score, submitted_at').gte('submitted_at', iso(d60)),
+      supabase.from('xp_events').select('student_id, created_at').gte('created_at', iso(d45)),
+      supabase.from('lesson_completions').select('student_id, completed_at').gte('completed_at', iso(d30)),
+      supabase.from('course_enrollments').select('student_id'),
+    ]);
+
+    const S = students || [];
+    const meta = new Map(S.map(s => [s.id, s]));
+    const today = todayYmd();
+
+    // ── KPIs ──────────────────────────────────────────────────────────────
+    const countCreatedBetween = (from, to) =>
+      S.filter(s => { const c = new Date(s.created_at); return c >= from && c < to; }).length;
+    const kpis = {
+      total_students: S.length,
+      active_eligible: S.filter(s => s.is_active !== false).length,
+      new_students_7d: countCreatedBetween(d7, now),
+      new_students_prev_7d: countCreatedBetween(d14, d7),
+      paid_students: S.filter(s => s.paid_until && s.paid_until >= today).length,
+    };
+
+    // ── Last-active (max of any XP event or quiz submission) ──────────────
+    const lastActive = new Map();
+    const touch = (id, ts) => {
+      const cur = lastActive.get(id);
+      if (!cur || ts > cur) lastActive.set(id, ts);
+    };
+    (xpRows || []).forEach(r => touch(r.student_id, r.created_at));
+    (subs || []).forEach(r => touch(r.student_id, r.submitted_at));
+    const active7 = [...lastActive].filter(([, ts]) => new Date(ts) >= d7).length;
+    kpis.active_students_7d = active7;
+
+    // ── Weekly signups (last 12 weeks) + cumulative ──────────────────────
+    const weekBuckets = new Map();
+    for (let i = 0; i < WEEKS; i++) weekBuckets.set(ymd(new Date(firstWeek.getTime() + i * 7 * ms)), 0);
+    let carried = 0;
+    S.forEach(s => {
+      const c = new Date(s.created_at);
+      if (c < firstWeek) { carried += 1; return; }
+      const wk = ymd(mondayOf(c));
+      if (weekBuckets.has(wk)) weekBuckets.set(wk, weekBuckets.get(wk) + 1);
+    });
+    let cum = carried;
+    const signups_weekly = [...weekBuckets].map(([week, count]) => {
+      cum += count;
+      return { week, count, cumulative: cum };
+    });
+
+    // ── Quiz-score windows: recent (0–30d) vs prior (30–60d) ─────────────
+    const recent = new Map(), prior = new Map();
+    const push = (map, k, v) => { const a = map.get(k); if (a) a.push(v); else map.set(k, [v]); };
+    const all30 = [], allPrev30 = [];
+    (subs || []).forEach(x => {
+      const sc = Number(x.score);
+      if (!Number.isFinite(sc)) return;
+      const t = new Date(x.submitted_at);
+      if (t >= d30) { push(recent, x.student_id, sc); all30.push(sc); }
+      else if (t >= d60) { push(prior, x.student_id, sc); allPrev30.push(sc); }
+    });
+    const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
+    kpis.avg_quiz_score_30d = all30.length ? Math.round(mean(all30)) : null;
+    kpis.avg_quiz_score_prev_30d = allPrev30.length ? Math.round(mean(allPrev30)) : null;
+
+    const trend = new Map();
+    new Set([...recent.keys(), ...prior.keys()]).forEach(id => {
+      const r = recent.get(id) || [], p = prior.get(id) || [];
+      const ra = mean(r), pa = mean(p);
+      trend.set(id, { rn: r.length, pn: p.length, ra, pa, delta: (ra != null && pa != null) ? ra - pa : null });
+    });
+
+    const most_improved = [...trend]
+      .filter(([, x]) => x.delta != null && x.delta > 2 && x.rn >= 2 && x.pn >= 2)
+      .sort((a, b) => b[1].delta - a[1].delta)
+      .slice(0, 8)
+      .map(([id, x]) => ({
+        student_id: id,
+        name: meta.get(id)?.name || null,
+        avatar_url: meta.get(id)?.avatar_url || null,
+        recent_avg: Math.round(x.ra),
+        prior_avg: Math.round(x.pa),
+        delta: Math.round(x.delta),
+        quizzes: x.rn + x.pn,
+      }));
+
+    // ── At-risk ─────────────────────────────────────────────────────────
+    const enrolledSet = new Set((enrolls || []).map(e => e.student_id));
+    const finishedLesson14 = new Set((lessons || []).filter(l => new Date(l.completed_at) >= d14).map(l => l.student_id));
+    const atRisk = [];
+    S.forEach(s => {
+      if (s.is_active === false || !enrolledSet.has(s.id)) return;
+      const la = lastActive.get(s.id) || null;
+      const daysIdle = la ? Math.floor((now - new Date(la)) / ms) : null;
+      const tr = trend.get(s.id);
+      let reason = null, sev = 0;
+      if (tr && tr.delta != null && tr.delta <= -8 && tr.rn >= 2 && tr.pn >= 2) { reason = 'declining'; sev = 4 + Math.min(-tr.delta / 20, 1); }
+      else if (daysIdle != null && daysIdle >= 10) { reason = 'inactive'; sev = 3 + Math.min(daysIdle / 30, 1); }
+      else if (daysIdle != null && daysIdle >= 7) { reason = 'slowing'; sev = 2.5; }
+      else if (la && daysIdle >= 3 && !finishedLesson14.has(s.id)) { reason = 'stuck'; sev = 2; }
+      else if (!la && new Date(s.created_at) < d7) { reason = 'never_started'; sev = 1.5; }
+      if (reason) {
+        atRisk.push({
+          student_id: s.id,
+          name: meta.get(s.id)?.name || null,
+          avatar_url: meta.get(s.id)?.avatar_url || null,
+          reason,
+          last_active: la,
+          days_inactive: daysIdle,
+          recent_avg: tr?.ra != null ? Math.round(tr.ra) : null,
+          delta: tr?.delta != null ? Math.round(tr.delta) : null,
+          _sev: sev,
+        });
+      }
+    });
+    atRisk.sort((a, b) => b._sev - a._sev);
+
+    res.json({
+      success: true,
+      data: {
+        kpis,
+        signups_weekly,
+        most_improved,
+        at_risk: atRisk.slice(0, 20).map(({ _sev, ...x }) => x),
+        at_risk_total: atRisk.length,
+        generated_at: iso(now),
+      },
+    });
+  } catch (error) {
+    console.error('Admin analytics error:', error);
+    res.status(500).json({ success: false, error: 'Failed to load analytics: ' + error.message });
+  }
+});
+
 module.exports = router;

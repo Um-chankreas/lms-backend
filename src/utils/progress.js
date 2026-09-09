@@ -93,6 +93,7 @@ async function checkChapterAutoComplete({ lessonId, studentId }) {
   const { data: lessonRow } = await supabase
     .from('lessons').select('course_id').eq('id', lessonId).maybeSingle();
   await awardXp(studentId, XP_VALUES.LESSON_COMPLETE, 'lesson_complete', lessonRow?.course_id || null);
+  await require('./streak').recordActivity(studentId).catch(() => {});
   notifyLessonComplete(studentId, lessonId); // owner + friends "lesson complete"
   return true;
 }

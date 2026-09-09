@@ -326,6 +326,7 @@ CREATE TABLE public.quizzes (
     created_at timestamp without time zone DEFAULT now(),
     lesson_id uuid,
     status text DEFAULT 'draft'::text,
+    xp_reward integer DEFAULT 80 NOT NULL,
     updated_at timestamp with time zone DEFAULT now(),
     unit_id uuid,
     CONSTRAINT quizzes_status_check CHECK ((status = ANY (ARRAY['draft'::text, 'published'::text])))
@@ -359,6 +360,7 @@ CREATE TABLE public.users (
     phone text,
     xp integer DEFAULT 0 NOT NULL,
     bio text,
+    notification_style text DEFAULT 'balanced'::text NOT NULL,
     is_active boolean DEFAULT true NOT NULL,
     paid_until date,
     last_paid_at timestamp without time zone,

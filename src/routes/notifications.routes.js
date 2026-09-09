@@ -7,8 +7,10 @@ const { authenticateToken } = require('../middleware/auth');
 router.use(authenticateToken);
 
 /**
- * GET /api/notifications?limit=30&before=<iso>&unread=true
+ * GET /api/notifications?limit=30&before=<iso>&unread=true&types=quiz_complete,lesson_complete
  * Newest first. `before` pages backwards from a row's created_at.
+ * `types` is a comma-separated allow-list (e.g. the mobile "my activity" feed
+ * passes the owner types only).
  */
 router.get('/', async (req, res) => {
   try {
@@ -24,6 +26,10 @@ router.get('/', async (req, res) => {
 
     if (req.query.before) query = query.lt('created_at', req.query.before);
     if (req.query.unread === 'true') query = query.is('read_at', null);
+    if (req.query.types) {
+      const types = String(req.query.types).split(',').map(s => s.trim()).filter(Boolean);
+      if (types.length > 0) query = query.in('type', types);
+    }
 
     const { data: notifications, error } = await query;
     if (error) throw error;
@@ -40,11 +46,16 @@ router.get('/', async (req, res) => {
  */
 router.get('/unread-count', async (req, res) => {
   try {
-    const { count, error } = await supabase
+    let q = supabase
       .from('notifications')
       .select('id', { count: 'exact', head: true })
       .eq('user_id', req.user.userId)
       .is('read_at', null);
+    if (req.query.types) {
+      const types = String(req.query.types).split(',').map(s => s.trim()).filter(Boolean);
+      if (types.length > 0) q = q.in('type', types);
+    }
+    const { count, error } = await q;
     if (error) throw error;
     res.json({ success: true, data: { count: count || 0 } });
   } catch (error) {

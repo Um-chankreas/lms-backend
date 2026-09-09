@@ -1306,6 +1306,7 @@ router.post('/:id/mark-complete', optionalAuth, async (req, res) => {
     if (error) throw error;
 
     await awardXp(studentId, XP_VALUES.LESSON_COMPLETE, 'lesson_complete', lesson.courses?.id || null);
+    await require('../utils/streak').recordActivity(studentId).catch(() => {});
     await evaluateAchievements(studentId);
     notifyLessonComplete(studentId, id);
 

@@ -34,6 +34,7 @@ const sanitizeUser = (user) => ({
   role: user.role,
   avatar_url: user.avatar_url || null,
   bio: user.bio || null,
+  notification_style: user.notification_style || 'balanced',
   created_at: user.created_at,
   // Self-service account state — lets the client show a "reactivate" /
   // "cancel deletion" banner instead of forcing a logout.
@@ -297,7 +298,7 @@ router.get('/profile', authenticateToken, async (req, res) => {
   try {
     const { data: user, error } = await supabase
       .from('users')
-      .select('id, name, email, phone, role, avatar_url, bio, created_at, deactivated_at, deletion_scheduled_at')
+      .select('id, name, email, phone, role, avatar_url, bio, notification_style, created_at, deactivated_at, deletion_scheduled_at')
       .eq('id', req.user.userId)
       .single();
 
@@ -322,11 +323,17 @@ router.get('/profile', authenticateToken, async (req, res) => {
  */
 router.put('/profile', authenticateToken, async (req, res) => {
   try {
-    let { name, email, phone, bio } = req.body;
+    let { name, email, phone, bio, notification_style } = req.body;
     const updates = {};
 
     if (name) updates.name = name;
     if (bio !== undefined) updates.bio = bio;
+    if (notification_style !== undefined) {
+      if (!['balanced', 'competitive'].includes(notification_style)) {
+        return res.status(400).json({ success: false, error: 'Invalid notification_style' });
+      }
+      updates.notification_style = notification_style;
+    }
 
     if (email) {
       email = normalizeEmail(email);

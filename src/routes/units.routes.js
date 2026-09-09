@@ -7,6 +7,7 @@ const { v4: uuidv4 } = require('uuid');
 const { hasCourseAccess, ensureEnrolled } = require('../utils/access');
 const { awardXp, XP_VALUES } = require('../utils/xp');
 const { checkChapterAutoComplete } = require('../utils/progress');
+const { recordActivity } = require('../utils/streak');
 
 /**
  * Units (sections) live inside a chapter (a `lessons` row). See
@@ -59,6 +60,19 @@ const parseUnitsFromMarkdown = (markdown) => {
     }
   }
   if (current) units.push(current);
+
+  // No `## ` headings at all (e.g. a converted single-topic .tex) — treat the
+  // whole thing as one unit, titled from a leading `# ` line if there is one.
+  if (units.length === 0) {
+    const body = lines.join('\n').trim();
+    if (body) {
+      const h1 = body.match(/^#\s+(.*\S)\s*$/m);
+      units.push({
+        title: h1 ? h1[1].trim() : 'Unit 1',
+        content: h1 ? body.replace(h1[0], '').trim() : body,
+      });
+    }
+  }
 
   return units.map((u, i) => ({
     title: u.title,
@@ -493,6 +507,7 @@ router.post('/:id/complete', optionalAuth, async (req, res) => {
       if (error) throw error;
       xpAwarded = XP_VALUES.UNIT_COMPLETE;
       await awardXp(req.user.userId, xpAwarded, 'unit_complete', course?.id || null);
+      await recordActivity(req.user.userId).catch(() => {});
     }
 
     const chapterCompleted = await checkChapterAutoComplete({ lessonId: unit.lesson_id, studentId: req.user.userId });

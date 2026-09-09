@@ -6,7 +6,8 @@ const { parse: parseCsv } = require('csv-parse/sync');
 const supabase = require('../config/supabase');
 const { authenticateToken, optionalAuth, isTeacher, isStudent } = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
-const { awardXp, XP_VALUES, xpForQuizScore } = require('../utils/xp');
+const { awardXp, XP_VALUES, xpForQuizScore, levelInfo } = require('../utils/xp');
+const { recordActivity } = require('../utils/streak');
 const { guestCanAccessStep, sendGuestWall } = require('../utils/guest');
 const { notifyQuizComplete } = require('../utils/notifyEvents');
 const { evaluateAchievements } = require('../utils/achievements');
@@ -76,7 +77,7 @@ async function checkQuizPlayAccess(quiz, user) {
  */
 router.post('/', authenticateToken, isTeacher, async (req, res) => {
   try {
-    let { course_id, lesson_id, unit_id, title, description, pass_percentage, time_limit, status, questions } = req.body;
+    let { course_id, lesson_id, unit_id, title, description, pass_percentage, time_limit, xp_reward, status, questions } = req.body;
 
     if (!course_id || !title) {
       return res.status(400).json({
@@ -142,6 +143,7 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
         description: description || '',
         pass_percentage: pass_percentage || 70,
         time_limit: time_limit || 60,
+        xp_reward: Number.isFinite(Number(xp_reward)) ? Number(xp_reward) : 80,
         status: status || 'draft', // 'draft' or 'published'
         created_at: new Date()
       })
@@ -651,7 +653,7 @@ router.post('/import/units', authenticateToken, isTeacher, csvUpload.single('fil
 router.put('/:id', authenticateToken, isTeacher, async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, description, pass_percentage, time_limit, status, questions } = req.body;
+    const { title, description, pass_percentage, time_limit, xp_reward, status, questions } = req.body;
 
     // Verify ownership
     const { data: quiz } = await supabase
@@ -673,6 +675,7 @@ router.put('/:id', authenticateToken, isTeacher, async (req, res) => {
     if (description !== undefined) updatePayload.description = description;
     if (pass_percentage !== undefined) updatePayload.pass_percentage = pass_percentage;
     if (time_limit !== undefined) updatePayload.time_limit = time_limit;
+    if (xp_reward !== undefined) updatePayload.xp_reward = xp_reward;
     if (status !== undefined) updatePayload.status = status;
 
     const { data: updatedQuiz, error: quizError } = await supabase
@@ -1075,6 +1078,9 @@ router.post('/daily/submit', authenticateToken, isStudent, async (req, res) => {
     }
     await evaluateAchievements(studentId);
 
+    const streak = await recordActivity(studentId);
+    const { data: userXpRow } = await supabase.from('users').select('xp').eq('id', studentId).single();
+
     res.json({
       success: true,
       message: 'Daily quiz submitted successfully',
@@ -1084,7 +1090,9 @@ router.post('/daily/submit', authenticateToken, isStudent, async (req, res) => {
         score,
         xp_awarded: xpAwarded,
         review,
-        attempt: updatedAttempt
+        attempt: updatedAttempt,
+        streak,
+        level: levelInfo(userXpRow?.xp || 0),
       }
     });
   } catch (error) {
@@ -1306,6 +1314,9 @@ router.post('/:id/submit', optionalAuth, async (req, res) => {
           review,
           xp_awarded: 0,
           chapter_completed: false,
+          streak: null,
+          level: null,
+          context: null,
           guest: true,
         }
       });
@@ -1325,7 +1336,9 @@ router.post('/:id/submit', optionalAuth, async (req, res) => {
     // retaking an already-passed quiz doesn't farm infinite XP.
     let xpAwarded = 0;
     if (passed && !passedBefore) {
-      xpAwarded = xpForQuizScore(score);
+      // Flat per-quiz reward (026_quiz_xp_reward); older callers without the
+      // column fall back to the score-scaled award.
+      xpAwarded = Number.isFinite(Number(quiz.xp_reward)) ? Number(quiz.xp_reward) : xpForQuizScore(score);
     }
 
     const submissionId = uuidv4();
@@ -1349,7 +1362,16 @@ router.post('/:id/submit', optionalAuth, async (req, res) => {
       await awardXp(req.user.userId, xpAwarded, 'quiz_pass', quiz.course_id || null);
     }
     await evaluateAchievements(req.user.userId);
-    notifyQuizComplete(req.user.userId, id, score, { firstAttempt, xpAwarded });
+    notifyQuizComplete(req.user.userId, id, score, {
+      firstAttempt,
+      xpAwarded,
+      passed,
+      passPercentage: quiz.pass_percentage ?? 70,
+      lessonId: quiz.lesson_id || null,
+      courseId: quiz.course_id || null,
+      correctCount,
+      totalCount,
+    });
 
     // A passed quiz that belongs to a chapter — whether it's a unit's
     // practice quiz or the chapter's own end-of-lesson quiz — is a path step.
@@ -1359,6 +1381,17 @@ router.post('/:id/submit', optionalAuth, async (req, res) => {
     if (passed && quiz.lesson_id) {
       chapterCompleted = await checkChapterAutoComplete({ lessonId: quiz.lesson_id, studentId: req.user.userId });
     }
+
+    // Streak + combo bonus + level for the quiz-complete screen. Only a pass
+    // counts as an active day.
+    const streak = passed ? await recordActivity(req.user.userId) : null;
+
+    const [{ data: userXpRow }, { data: lessonRow }] = await Promise.all([
+      supabase.from('users').select('xp').eq('id', req.user.userId).single(),
+      quiz.lesson_id
+        ? supabase.from('lessons').select('title, order_number').eq('id', quiz.lesson_id).maybeSingle()
+        : Promise.resolve({ data: null }),
+    ]);
 
     res.json({
       success: true,
@@ -1372,7 +1405,14 @@ router.post('/:id/submit', optionalAuth, async (req, res) => {
         },
         review,
         xp_awarded: xpAwarded,
-        chapter_completed: chapterCompleted
+        chapter_completed: chapterCompleted,
+        streak,
+        level: levelInfo(userXpRow?.xp || 0),
+        context: {
+          course_title: quiz.courses?.title || null,
+          chapter_title: lessonRow?.title || null,
+          chapter_number: lessonRow?.order_number ?? null,
+        },
       }
     });
   } catch (error) {

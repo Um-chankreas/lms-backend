@@ -248,10 +248,10 @@ router.get('/:id', optionalAuth, async (req, res) => {
           lessons: lessonsWithAccess,
           progress: req.user?.role === 'student'
             ? {
-                completed_lessons: completedLessons,
-                total_lessons: totalLessons,
-                percentage: totalLessons > 0 ? Math.round((completedLessons / totalLessons) * 100) : 0
-              }
+              completed_lessons: completedLessons,
+              total_lessons: totalLessons,
+              percentage: totalLessons > 0 ? Math.round((completedLessons / totalLessons) * 100) : 0
+            }
             : null
         }
       }
