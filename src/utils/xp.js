@@ -12,6 +12,28 @@ const XP_VALUES = {
   ASSIGNMENT_LATE: 25,
   LIVE_CLASS_ATTEND: 20,
   PATH_CHEST: 30,
+
+  // Daily Challenge (routes/dailyChallenge.routes.js) — its own XP scale by
+  // difficulty, plus bonuses. Distinct from DAILY_QUIZ_COMPLETE above (the
+  // older flat daily-practice set).
+  DAILY_CHALLENGE_EASY: 25,
+  DAILY_CHALLENGE_MEDIUM: 50,
+  DAILY_CHALLENGE_HARD: 75,
+  DAILY_CHALLENGE_EXPERT: 100,
+  DAILY_CHALLENGE_PERFECT_BONUS: 25,   // 100% on the first attempt
+  DAILY_CHALLENGE_SPEED_BONUS: 10,     // first attempt finished under 10 minutes
+  DAILY_CHALLENGE_RETAKE_IMPROVED: 15, // a retake that beat the best score so far
+  DAILY_CHALLENGE_STREAK_7: 50,
+  DAILY_CHALLENGE_STREAK_14: 100,
+  DAILY_CHALLENGE_STREAK_30: 200,
+};
+
+// difficulty ('EASY'|'MEDIUM'|'HARD'|'EXPERT') -> its base XP above.
+const DAILY_CHALLENGE_XP_BY_DIFFICULTY = {
+  EASY: XP_VALUES.DAILY_CHALLENGE_EASY,
+  MEDIUM: XP_VALUES.DAILY_CHALLENGE_MEDIUM,
+  HARD: XP_VALUES.DAILY_CHALLENGE_HARD,
+  EXPERT: XP_VALUES.DAILY_CHALLENGE_EXPERT,
 };
 
 /**
@@ -152,4 +174,7 @@ async function getXpBreakdown(studentId) {
   return { total, general, courses };
 }
 
-module.exports = { awardXp, XP_VALUES, xpForQuizScore, levelInfo, totalXpForLevel, getXpBreakdown };
+module.exports = {
+  awardXp, XP_VALUES, xpForQuizScore, levelInfo, totalXpForLevel, getXpBreakdown,
+  DAILY_CHALLENGE_XP_BY_DIFFICULTY,
+};
