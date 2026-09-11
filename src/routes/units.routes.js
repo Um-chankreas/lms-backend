@@ -1,5 +1,8 @@
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
+const tex2svg = require('node-tikzjax').default;
+const sharp = require('sharp');
 const supabase = require('../config/supabase');
 const { authenticateToken, optionalAuth, isTeacher } = require('../middleware/auth');
 const { guestCanAccessStep, guestFreeStepKeys, sendGuestWall } = require('../utils/guest');
@@ -19,11 +22,27 @@ const { recordActivity } = require('../utils/streak');
  *   POST   /api/units                  add a unit                         (teacher)
  *   POST   /api/units/bulk             paste a chapter's Markdown, split on `##` (teacher)
  *   POST   /api/units/reorder          { lesson_id, order: [id, ...] }    (teacher)
+ *   POST   /api/units/render-tikz      { source } -> { svg }, TikZ figure  (teacher)
+ *   POST   /api/units/figure-image     multipart image upload -> { url }  (teacher)
  *   PUT    /api/units/:id              edit a unit                        (teacher)
  *   DELETE /api/units/:id              remove a unit                      (teacher)
  */
 
 const PREVIEW_LEN = 200;
+
+// Figure images uploaded from the unit editor (replacing a `\`\`\`figure`
+// placeholder the LaTeX importer left where a TikZ / \includegraphics figure
+// was). Stored in the existing public `course-materials` bucket.
+const FIGURE_ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/svg+xml'];
+const FIGURE_EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/svg+xml': 'svg' };
+const figureUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 }, // 8MB
+  fileFilter: (req, file, cb) => {
+    if (FIGURE_ALLOWED_TYPES.includes(file.mimetype)) cb(null, true);
+    else cb(new Error('Invalid file type. Upload a PNG, JPEG, WEBP, GIF or SVG image.'));
+  }
+});
 
 // Strip Markdown / LaTeX noise down to a short plain-text preview.
 const toPreview = (content) => {
@@ -286,6 +305,100 @@ router.post('/bulk', authenticateToken, isTeacher, async (req, res) => {
   } catch (error) {
     console.error('Unit bulk import error:', error);
     res.status(500).json({ success: false, error: 'Failed to import units: ' + error.message });
+  }
+});
+
+// node-tikzjax runs a single shared WASM TeX engine and its own docs warn
+// against overlapping renders, so calls are serialized through one queue
+// instead of running concurrently.
+let tikzQueue = Promise.resolve();
+const renderTikz = (source) => {
+  const run = tikzQueue.then(() => tex2svg(source, { showConsole: false }));
+  tikzQueue = run.then(() => {}, () => {}); // keep the queue alive after a failure
+  return run;
+};
+const withTimeout = (promise, ms, message) => Promise.race([
+  promise,
+  new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+]);
+const TIKZ_RENDER_TIMEOUT_MS = 20000;
+const TIKZ_SOURCE_MAX_LEN = 20000;
+
+const TIKZ_PNG_MAX_WIDTH = 1200;
+
+/**
+ * POST /api/units/render-tikz   (Teacher)
+ * Body: { source }  — a `\begin{tikzpicture}…\end{tikzpicture}` (or
+ * pgfplots/axis) block, as kept by the web LaTeX importer.
+ * Renders it with node-tikzjax (WASM TeX, no LaTeX install needed) so the
+ * importer can embed a real diagram instead of asking the teacher to upload
+ * one, then rasterizes the SVG to a PNG with sharp — markdown-it's link
+ * validator rejects `data:image/svg+xml` (SVG can carry scripts) but allows
+ * `data:image/png`, and a PNG needs no extra SVG support from the mobile
+ * image component either. Returns a ready `data:image/png;base64,…` URL.
+ * A figure that can't be rendered (unsupported package, bad syntax) should
+ * fall back to the manual image-upload placeholder client-side.
+ */
+router.post('/render-tikz', authenticateToken, isTeacher, async (req, res) => {
+  try {
+    const source = String(req.body.source || '').trim();
+    if (!source) return res.status(400).json({ success: false, error: 'source is required' });
+    if (source.length > TIKZ_SOURCE_MAX_LEN) {
+      return res.status(400).json({ success: false, error: 'Figure source is too large to render' });
+    }
+
+    const doc = /\\begin\s*\{document\}/.test(source) ? source : `\\begin{document}\n${source}\n\\end{document}`;
+    const svg = await withTimeout(renderTikz(doc), TIKZ_RENDER_TIMEOUT_MS, 'Rendering this figure took too long');
+
+    // Oversample for a crisp result, but cap the final width — dense_ 220
+    // is comfortably retina for a typical diagram; resize only kicks in for
+    // an unusually large one, keeping the embedded data URI reasonable.
+    const png = await sharp(Buffer.from(svg), { density: 220 })
+      .resize({ width: TIKZ_PNG_MAX_WIDTH, withoutEnlargement: true })
+      .png()
+      .toBuffer();
+
+    res.json({ success: true, data: { dataUrl: `data:image/png;base64,${png.toString('base64')}` } });
+  } catch (error) {
+    console.error('TikZ render error:', error);
+    res.status(422).json({ success: false, error: 'Could not render this figure: ' + error.message });
+  }
+});
+
+/**
+ * POST /api/units/figure-image   (Teacher)
+ * multipart: field `image`, plus `lesson_id` in the body.
+ * Uploads a figure image for a chapter the teacher owns and returns its
+ * public URL, which the unit editor writes into the Markdown in place of a
+ * `figure` placeholder. Not tied to a saved unit — works while adding one too.
+ */
+router.post('/figure-image', authenticateToken, isTeacher, figureUpload.single('image'), async (req, res) => {
+  try {
+    const file = req.file;
+    const lessonId = req.body.lesson_id ? String(req.body.lesson_id) : null;
+    if (!file) return res.status(400).json({ success: false, error: 'image file is required' });
+    if (!lessonId) return res.status(400).json({ success: false, error: 'lesson_id is required' });
+
+    const chapter = await loadChapter(lessonId);
+    if (!chapter) return res.status(404).json({ success: false, error: 'Chapter not found' });
+    if (!teacherOwnsCourse(chapter.courses, req.user)) {
+      return res.status(403).json({ success: false, error: 'You can only edit your own courses' });
+    }
+
+    const ext = FIGURE_EXT[file.mimetype] || 'png';
+    const path = `unit-figures/${lessonId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+
+    const { error: uploadError } = await supabase
+      .storage
+      .from('course-materials')
+      .upload(path, file.buffer, { contentType: file.mimetype, upsert: false });
+    if (uploadError) throw uploadError;
+
+    const url = `${process.env.SUPABASE_URL}/storage/v1/object/public/course-materials/${path}`;
+    res.status(201).json({ success: true, message: 'Figure uploaded', data: { url, path } });
+  } catch (error) {
+    console.error('Unit figure upload error:', error);
+    res.status(500).json({ success: false, error: 'Failed to upload figure: ' + error.message });
   }
 });
 

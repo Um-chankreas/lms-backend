@@ -119,11 +119,11 @@ router.get('/mine', authenticateToken, async (req, res) => {
         course: courseById[a.course_id] || { id: a.course_id, title: null, color: null, icon: null },
         submission: s
           ? {
-              ...s,
-              file_url: s.file_url
-                ? `${process.env.SUPABASE_URL}/storage/v1/object/public/assignments/${s.file_url}`
-                : null
-            }
+            ...s,
+            file_url: s.file_url
+              ? `${process.env.SUPABASE_URL}/storage/v1/object/public/assignments/${s.file_url}`
+              : null
+          }
           : null
       };
     });
