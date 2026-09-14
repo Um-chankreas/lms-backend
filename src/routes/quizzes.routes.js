@@ -728,6 +728,136 @@ router.put('/:id', authenticateToken, isTeacher, async (req, res) => {
   }
 });
 
+// Shared ownership check for the per-question endpoints below: the quiz
+// must exist and belong (via its course) to the calling teacher.
+async function loadOwnedQuiz(quizId, teacherId) {
+  const { data: quiz } = await supabase
+    .from('quizzes')
+    .select('id, courses(teacher_id)')
+    .eq('id', quizId)
+    .single();
+  if (!quiz) return { error: { status: 404, message: 'Quiz not found' } };
+  if (quiz.courses?.teacher_id !== teacherId) return { error: { status: 403, message: 'Unauthorized quiz access' } };
+  return { quiz };
+}
+
+/**
+ * POST /api/quizzes/:id/questions
+ * Add ONE question to an existing quiz (Teacher only). Lets the editor add a
+ * question without resending the whole bank — see PUT /:id/questions/:qid
+ * and DELETE /:id/questions/:qid alongside it; together they let a big bank
+ * be edited (and paginated) without ever replacing the bank wholesale.
+ */
+router.post('/:id/questions', authenticateToken, isTeacher, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { error: ownError } = await loadOwnedQuiz(id, req.user.userId);
+    if (ownError) return res.status(ownError.status).json({ success: false, error: ownError.message });
+
+    const { question, options, correct_answer, explanation, difficulty, question_type } = req.body;
+    if (!question || !question.trim()) {
+      return res.status(400).json({ success: false, error: 'question is required' });
+    }
+
+    // New questions always go after whatever the bank already has.
+    const { data: lastQuestion } = await supabase
+      .from('quiz_questions')
+      .select('order_number')
+      .eq('quiz_id', id)
+      .order('order_number', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const { data: created, error } = await supabase
+      .from('quiz_questions')
+      .insert({
+        id: uuidv4(),
+        quiz_id: id,
+        question,
+        options: typeof options === 'string' ? options : JSON.stringify(options || []),
+        correct_answer,
+        explanation: explanation || null,
+        question_type: normalizeQuestionType(question_type) || 'QCM',
+        difficulty: difficulty || null,
+        order_number: (lastQuestion?.order_number || 0) + 1,
+      })
+      .select()
+      .single();
+    if (error) throw error;
+
+    res.status(201).json({
+      success: true,
+      data: { question: { ...created, options: typeof created.options === 'string' ? JSON.parse(created.options) : created.options } },
+    });
+  } catch (error) {
+    console.error('Add quiz question error:', error);
+    res.status(500).json({ success: false, error: 'Failed to add question: ' + error.message });
+  }
+});
+
+/**
+ * PUT /api/quizzes/:id/questions/:questionId
+ * Update ONE question in place (Teacher only) — no effect on the rest of the bank.
+ */
+router.put('/:id/questions/:questionId', authenticateToken, isTeacher, async (req, res) => {
+  try {
+    const { id, questionId } = req.params;
+    const { error: ownError } = await loadOwnedQuiz(id, req.user.userId);
+    if (ownError) return res.status(ownError.status).json({ success: false, error: ownError.message });
+
+    const { question, options, correct_answer, explanation, difficulty, question_type } = req.body;
+    const updatePayload = {};
+    if (question !== undefined) updatePayload.question = question;
+    if (options !== undefined) updatePayload.options = typeof options === 'string' ? options : JSON.stringify(options);
+    if (correct_answer !== undefined) updatePayload.correct_answer = correct_answer;
+    if (explanation !== undefined) updatePayload.explanation = explanation || null;
+    if (difficulty !== undefined) updatePayload.difficulty = difficulty;
+    if (question_type !== undefined) updatePayload.question_type = normalizeQuestionType(question_type) || 'QCM';
+
+    const { data: updated, error } = await supabase
+      .from('quiz_questions')
+      .update(updatePayload)
+      .eq('id', questionId)
+      .eq('quiz_id', id)
+      .select()
+      .single();
+    if (error) throw error;
+    if (!updated) return res.status(404).json({ success: false, error: 'Question not found in this quiz' });
+
+    res.json({
+      success: true,
+      data: { question: { ...updated, options: typeof updated.options === 'string' ? JSON.parse(updated.options) : updated.options } },
+    });
+  } catch (error) {
+    console.error('Update quiz question error:', error);
+    res.status(500).json({ success: false, error: 'Failed to update question: ' + error.message });
+  }
+});
+
+/**
+ * DELETE /api/quizzes/:id/questions/:questionId
+ * Remove ONE question (Teacher only) — no effect on the rest of the bank.
+ */
+router.delete('/:id/questions/:questionId', authenticateToken, isTeacher, async (req, res) => {
+  try {
+    const { id, questionId } = req.params;
+    const { error: ownError } = await loadOwnedQuiz(id, req.user.userId);
+    if (ownError) return res.status(ownError.status).json({ success: false, error: ownError.message });
+
+    const { error } = await supabase
+      .from('quiz_questions')
+      .delete()
+      .eq('id', questionId)
+      .eq('quiz_id', id);
+    if (error) throw error;
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Delete quiz question error:', error);
+    res.status(500).json({ success: false, error: 'Failed to delete question: ' + error.message });
+  }
+});
+
 /**
  * DELETE /api/quizzes/:id
  * Delete a quiz and its questions (Teacher only, must own the course).
@@ -1132,13 +1262,50 @@ router.get('/:id', optionalAuth, async (req, res) => {
       }
     }
 
+    const isTeacher = req.user?.role === 'teacher';
+
+    // Teacher building/editing the bank: paginated (a bank can grow into the
+    // hundreds over time as questions get added, and the editor only needs
+    // one page rendered at a time). Pagination only kicks in when `page` is
+    // passed — an older caller that doesn't pass it still gets everything,
+    // so nothing that reads the full array unpaginated silently breaks.
+    if (isTeacher && req.query.page !== undefined) {
+      const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+      const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+      const from = (page - 1) * limit;
+
+      const { data: questions, count, error: qError } = await supabase
+        .from('quiz_questions')
+        .select('*', { count: 'exact' })
+        .eq('quiz_id', id)
+        .order('order_number', { ascending: true })
+        .range(from, from + limit - 1);
+      if (qError) throw qError;
+
+      const questionsWithParsedOptions = (questions || []).map(q => ({
+        ...q,
+        options: typeof q.options === 'string' ? JSON.parse(q.options) : q.options
+      }));
+
+      return res.json({
+        success: true,
+        data: {
+          quiz: {
+            ...quiz,
+            questions: questionsWithParsedOptions,
+            total_questions: count || 0,
+            bank_size: count || 0,
+            pagination: { page, limit, total: count || 0, total_pages: Math.ceil((count || 0) / limit) }
+          }
+        }
+      });
+    }
+
     const { data: allQuestions } = await supabase
       .from('quiz_questions')
       .select('*')
       .eq('quiz_id', id)
       .order('order_number', { ascending: true });
-
-    const isTeacher = req.user?.role === 'teacher';
 
     // A student takes a random draw of QUIZ_TAKE_SIZE from the bank (varies
     // every attempt), never the correct_answer/explanation up front — those

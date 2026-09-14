@@ -20,7 +20,11 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
 }));
 
-app.use(express.json());
+// No explicit limit here defaults to Express's 100kb — too small once a
+// unit's content embeds a base64 diagram image (rendered TikZ figures from
+// the LaTeX import can easily be several hundred KB), which was surfacing
+// to the client as a bare "Network Error" instead of a clear 413.
+app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // ============ Routes ============
