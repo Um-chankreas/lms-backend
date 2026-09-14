@@ -285,7 +285,9 @@ router.get('/', authenticateToken, isStudent, async (req, res) => {
         ? supabase.from('assignments').select('id, due_date').in('course_id', enrolledFilter)
         : Promise.resolve({ data: [] }),
       supabase.from('assignment_submissions').select('assignment_id').eq('student_id', studentId),
-      supabase.from('daily_quiz_attempts').select('completed_at').eq('student_id', studentId).eq('quiz_date', tKey),
+      // Daily Challenge (sql/029) — the current feature at /api/daily-challenge,
+      // not the older flat set at /api/quizzes/daily (daily_quiz_attempts).
+      supabase.from('daily_challenges').select('status').eq('student_id', studentId).eq('challenge_date', tKey),
       supabase.from('quiz_submissions').select('id').eq('student_id', studentId).eq('passed', true).gte('submitted_at', todayIso).limit(1),
       supabase.from('lesson_completions').select('lesson_id').eq('student_id', studentId).gte('completed_at', todayIso).limit(1),
       supabase.from('unit_completions').select('unit_id').eq('student_id', studentId).gte('completed_at', todayIso).limit(1),
@@ -302,7 +304,7 @@ router.get('/', authenticateToken, isStudent, async (req, res) => {
     ).length;
 
     const targetDone = {
-      daily_challenge: (dailyChallengeRows || []).some(r => r.completed_at),
+      daily_challenge: (dailyChallengeRows || []).some(r => r.status && r.status !== 'NOT_STARTED'),
       pass_quiz: (passTodayRows || []).length > 0,
       finish_lesson: (lessonTodayRows || []).length > 0 || (unitTodayRows || []).length > 0,
     };

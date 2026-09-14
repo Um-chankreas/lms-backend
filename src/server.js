@@ -17,7 +17,11 @@ app.use(cors({
   },
   credentials: true,
   allowedHeaders: ['Content-Type', 'Authorization'],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
+  // PATCH is used by admin.routes.js and notifications.routes.js — without
+  // it here, a browser's CORS preflight for those routes fails silently and
+  // the request never goes out, surfacing to the client as a bare
+  // "Network Error" with no indication it was a CORS problem.
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
 }));
 
 // No explicit limit here defaults to Express's 100kb — too small once a

@@ -26,6 +26,10 @@ const XP_VALUES = {
   DAILY_CHALLENGE_STREAK_7: 50,
   DAILY_CHALLENGE_STREAK_14: 100,
   DAILY_CHALLENGE_STREAK_30: 200,
+
+  // Completing a "Review Mistakes" session (Challenge 2 on the Daily tab) —
+  // see POST /api/daily-challenge/review-complete.
+  MISTAKE_REVIEW_COMPLETE: 25,
 };
 
 // difficulty ('EASY'|'MEDIUM'|'HARD'|'EXPERT') -> its base XP above.

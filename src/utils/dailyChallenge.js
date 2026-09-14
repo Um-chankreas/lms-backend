@@ -93,13 +93,12 @@ async function reachableCategories(studentId) {
 }
 
 /**
- * Difficulty + subject mix for `studentId`'s next challenge.
+ * Difficulty + single subject for `studentId`'s next challenge.
  *
- * Subjects mirror how broad their most recent day of activity was: active in
- * 2+ categories (e.g. did Math and History) -> mix both again; active in
- * exactly one -> stay on that one; no signal at all (brand-new, or nothing in
- * the lookback window) -> one category picked at random. Never force a
- * second subject that wasn't actually there.
+ * Exactly one subject, never a mix: if they completed lessons in one or more
+ * categories on their most recent active day, one of those is picked at
+ * random; with no signal at all (brand-new, or nothing in the lookback
+ * window), one category is picked at random from what they can reach.
  *
  * Difficulty factors (per the brief): recent quiz average (last 5
  * quiz_submissions), yesterday's challenge score, and level (from lifetime
@@ -117,10 +116,11 @@ async function computeDifficultyAndSubjects(studentId) {
 
   const recentActive = await mostRecentActiveCategories(studentId);
   let subjects;
-  if (recentActive && recentActive.length >= 2) {
-    subjects = pickRandom(recentActive, 2);
-  } else if (recentActive && recentActive.length === 1) {
-    subjects = recentActive;
+  if (recentActive && recentActive.length > 0) {
+    // Was active in one or more categories on their last active day — pick
+    // just one of those (at random if there were several) rather than
+    // mixing questions from more than one subject into the same challenge.
+    subjects = pickRandom(recentActive, 1);
   } else {
     const available = await reachableCategories(studentId);
     subjects = available.length ? pickRandom(available, 1) : [];
@@ -236,6 +236,13 @@ async function buildQuestionPool(studentId, subjects, difficulty) {
         // Shown as a small tag above the question — which lesson/chapter this
         // is testing, same idea as the old daily-quiz screen's quiz_title tag.
         sourceLabel: quiz?.title || category || null,
+        // Carried through synthesizeQuestions() into the review payload so a
+        // wrong answer can be filed against the real lesson/unit content
+        // (recordWrongAnswer) — the per-challenge question itself gets a
+        // fresh synthesized id (see synthesizeQuestions) that doesn't exist
+        // anywhere else, so the original quiz_questions.id has to ride along.
+        lessonId: quiz?.lesson_id || null,
+        courseId: quiz?.course_id || null,
         isFailed: failedQuizIds.has(q.quiz_id),
         isRecent: !!quiz && (recentLessonIds.has(quiz.lesson_id) || recentUnitIds.has(quiz.unit_id)),
       };
@@ -308,6 +315,10 @@ function synthesizeQuestions(type, pool, count = QUESTIONS_PER_CHALLENGE) {
       explanation: q.explanation || null,
       learningResource: null,
       sourceLabel: q.sourceLabel || null,
+      sourceQuestionId: q.id,
+      quizId: q.quiz_id || null,
+      lessonId: q.lessonId || null,
+      courseId: q.courseId || null,
     }));
   }
 
@@ -332,6 +343,10 @@ function synthesizeQuestions(type, pool, count = QUESTIONS_PER_CHALLENGE) {
         explanation: q.explanation || null,
         learningResource: null,
         sourceLabel: q.sourceLabel || null,
+        sourceQuestionId: q.id,
+        quizId: q.quiz_id || null,
+        lessonId: q.lessonId || null,
+        courseId: q.courseId || null,
       };
     });
   }
@@ -349,6 +364,10 @@ function synthesizeQuestions(type, pool, count = QUESTIONS_PER_CHALLENGE) {
     explanation: q.explanation || null,
     learningResource: null,
     sourceLabel: q.sourceLabel || null,
+    sourceQuestionId: q.id,
+    quizId: q.quiz_id || null,
+    lessonId: q.lessonId || null,
+    courseId: q.courseId || null,
   }));
 }
 

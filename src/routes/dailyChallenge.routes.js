@@ -6,6 +6,7 @@ const { authenticateToken, isStudent } = require('../middleware/auth');
 const { awardXp, XP_VALUES, levelInfo } = require('../utils/xp');
 const { recordActivity } = require('../utils/streak');
 const { createNotification } = require('../utils/notifications');
+const { grantBadge } = require('../utils/achievements');
 const {
   CHALLENGE_TYPES,
   QUESTIONS_PER_CHALLENGE,
@@ -48,6 +49,14 @@ const forReview = (q, answer) => ({
   correctAnswer: q.correctAnswer,
   explanation: q.explanation || null,
   learningResource: q.learningResource || null,
+  // The original quiz_questions.id (+ its lesson/course) this was
+  // synthesized from — `questionId` above is a fresh id per challenge, so
+  // the client needs this to file a wrong answer against real content
+  // (recordWrongAnswer) for the Review Mistakes queue.
+  sourceQuestionId: q.sourceQuestionId || null,
+  quizId: q.quizId || null,
+  lessonId: q.lessonId || null,
+  courseId: q.courseId || null,
 });
 
 // Review with the answer key stripped — first-attempt result before any retake.
@@ -57,6 +66,10 @@ const forHiddenReview = (q, answer) => ({
   options: q.options,
   studentAnswer: answer?.studentAnswer ?? null,
   isCorrect: !!answer?.isCorrect,
+  sourceQuestionId: q.sourceQuestionId || null,
+  quizId: q.quizId || null,
+  lessonId: q.lessonId || null,
+  courseId: q.courseId || null,
 });
 
 async function loadTodayChallenge(studentId, today) {
@@ -417,6 +430,42 @@ router.get('/result/:attemptId', authenticateToken, isStudent, async (req, res) 
   } catch (error) {
     console.error('Daily challenge result error:', error);
     res.status(500).json({ success: false, error: 'Failed to fetch attempt: ' + error.message });
+  }
+});
+
+/**
+ * POST /api/daily-challenge/review-complete
+ * Called once a student finishes a "Review Mistakes" session (Challenge 2 on
+ * the Daily tab). That flow runs entirely on the client's locally-tracked
+ * wrong answers — there's no server-side record of it the way the real Daily
+ * Challenge has — so this is the only signal the server gets: it grants the
+ * one-time "Mistake Buster" badge and the flat XP the card promises
+ * ("+25 XP • Badge +1"). XP is awarded every completed session (like a
+ * Daily Challenge retake), not just the first — only the badge is one-time.
+ */
+router.post('/review-complete', authenticateToken, isStudent, async (req, res) => {
+  try {
+    const studentId = req.user.userId;
+    const { data: existing } = await supabase
+      .from('achievements')
+      .select('id')
+      .eq('student_id', studentId)
+      .eq('badge_code', 'mistake_buster')
+      .maybeSingle();
+
+    const badgeAwarded = !existing;
+    if (badgeAwarded) await grantBadge(studentId, 'mistake_buster');
+
+    const xpAwarded = XP_VALUES.MISTAKE_REVIEW_COMPLETE;
+    await awardXp(studentId, xpAwarded, 'mistake_review');
+
+    res.json({
+      success: true,
+      data: { badge_awarded: badgeAwarded, badge_code: 'mistake_buster', xp_awarded: xpAwarded },
+    });
+  } catch (error) {
+    console.error('Review-complete error:', error);
+    res.status(500).json({ success: false, error: 'Failed to record review completion: ' + error.message });
   }
 });
 

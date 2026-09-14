@@ -1401,6 +1401,37 @@ router.post('/:id/check', optionalAuth, async (req, res) => {
 });
 
 /**
+ * GET /api/quizzes/:id/question/:questionId   (Student)
+ * One specific question, by id — used by the Review Mistakes flow to
+ * re-fetch a question the student previously answered wrong, correct answer
+ * and explanation included (the whole point of reviewing a mistake).
+ *
+ * Deliberately does NOT go through GET /:id — that endpoint hands a student
+ * a random draw of QUIZ_TAKE_SIZE questions from the bank, varying every
+ * call, so it can't reliably be used to find one already-known question
+ * back again once the bank is bigger than that draw size.
+ */
+router.get('/:id/question/:questionId', authenticateToken, isStudent, async (req, res) => {
+  try {
+    const { id, questionId } = req.params;
+    const { data: question, error } = await supabase
+      .from('quiz_questions')
+      .select('*')
+      .eq('id', questionId)
+      .eq('quiz_id', id)
+      .maybeSingle();
+    if (error || !question) {
+      return res.status(404).json({ success: false, error: 'Question not found in this quiz' });
+    }
+    const options = typeof question.options === 'string' ? JSON.parse(question.options) : question.options;
+    res.json({ success: true, data: { question: { ...question, options } } });
+  } catch (error) {
+    console.error('Quiz question fetch error:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch question: ' + error.message });
+  }
+});
+
+/**
  * POST /api/quizzes/:id/submit
  * Submit quiz answers (Student)
  */
