@@ -1273,13 +1273,23 @@ router.get('/:id', optionalAuth, async (req, res) => {
       const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
       const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
       const from = (page - 1) * limit;
+      const searchTerm = String(req.query.q || '').trim();
 
-      const { data: questions, count, error: qError } = await supabase
+      let questionQuery = supabase
         .from('quiz_questions')
         .select('*', { count: 'exact' })
         .eq('quiz_id', id)
-        .order('order_number', { ascending: true })
-        .range(from, from + limit - 1);
+        .order('order_number', { ascending: true });
+
+      // Search mode: return every matching question (by prompt text) so the
+      // client can compute which page each one lives on and jump there —
+      // not paginated itself, just capped, since a match list is normally
+      // small even in a large bank.
+      questionQuery = searchTerm
+        ? questionQuery.ilike('question', `%${searchTerm}%`).limit(50)
+        : questionQuery.range(from, from + limit - 1);
+
+      const { data: questions, count, error: qError } = await questionQuery;
       if (qError) throw qError;
 
       const questionsWithParsedOptions = (questions || []).map(q => ({
@@ -1295,7 +1305,9 @@ router.get('/:id', optionalAuth, async (req, res) => {
             questions: questionsWithParsedOptions,
             total_questions: count || 0,
             bank_size: count || 0,
-            pagination: { page, limit, total: count || 0, total_pages: Math.ceil((count || 0) / limit) }
+            ...(searchTerm
+              ? { search: { query: searchTerm, count: questionsWithParsedOptions.length } }
+              : { pagination: { page, limit, total: count || 0, total_pages: Math.ceil((count || 0) / limit) } })
           }
         }
       });
