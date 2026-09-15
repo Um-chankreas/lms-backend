@@ -31,6 +31,44 @@ function pickRandom(arr, n) {
   return picked;
 }
 
+// Pasted math symbols → the LaTeX command word a teacher would actually type
+// / that already sits in the stored $\sqrt{…}$ source, so a search using the
+// symbol still matches. Same set as the MathInput quick-insert toolbar.
+const SEARCH_SYMBOL_WORDS = {
+  '√': 'sqrt', '×': 'times', '÷': 'div', '±': 'pm', 'π': 'pi',
+  '≤': 'le', '≥': 'ge', '∞': 'infty', '≠': 'neq', '≈': 'approx',
+};
+
+// Turns a "normal text" search term — plain prose, or math typed loosely
+// ("sqrt(-4)", "sqrt -4", "√-4") — into the alphanumeric tokens it should
+// match, so it finds a prompt stored as LaTeX ("$\sqrt{-4}$") without the
+// teacher needing to type backslashes / braces / `$` themselves. Kept
+// together: letters (\p{L}), digits (\p{N}), AND combining marks (\p{M}) —
+// Khmer (and other scripts) build a syllable out of a base letter plus
+// dependent vowel/subscript marks that Unicode itself doesn't classify as
+// "letters", so without \p{M} a single Khmer word gets shredded into
+// fragments at every diacritic instead of splitting only on real
+// spaces/punctuation.
+function tokenizeSearchTerm(term) {
+  let t = term;
+  for (const [sym, word] of Object.entries(SEARCH_SYMBOL_WORDS)) t = t.split(sym).join(` ${word} `);
+  return t.split(/[^\p{L}\p{N}\p{M}]+/u).filter(Boolean);
+}
+
+// Escape ILIKE's own special characters (its default escape char IS
+// backslash, and LaTeX is full of them: \sqrt, \frac, …) so a literal
+// backslash / % / _ in a pattern piece is matched literally.
+const likeEscape = (s) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
+
+// Builds an ILIKE pattern requiring each token to appear, in order, anywhere
+// in the text — so any punctuation/LaTeX markup between them (backslashes,
+// braces, `$`, parentheses, extra spaces) is simply skipped over.
+function toSearchPattern(term) {
+  const tokens = tokenizeSearchTerm(term);
+  if (tokens.length === 0) return `%${likeEscape(term)}%`; // pure punctuation/symbols with no mapping — fall back to a plain substring
+  return `%${tokens.map(likeEscape).join('%')}%`;
+}
+
 // A unit/lesson quiz question bank can hold more than this (e.g. the CSV
 // import gives every unit 6); a student only ever takes a random draw of
 // this many per attempt. Teachers still see the full bank when building it.
@@ -1281,12 +1319,16 @@ router.get('/:id', optionalAuth, async (req, res) => {
         .eq('quiz_id', id)
         .order('order_number', { ascending: true });
 
-      // Search mode: return every matching question (by prompt text) so the
-      // client can compute which page each one lives on and jump there —
-      // not paginated itself, just capped, since a match list is normally
-      // small even in a large bank.
+      // Search mode: return every matching question (by prompt text — Khmer
+      // prose and the raw LaTeX/math both live in the same column, so a
+      // search matches either) so the client can compute which page each one
+      // lives on and jump there — not paginated itself, just capped, since a
+      // match list is normally small even in a large bank. The term is
+      // tokenized (see toSearchPattern) so plain text like "sqrt(-4)" or
+      // "sqrt -4" still finds a prompt stored as "$\sqrt{-4}$" — the teacher
+      // doesn't have to type the LaTeX punctuation themselves.
       questionQuery = searchTerm
-        ? questionQuery.ilike('question', `%${searchTerm}%`).limit(50)
+        ? questionQuery.ilike('question', toSearchPattern(searchTerm)).limit(50)
         : questionQuery.range(from, from + limit - 1);
 
       const { data: questions, count, error: qError } = await questionQuery;
