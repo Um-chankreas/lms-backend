@@ -178,4 +178,50 @@ async function notifyQuizComplete(studentId, quizId, score, {
   }
 }
 
-module.exports = { notifyLessonComplete, notifyQuizComplete };
+/**
+ * A teacher published an assignment (file or quiz-type) — draft saves never
+ * reach here. Every student enrolled in the assignment's course gets one
+ * notification — this is a class-wide announcement, not a friend-activity
+ * fan-out, so it skips coursePeers/notification_style entirely.
+ */
+async function notifyAssignmentPublished(assignmentId) {
+  try {
+    const { data: assignment } = await supabase
+      .from('assignments')
+      .select('id, title, due_date, type, course_id, courses(title)')
+      .eq('id', assignmentId)
+      .maybeSingle();
+    if (!assignment) return;
+
+    const { data: enrollments } = await supabase
+      .from('course_enrollments')
+      .select('student_id')
+      .eq('course_id', assignment.course_id);
+    const studentIds = [...new Set((enrollments || []).map(e => e.student_id))];
+    if (studentIds.length === 0) return;
+
+    const dueText = assignment.due_date
+      ? `Due ${new Date(assignment.due_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
+      : 'No due date';
+    const kind = assignment.type === 'quiz' ? 'quiz' : 'assignment';
+
+    await createNotifications(studentIds.map(uid => ({
+      user_id: uid,
+      type: 'assignment_new',
+      title: `📄 New ${kind}: ${assignment.title}`,
+      body: `${assignment.courses?.title || 'Your course'} · ${dueText}`,
+      data: {
+        assignment_id: assignment.id,
+        assignment_title: assignment.title,
+        course_id: assignment.course_id,
+        course_title: assignment.courses?.title || null,
+        assignment_type: assignment.type,
+        due_date: assignment.due_date,
+      },
+    })));
+  } catch (e) {
+    console.warn('notifyAssignmentPublished failed:', e.message);
+  }
+}
+
+module.exports = { notifyLessonComplete, notifyQuizComplete, notifyAssignmentPublished };
