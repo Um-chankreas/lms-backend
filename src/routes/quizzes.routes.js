@@ -1638,10 +1638,18 @@ router.post('/:id/submit', optionalAuth, async (req, res) => {
     // counts as an active day.
     const streak = passed ? await recordActivity(req.user.userId) : null;
 
-    const [{ data: userXpRow }, { data: lessonRow }] = await Promise.all([
+    const [{ data: userXpRow }, { data: lessonRow }, { data: unitRow }] = await Promise.all([
       supabase.from('users').select('xp').eq('id', req.user.userId).single(),
       quiz.lesson_id
         ? supabase.from('lessons').select('title, order_number').eq('id', quiz.lesson_id).maybeSingle()
+        : Promise.resolve({ data: null }),
+      // Set for a unit's own practice quiz, null for the chapter's
+      // end-of-lesson quiz — lets the quiz-complete screen show which unit
+      // this was, alongside the chapter, instead of a numbered "Chapter N"
+      // (order_number isn't a reliable position — some courses have every
+      // lesson sharing order_number 0, which showed as "Chapter 0").
+      quiz.unit_id
+        ? supabase.from('lesson_units').select('title').eq('id', quiz.unit_id).maybeSingle()
         : Promise.resolve({ data: null }),
     ]);
 
@@ -1663,7 +1671,7 @@ router.post('/:id/submit', optionalAuth, async (req, res) => {
         context: {
           course_title: quiz.courses?.title || null,
           chapter_title: lessonRow?.title || null,
-          chapter_number: lessonRow?.order_number ?? null,
+          unit_title: unitRow?.title || null,
         },
       }
     });
