@@ -29,7 +29,7 @@ const csvUpload = multer({
  */
 router.post('/', authenticateToken, isTeacher, async (req, res) => {
   try {
-    const { course_id, title, description, due_date, type, status } = req.body;
+    const { course_id, title, description, due_date, type, status, points } = req.body;
 
     if (!course_id || !title) {
       return res.status(400).json({
@@ -37,6 +37,8 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
         error: 'Course ID and title are required'
       });
     }
+
+    const pointsValue = Number.isFinite(Number(points)) && Number(points) > 0 ? Math.round(Number(points)) : 100;
 
     // Verify course ownership
     const { data: course } = await supabase
@@ -67,6 +69,7 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
         description: description || '',
         due_date: due_date || null,
         type: type === 'quiz' ? 'quiz' : 'file',
+        points: pointsValue,
         status: isPublished ? 'published' : 'draft',
         published_at: isPublished ? new Date() : null,
         created_at: new Date()
@@ -120,15 +123,19 @@ router.put('/:id', authenticateToken, isTeacher, async (req, res) => {
     const { error: ownError, assignment } = await loadOwnedAssignment(id, req.user.userId);
     if (ownError) return res.status(ownError.status).json({ success: false, error: ownError.message });
 
-    const { title, description, due_date, status } = req.body;
+    const { title, description, due_date, status, points } = req.body;
     if (title !== undefined && !String(title).trim()) {
       return res.status(400).json({ success: false, error: 'Title is required' });
+    }
+    if (points !== undefined && !(Number.isFinite(Number(points)) && Number(points) > 0)) {
+      return res.status(400).json({ success: false, error: 'points must be a positive number' });
     }
 
     const updatePayload = {};
     if (title !== undefined) updatePayload.title = String(title).trim();
     if (description !== undefined) updatePayload.description = description || '';
     if (due_date !== undefined) updatePayload.due_date = due_date || null;
+    if (points !== undefined) updatePayload.points = Math.round(Number(points));
 
     const isPublishing = status === 'published' && assignment.status !== 'published';
     if (isPublishing) {
@@ -545,10 +552,12 @@ router.get('/:id', authenticateToken, async (req, res) => {
       submissions = (subs || []).map(s => ({ ...s, file_url: resolveFileUrl(s.file_url) }));
     }
 
-    // Quiz-type only: the question bank (answer key stripped for students,
-    // same pattern GET /api/quizzes/:id uses) and, for the teacher, a full
-    // roster — every enrolled student, not just the ones who've already
-    // submitted (which is all `submissions` above can ever show).
+    // Quiz-type only: the question bank — answer key stripped for a student
+    // who hasn't submitted yet (same pattern GET /api/quizzes/:id uses), but
+    // revealed once they have, so the detail screen can mark right/wrong —
+    // and, for the teacher, a full roster — every enrolled student, not just
+    // the ones who've already submitted (which is all `submissions` above
+    // can ever show).
     let questions;
     let roster;
     if (assignment.type === 'quiz') {
@@ -558,7 +567,8 @@ router.get('/:id', authenticateToken, async (req, res) => {
         .eq('assignment_id', id)
         .order('order_number', { ascending: true });
 
-      questions = req.user.role === 'teacher'
+      const revealAnswerKey = req.user.role === 'teacher' || submissions.length > 0;
+      questions = revealAnswerKey
         ? (qs || [])
         : (qs || []).map(({ correct_answer, explanation, ...safe }) => safe);
 
@@ -626,21 +636,23 @@ router.post('/:id/submit', authenticateToken, upload.single('file'), async (req,
         return res.status(400).json({ success: false, error: 'Answers are required' });
       }
 
-      // Resubmission is allowed (and rescored) freely up to the deadline;
-      // past it, the assignment locks for everyone — no new or changed
-      // submissions, matching the file-type flow's own on-time cutoff idea
-      // but enforced as a hard stop here since scoring is automatic.
-      const isPastDue = assignment.due_date && new Date() > new Date(assignment.due_date);
-      if (isPastDue) {
-        return res.status(409).json({ success: false, error: 'The deadline for this assignment has passed' });
-      }
-
+      // One submission per student, final — no resubmission, before or
+      // after the deadline. The mobile UI locks the options the moment a
+      // submission exists, so this is the server-side backstop.
       const { data: existing } = await supabase
         .from('assignment_submissions')
         .select('id')
         .eq('assignment_id', id)
         .eq('student_id', req.user.userId)
         .maybeSingle();
+      if (existing) {
+        return res.status(409).json({ success: false, error: 'You have already submitted this assignment' });
+      }
+
+      const isPastDue = assignment.due_date && new Date() > new Date(assignment.due_date);
+      if (isPastDue) {
+        return res.status(409).json({ success: false, error: 'The deadline for this assignment has passed' });
+      }
 
       const { data: questions } = await supabase
         .from('assignment_questions')
@@ -654,46 +666,28 @@ router.post('/:id/submit', authenticateToken, upload.single('file'), async (req,
       // grade mirrors score so the existing manual-grade display/edit path
       // (PUT .../submissions/:id/grade) keeps working unchanged — a teacher
       // can still override it or add feedback on top of the auto-score.
-      const patch = { answers, score, grade: score, submitted_at: new Date() };
+      const { data: submission, error: insertError } = await supabase
+        .from('assignment_submissions')
+        .insert({
+          id: uuidv4(),
+          assignment_id: id,
+          student_id: req.user.userId,
+          submission_text: '',
+          file_url: null,
+          feedback: null,
+          answers,
+          score,
+          grade: score,
+          submitted_at: new Date(),
+        })
+        .select()
+        .single();
+      if (insertError) throw insertError;
 
-      let submission;
-      if (existing) {
-        const { data, error } = await supabase
-          .from('assignment_submissions')
-          .update(patch)
-          .eq('id', existing.id)
-          .select()
-          .single();
-        if (error) throw error;
-        submission = data;
-      } else {
-        const { data, error } = await supabase
-          .from('assignment_submissions')
-          .insert({
-            id: uuidv4(),
-            assignment_id: id,
-            student_id: req.user.userId,
-            submission_text: '',
-            file_url: null,
-            feedback: null,
-            ...patch,
-          })
-          .select()
-          .single();
-        if (error) throw error;
-        submission = data;
-      }
-
-      // XP on the FIRST submission only — same guard the file-type flow
-      // uses below, not the quiz system's separate first-*pass* guard: an
-      // assignment is credited once, not retried-until-passed for XP.
-      let xpAwarded = 0;
-      if (!existing) {
-        const onTime = !assignment.due_date || new Date() <= new Date(assignment.due_date);
-        xpAwarded = onTime ? XP_VALUES.ASSIGNMENT_ONTIME : XP_VALUES.ASSIGNMENT_LATE;
-        await awardXp(req.user.userId, xpAwarded, onTime ? 'assignment_ontime' : 'assignment_late', assignment.course_id || null);
-        await evaluateAchievements(req.user.userId);
-      }
+      const onTime = !assignment.due_date || new Date() <= new Date(assignment.due_date);
+      const xpAwarded = onTime ? XP_VALUES.ASSIGNMENT_ONTIME : XP_VALUES.ASSIGNMENT_LATE;
+      await awardXp(req.user.userId, xpAwarded, onTime ? 'assignment_ontime' : 'assignment_late', assignment.course_id || null);
+      await evaluateAchievements(req.user.userId);
 
       return res.status(201).json({
         success: true,

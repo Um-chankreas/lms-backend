@@ -1,6 +1,7 @@
 const supabase = require('../config/supabase');
 const { createNotification, createNotifications, coursePeers } = require('./notifications');
 const { friendNotification } = require('./notificationTemplates');
+const { XP_VALUES } = require('./xp');
 
 // Best-effort wrappers — a notification failure must never break the action
 // that triggered it. Every export is safe to `await` (or fire-and-forget).
@@ -202,14 +203,19 @@ async function notifyAssignmentPublished(assignmentId) {
 
     const dueText = assignment.due_date
       ? `Due ${new Date(assignment.due_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
-      : 'No due date';
-    const kind = assignment.type === 'quiz' ? 'quiz' : 'assignment';
+      : null;
+    const courseTitle = assignment.courses?.title || 'Your course';
 
+    // "📚 New Assignment Unlocked! History 101: "Causes of War" · Due Sep 25
+    // · Earn 75+ XP!" — the title stays generic/catchy; the body carries the
+    // specifics. XP is the on-time reward (the best case) even though a late
+    // submission earns less — same flourish-over-precision call as showing
+    // the up-front number at all before anyone's submitted.
     await createNotifications(studentIds.map(uid => ({
       user_id: uid,
       type: 'assignment_new',
-      title: `📄 New ${kind}: ${assignment.title}`,
-      body: `${assignment.courses?.title || 'Your course'} · ${dueText}`,
+      title: '📚 New Assignment Unlocked!',
+      body: `${courseTitle}: "${assignment.title}"${dueText ? ` · ${dueText}` : ''} · Earn ${XP_VALUES.ASSIGNMENT_ONTIME}+ XP!`,
       data: {
         assignment_id: assignment.id,
         assignment_title: assignment.title,
