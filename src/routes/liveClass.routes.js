@@ -6,8 +6,7 @@ const { authenticateToken, isTeacher } = require('../middleware/auth');
 const { hasActiveSubscription } = require('../utils/access');
 const { awardXp, XP_VALUES } = require('../utils/xp');
 const { evaluateAchievements } = require('../utils/achievements');
-const { generateAgoraToken, appId } = require('../utils/agoraToken');
-const { generateAgoraUid } = require('../utils/agoraUid');
+const { generateAuthToken, createHmsRoom, changeActivePeerRole } = require('../utils/hmsToken');
 const {
   getStage,
   emitStageChanged,
@@ -21,7 +20,7 @@ const {
 const { v4: uuidv4 } = require('uuid');
 
 // Mobile deep link the app opens to jump straight into a live class screen.
-// The app still has to call POST /:id/token to get the Agora credentials.
+// The app still has to call POST /:id/token to get the 100ms credentials.
 const JOIN_URL_BASE = (process.env.LIVE_CLASS_JOIN_URL_BASE || 'lms://live-class').replace(/\/$/, '');
 const joinUrlFor = (liveClassId) => `${JOIN_URL_BASE}/${liveClassId}`;
 
@@ -65,10 +64,10 @@ async function resolveLiveClassAccess(liveClass, user) {
     return subscribed
       ? { allowed: true, role: 'student' }
       : {
-          allowed: false,
-          code: 'payment_required',
-          reason: 'A weekly subscription is required to join live classes'
-        };
+        allowed: false,
+        code: 'payment_required',
+        reason: 'A weekly subscription is required to join live classes'
+      };
   }
 
   return { allowed: false, reason: 'Not allowed' };
@@ -103,9 +102,12 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
       });
     }
 
-    // Generate unique channel name
+    // Generate a unique label and create the matching 100ms room up front —
+    // a live class always has a room to join by the time anyone requests a
+    // token, whether or not it's started yet.
     const classId = uuidv4();
     const channelName = `class_${classId}`;
+    const hmsRoom = await createHmsRoom(channelName);
 
     const { data: newClass, error } = await supabase
       .from('live_classes')
@@ -116,6 +118,7 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
         title,
         description: description || '',
         channel_name: channelName,
+        hms_room_id: hmsRoom.id,
         status: 'scheduled',
         scheduled_at: scheduled_at || new Date(),
         created_at: new Date()
@@ -129,8 +132,7 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
       success: true,
       message: 'Live class created successfully',
       data: {
-        liveClass: { ...newClass, join_url: joinUrlFor(newClass.id) },
-        appId: appId
+        liveClass: { ...newClass, join_url: joinUrlFor(newClass.id) }
       }
     });
   } catch (error) {
@@ -371,7 +373,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
 
 /**
  * POST /api/live-classes/:id/token
- * Get Agora token for joining a live class.
+ * Get a 100ms token for joining a live class.
  * Teacher (owner) or an enrolled student only. Students can only join an
  * "active" class.
  */
@@ -406,8 +408,9 @@ router.post('/:id/token', authenticateToken, async (req, res) => {
       });
     }
 
-    // A student who is "speaking" joins as a co-host: publisher token so they
-    // can turn on mic/camera in the same channel. No teacher approval needed.
+    // A student who is "speaking" joins as a co-host: their token carries the
+    // co-host role (publish audio) instead of the audience-only student role.
+    // No teacher approval needed.
     let rtcRole = access.role; // 'teacher' | 'student'
     if (rtcRole === 'student') {
       const { data: hand } = await supabase
@@ -419,15 +422,12 @@ router.post('/:id/token', authenticateToken, async (req, res) => {
       if (hand?.status === 'speaking') rtcRole = 'co_host';
     }
 
-    const numericUid = generateAgoraUid(req.user.userId);
-
-    // generateAgoraToken maps 'teacher' -> PUBLISHER, anything else ->
-    // SUBSCRIBER; pass 'teacher' for a co-host so they get a publisher token.
-    const token = generateAgoraToken(
-      liveClass.channel_name,
-      numericUid,
-      rtcRole === 'student' ? 'student' : 'teacher'
-    );
+    const hmsRole = rtcRole === 'teacher' ? 'teacher' : rtcRole === 'co_host' ? 'co-host' : 'student';
+    const token = generateAuthToken({
+      roomId: liveClass.hms_room_id,
+      userId: req.user.userId,
+      role: hmsRole,
+    });
 
     // Record the participant, reusing an existing open row so repeated
     // "join" calls (reconnects, app relaunch) don't pile up duplicates.
@@ -478,9 +478,7 @@ router.post('/:id/token', authenticateToken, async (req, res) => {
       success: true,
       data: {
         token,
-        channel: liveClass.channel_name,
-        appId: appId,
-        uid: numericUid,
+        room_id: liveClass.hms_room_id,
         role: rtcRole, // 'teacher' | 'student' | 'co_host'
         liveClass: {
           id: liveClass.id,
@@ -731,6 +729,10 @@ router.post('/:id/hand', authenticateToken, async (req, res) => {
       const { data: me } = await supabase
         .from('users').select('name').eq('id', req.user.userId).single();
       emitHandRaised(id, req.user.userId, me?.name || 'Student');
+    } else {
+      // "speak" -> push the co-host role straight to their live 100ms peer —
+      // no client-side re-token/renegotiation needed.
+      await changeActivePeerRole({ roomId: liveClass.hms_room_id, userId: req.user.userId, role: 'co-host' });
     }
     emitHandUpdate(id, req.user.userId, status);
     await emitStageChanged(id);
@@ -749,7 +751,7 @@ router.post('/:id/hand', authenticateToken, async (req, res) => {
 router.delete('/:id/hand', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { error } = await loadClassWithAccess(id, req.user);
+    const { liveClass, error } = await loadClassWithAccess(id, req.user);
     if (error) return res.status(error.status).json({ success: false, error: error.message, code: error.code });
 
     const prev = await readStatus(id, req.user.userId);
@@ -763,6 +765,7 @@ router.delete('/:id/hand', authenticateToken, async (req, res) => {
     if (delError) throw delError;
 
     if (prev === 'raised') emitHandLowered(id, req.user.userId);
+    else if (prev === 'speaking') await changeActivePeerRole({ roomId: liveClass.hms_room_id, userId: req.user.userId, role: 'student' });
     emitHandUpdate(id, req.user.userId, 'none');
     await emitStageChanged(id);
 
@@ -815,7 +818,7 @@ router.get('/:id/stage', authenticateToken, async (req, res) => {
 router.post('/:id/speakers/:userId/invite', authenticateToken, async (req, res) => {
   try {
     const { id, userId } = req.params;
-    const { access, error } = await loadClassWithAccess(id, req.user);
+    const { liveClass, access, error } = await loadClassWithAccess(id, req.user);
     if (error) return res.status(error.status).json({ success: false, error: error.message, code: error.code });
     if (access.role !== 'teacher') {
       return res.status(403).json({ success: false, error: 'Teacher only' });
@@ -832,6 +835,7 @@ router.post('/:id/speakers/:userId/invite', authenticateToken, async (req, res) 
 
     if (upsertError) throw upsertError;
 
+    await changeActivePeerRole({ roomId: liveClass.hms_room_id, userId, role: 'co-host' });
     emitHandUpdate(id, userId, 'speaking');
     await emitStageChanged(id);
 
@@ -874,7 +878,7 @@ router.post('/:id/speakers/:userId/mute', authenticateToken, async (req, res) =>
 async function removeSpeaker(req, res) {
   try {
     const { id, userId } = req.params;
-    const { access, error } = await loadClassWithAccess(id, req.user);
+    const { liveClass, access, error } = await loadClassWithAccess(id, req.user);
     if (error) return res.status(error.status).json({ success: false, error: error.message, code: error.code });
     if (access.role !== 'teacher') {
       return res.status(403).json({ success: false, error: 'Teacher only' });
@@ -891,6 +895,7 @@ async function removeSpeaker(req, res) {
     if (delErr) throw delErr;
 
     if (prev === 'raised') emitHandLowered(id, userId);
+    else if (prev === 'speaking') await changeActivePeerRole({ roomId: liveClass.hms_room_id, userId, role: 'student' });
     emitHandUpdate(id, userId, 'none');
     await emitStageChanged(id);
 

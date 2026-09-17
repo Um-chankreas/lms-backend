@@ -1,7 +1,6 @@
 const { Server } = require('socket.io');
 const supabase = require('../config/supabase');
 const { verifyToken } = require('../utils/jwt');
-const { generateAgoraUid } = require('../utils/agoraUid');
 
 /**
  * Realtime layer for live classes (Google-Meet-style). No approval / request
@@ -34,8 +33,8 @@ const { generateAgoraUid } = require('../utils/agoraUid');
  *   "speaker:mute"         { liveClassId, user_id }                       -> lc:<id>:u:<userId>  (teacher asked you to mute; not strict)
  *   "class:status"         { liveClassId, status }                       -> lc:<id>
  *
- * participants[] items:            { user_id, name, avatar_url, agora_uid, role, joined_at, speaking, hand_raised }
- * speakers[] / raised_hands[] items: { user_id, name, avatar_url, agora_uid }
+ * participants[] items:            { user_id, name, avatar_url, role, joined_at, speaking, hand_raised }
+ * speakers[] / raised_hands[] items: { user_id, name, avatar_url }
  */
 
 let io = null;
@@ -109,7 +108,6 @@ async function getStage(liveClassId) {
     user_id: r.user_id,
     name: r.users?.name || 'Student',
     avatar_url: r.users?.avatar_url || null,
-    agora_uid: generateAgoraUid(r.user_id)
   });
 
   return {
@@ -146,7 +144,6 @@ async function getParticipants(liveClassId) {
       user_id: p.user_id,
       name: p.users?.name || 'Student',
       avatar_url: p.users?.avatar_url || null,
-      agora_uid: generateAgoraUid(p.user_id),
       role: p.role,
       joined_at: p.joined_at,
       speaking: speaking.has(p.user_id),
