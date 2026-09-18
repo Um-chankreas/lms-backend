@@ -32,6 +32,7 @@ const { verifyToken } = require('../utils/jwt');
  *   "hand:update"          { liveClassId, status }                        -> lc:<id>:u:<userId>  ('none'|'raised'|'speaking')
  *   "speaker:mute"         { liveClassId, user_id }                       -> lc:<id>:u:<userId>  (teacher asked you to mute; not strict)
  *   "class:status"         { liveClassId, status }                       -> lc:<id>
+ *   "recording:status"     { liveClassId, status }                       -> lc:<id>  ('recording'|'processing'|'ready'|'failed')
  *
  * participants[] items:            { user_id, name, avatar_url, role, joined_at, speaking, hand_raised }
  * speakers[] / raised_hands[] items: { user_id, name, avatar_url }
@@ -323,6 +324,12 @@ function emitClassStatus(liveClassId, status) {
   io.to(roomAll(liveClassId)).emit('class:status', { liveClassId, status });
 }
 
+/** Lets everyone in the call see the teacher started/stopped/finished recording. */
+function emitRecordingStatus(liveClassId, status) {
+  if (!io) return;
+  io.to(roomAll(liveClassId)).emit('recording:status', { liveClassId, status });
+}
+
 module.exports = {
   initLiveClassRealtime,
   getStage,
@@ -333,5 +340,6 @@ module.exports = {
   emitHandLowered,
   emitHandUpdate,
   emitForceMute,
-  emitClassStatus
+  emitClassStatus,
+  emitRecordingStatus
 };

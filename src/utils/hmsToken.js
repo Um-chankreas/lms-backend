@@ -73,8 +73,12 @@ async function createHmsRoom(name) {
  */
 async function changeActivePeerRole({ roomId, userId, role }) {
   try {
+    // /active-rooms/:room_id/peers returns `peers` as an OBJECT keyed by
+    // peer id (not an array), and each peer's app-side id is `user_id` (not
+    // `customer_user_id` — that's the client SDK's own field name for the
+    // same value).
     const { peers } = await hmsFetch(`/active-rooms/${roomId}/peers`);
-    const peer = (peers || []).find((p) => p.customer_user_id === userId);
+    const peer = Object.values(peers || {}).find((p) => p.user_id === userId);
     if (!peer) return false;
     await hmsFetch(`/active-rooms/${roomId}/peers/${peer.id}`, {
       method: 'POST',
@@ -87,4 +91,35 @@ async function changeActivePeerRole({ roomId, userId, role }) {
   }
 }
 
-module.exports = { generateManagementToken, generateAuthToken, createHmsRoom, changeActivePeerRole };
+/** Starts a room-composite recording job for a live class's 100ms room. */
+async function startRoomRecording(roomId) {
+  return hmsFetch(`/recordings/room/${roomId}/start`, { method: 'POST', body: JSON.stringify({}) });
+}
+
+/** Stops whatever recording job is active for the room. */
+async function stopRoomRecording(roomId) {
+  return hmsFetch(`/recordings/room/${roomId}/stop`, { method: 'POST' });
+}
+
+/**
+ * Fallback for POST /:id/recording/save: if the presigned URL we stored from
+ * the webhook has since expired (default validity ~3 days), look up the
+ * finished asset for this room and mint a fresh one.
+ */
+async function fetchLatestRecordingUrl(roomId) {
+  const { data: assets } = await hmsFetch(`/recording-assets?room_id=${roomId}&status=completed`);
+  const latest = (assets || []).sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+  if (!latest) return null;
+  const presigned = await hmsFetch(`/recording-assets/${latest.id}/presigned-url`);
+  return presigned?.url || null;
+}
+
+module.exports = {
+  generateManagementToken,
+  generateAuthToken,
+  createHmsRoom,
+  changeActivePeerRole,
+  startRoomRecording,
+  stopRoomRecording,
+  fetchLatestRecordingUrl,
+};
