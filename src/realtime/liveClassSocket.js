@@ -1,6 +1,7 @@
 const { Server } = require('socket.io');
 const supabase = require('../config/supabase');
 const { verifyToken } = require('../utils/jwt');
+const { generateAgoraUid } = require('../utils/agoraUid');
 
 /**
  * Realtime layer for live classes (Google-Meet-style). No approval / request
@@ -32,10 +33,9 @@ const { verifyToken } = require('../utils/jwt');
  *   "hand:update"          { liveClassId, status }                        -> lc:<id>:u:<userId>  ('none'|'raised'|'speaking')
  *   "speaker:mute"         { liveClassId, user_id }                       -> lc:<id>:u:<userId>  (teacher asked you to mute; not strict)
  *   "class:status"         { liveClassId, status }                       -> lc:<id>
- *   "recording:status"     { liveClassId, status }                       -> lc:<id>  ('recording'|'processing'|'ready'|'failed')
  *
- * participants[] items:            { user_id, name, avatar_url, role, joined_at, speaking, hand_raised }
- * speakers[] / raised_hands[] items: { user_id, name, avatar_url }
+ * participants[] items:            { user_id, agora_uid, name, avatar_url, role, joined_at, speaking, hand_raised }
+ * speakers[] / raised_hands[] items: { user_id, agora_uid, name, avatar_url }
  */
 
 let io = null;
@@ -107,6 +107,7 @@ async function getStage(liveClassId) {
 
   const map = (r) => ({
     user_id: r.user_id,
+    agora_uid: generateAgoraUid(r.user_id),
     name: r.users?.name || 'Student',
     avatar_url: r.users?.avatar_url || null,
   });
@@ -143,6 +144,7 @@ async function getParticipants(liveClassId) {
     seen.add(p.user_id);
     out.push({
       user_id: p.user_id,
+      agora_uid: generateAgoraUid(p.user_id),
       name: p.users?.name || 'Student',
       avatar_url: p.users?.avatar_url || null,
       role: p.role,
@@ -324,12 +326,6 @@ function emitClassStatus(liveClassId, status) {
   io.to(roomAll(liveClassId)).emit('class:status', { liveClassId, status });
 }
 
-/** Lets everyone in the call see the teacher started/stopped/finished recording. */
-function emitRecordingStatus(liveClassId, status) {
-  if (!io) return;
-  io.to(roomAll(liveClassId)).emit('recording:status', { liveClassId, status });
-}
-
 module.exports = {
   initLiveClassRealtime,
   getStage,
@@ -340,6 +336,5 @@ module.exports = {
   emitHandLowered,
   emitHandUpdate,
   emitForceMute,
-  emitClassStatus,
-  emitRecordingStatus
+  emitClassStatus
 };

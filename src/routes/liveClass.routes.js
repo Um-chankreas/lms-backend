@@ -6,14 +6,8 @@ const { authenticateToken, isTeacher } = require('../middleware/auth');
 const { hasActiveSubscription } = require('../utils/access');
 const { awardXp, XP_VALUES } = require('../utils/xp');
 const { evaluateAchievements } = require('../utils/achievements');
-const {
-  generateAuthToken,
-  createHmsRoom,
-  changeActivePeerRole,
-  startRoomRecording,
-  stopRoomRecording,
-  fetchLatestRecordingUrl
-} = require('../utils/hmsToken');
+const { generateAgoraToken, appId } = require('../utils/agoraToken');
+const { generateAgoraUid } = require('../utils/agoraUid');
 const {
   getStage,
   emitStageChanged,
@@ -22,22 +16,14 @@ const {
   emitHandLowered,
   emitHandUpdate,
   emitClassStatus,
-  emitForceMute,
-  emitRecordingStatus
+  emitForceMute
 } = require('../realtime/liveClassSocket');
 const { v4: uuidv4 } = require('uuid');
 
 // Mobile deep link the app opens to jump straight into a live class screen.
-// The app still has to call POST /:id/token to get the 100ms credentials.
+// The app still has to call POST /:id/token to get Agora credentials.
 const JOIN_URL_BASE = (process.env.LIVE_CLASS_JOIN_URL_BASE || 'lms://live-class').replace(/\/$/, '');
 const joinUrlFor = (liveClassId) => `${JOIN_URL_BASE}/${liveClassId}`;
-
-const publicUrl = (path) =>
-  `${process.env.SUPABASE_URL}/storage/v1/object/public/course-materials/${path}`;
-
-if (!process.env.HMS_WEBHOOK_HEADER_NAME || !process.env.HMS_WEBHOOK_HEADER_VALUE) {
-  console.warn('⚠️  WARNING: HMS_WEBHOOK_HEADER_NAME/VALUE not set — POST /api/live-classes/webhooks/hms will reject every request until they are');
-}
 
 /**
  * Works out whether `user` is allowed to see / join `liveClass`:
@@ -117,12 +103,11 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
       });
     }
 
-    // Generate a unique label and create the matching 100ms room up front —
-    // a live class always has a room to join by the time anyone requests a
-    // token, whether or not it's started yet.
+    // Generate a unique Agora channel name up front — a live class always has
+    // a channel to join by the time anyone requests a token, whether or not
+    // it's started yet.
     const classId = uuidv4();
     const channelName = `class_${classId}`;
-    const hmsRoom = await createHmsRoom(channelName);
 
     const { data: newClass, error } = await supabase
       .from('live_classes')
@@ -133,7 +118,6 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
         title,
         description: description || '',
         channel_name: channelName,
-        hms_room_id: hmsRoom.id,
         status: 'scheduled',
         scheduled_at: scheduled_at || new Date(),
         created_at: new Date()
@@ -147,6 +131,7 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
       success: true,
       message: 'Live class created successfully',
       data: {
+        appId,
         liveClass: { ...newClass, join_url: joinUrlFor(newClass.id) }
       }
     });
@@ -388,7 +373,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
 
 /**
  * POST /api/live-classes/:id/token
- * Get a 100ms token for joining a live class.
+ * Get an Agora RTC token for joining a live class.
  * Teacher (owner) or an enrolled student only. Students can only join an
  * "active" class.
  */
@@ -437,12 +422,12 @@ router.post('/:id/token', authenticateToken, async (req, res) => {
       if (hand?.status === 'speaking') rtcRole = 'co_host';
     }
 
-    const hmsRole = rtcRole === 'teacher' ? 'teacher' : rtcRole === 'co_host' ? 'co-host' : 'student';
-    const token = generateAuthToken({
-      roomId: liveClass.hms_room_id,
-      userId: req.user.userId,
-      role: hmsRole,
-    });
+    const numericUid = generateAgoraUid(req.user.userId);
+    const token = generateAgoraToken(
+      liveClass.channel_name,
+      numericUid,
+      rtcRole === 'student' ? 'student' : 'teacher'
+    );
 
     // Record the participant, reusing an existing open row so repeated
     // "join" calls (reconnects, app relaunch) don't pile up duplicates.
@@ -493,7 +478,9 @@ router.post('/:id/token', authenticateToken, async (req, res) => {
       success: true,
       data: {
         token,
-        room_id: liveClass.hms_room_id,
+        appId,
+        channel: liveClass.channel_name,
+        uid: numericUid,
         role: rtcRole, // 'teacher' | 'student' | 'co_host'
         liveClass: {
           id: liveClass.id,
@@ -593,21 +580,6 @@ router.put('/:id/end', authenticateToken, isTeacher, async (req, res) => {
 
     if (error) throw error;
 
-    // A still-running recording shouldn't block ending the class — stop it
-    // best-effort and let the webhook flip it to 'ready' once 100ms finishes.
-    if (updatedClass?.recording_status === 'recording') {
-      try {
-        await stopRoomRecording(updatedClass.hms_room_id);
-        await supabase
-          .from('live_classes')
-          .update({ recording_status: 'processing', recording_stopped_at: new Date() })
-          .eq('id', id);
-        emitRecordingStatus(id, 'processing');
-      } catch (e) {
-        console.warn('Auto-stop recording on class end failed:', e.message);
-      }
-    }
-
     // Mark all participants as left
     await supabase
       .from('live_class_participants')
@@ -638,248 +610,6 @@ router.put('/:id/end', authenticateToken, isTeacher, async (req, res) => {
       error: 'Failed to end class: ' + error.message
     });
   }
-});
-
-// ============================================================================
-// Recording
-//
-// One recording per class: teacher starts it while the class is active,
-// stops it (or PUT /:id/end auto-stops it), then once 100ms's webhook marks
-// it 'ready', the teacher explicitly saves it into a course chapter — that
-// save is what re-hosts the file in our own storage permanently.
-// ============================================================================
-
-/**
- * POST /api/live-classes/:id/recording/start
- * Start recording the class (Teacher only).
- */
-router.post('/:id/recording/start', authenticateToken, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { liveClass, access, error } = await loadClassWithAccess(id, req.user);
-    if (error) return res.status(error.status).json({ success: false, error: error.message, code: error.code });
-    if (access.role !== 'teacher') {
-      return res.status(403).json({ success: false, error: 'Teacher only' });
-    }
-    if (liveClass.status !== 'active') {
-      return res.status(409).json({ success: false, error: 'Start the class before recording it' });
-    }
-    if (['recording', 'processing', 'ready'].includes(liveClass.recording_status)) {
-      return res.status(409).json({ success: false, error: 'This class already has a recording', code: 'recording_exists' });
-    }
-
-    const job = await startRoomRecording(liveClass.hms_room_id);
-
-    await supabase
-      .from('live_classes')
-      .update({
-        recording_status: 'recording',
-        recording_job_id: job.id,
-        recording_started_at: new Date(),
-        recording_stopped_at: null,
-        recording_url: null,
-        recording_duration_seconds: null
-      })
-      .eq('id', id);
-
-    emitRecordingStatus(id, 'recording');
-
-    res.json({ success: true, data: { recording_status: 'recording' } });
-  } catch (err) {
-    console.error('Start recording error:', err);
-    res.status(500).json({ success: false, error: 'Failed to start recording: ' + err.message });
-  }
-});
-
-/**
- * POST /api/live-classes/:id/recording/stop
- * Stop the active recording (Teacher only). The finished file shows up
- * asynchronously via POST /webhooks/hms once 100ms processes it.
- */
-router.post('/:id/recording/stop', authenticateToken, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { liveClass, access, error } = await loadClassWithAccess(id, req.user);
-    if (error) return res.status(error.status).json({ success: false, error: error.message, code: error.code });
-    if (access.role !== 'teacher') {
-      return res.status(403).json({ success: false, error: 'Teacher only' });
-    }
-    if (liveClass.recording_status !== 'recording') {
-      return res.status(409).json({ success: false, error: 'No active recording to stop' });
-    }
-
-    await stopRoomRecording(liveClass.hms_room_id);
-
-    await supabase
-      .from('live_classes')
-      .update({ recording_status: 'processing', recording_stopped_at: new Date() })
-      .eq('id', id);
-
-    emitRecordingStatus(id, 'processing');
-
-    res.json({ success: true, data: { recording_status: 'processing' } });
-  } catch (err) {
-    console.error('Stop recording error:', err);
-    res.status(500).json({ success: false, error: 'Failed to stop recording: ' + err.message });
-  }
-});
-
-/**
- * POST /api/live-classes/:id/recording/save
- * body: { lesson_id, title? }
- * Attach the finished recording to a course chapter as a normal lesson
- * attachment. Re-hosts the file in our own `course-materials` storage (same
- * bucket every other lesson video/attachment uses) so playback never depends
- * on 100ms's presigned URL, which expires in a few days.
- */
-router.post('/:id/recording/save', authenticateToken, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { lesson_id, title } = req.body || {};
-    if (!lesson_id) {
-      return res.status(400).json({ success: false, error: 'lesson_id is required' });
-    }
-
-    const { liveClass, access, error } = await loadClassWithAccess(id, req.user);
-    if (error) return res.status(error.status).json({ success: false, error: error.message, code: error.code });
-    if (access.role !== 'teacher') {
-      return res.status(403).json({ success: false, error: 'Teacher only' });
-    }
-    if (liveClass.recording_status !== 'ready' || !liveClass.recording_url) {
-      return res.status(409).json({ success: false, error: 'Recording is not ready to save yet' });
-    }
-
-    const { data: lesson } = await supabase
-      .from('lessons')
-      .select('id')
-      .eq('id', lesson_id)
-      .eq('course_id', liveClass.course_id)
-      .maybeSingle();
-
-    if (!lesson) {
-      return res.status(404).json({ success: false, error: 'That chapter was not found in this course' });
-    }
-
-    let fileRes = await fetch(liveClass.recording_url);
-    if (!fileRes.ok) {
-      const freshUrl = await fetchLatestRecordingUrl(liveClass.hms_room_id);
-      fileRes = freshUrl ? await fetch(freshUrl) : null;
-      if (!fileRes || !fileRes.ok) {
-        return res.status(502).json({ success: false, error: 'Recording file is no longer available' });
-      }
-    }
-
-    const buffer = Buffer.from(await fileRes.arrayBuffer());
-    const contentType = fileRes.headers.get('content-type') || 'video/mp4';
-    const path = `videos/${lesson_id}-liveclass-${id}-${Date.now()}.mp4`;
-
-    const { error: uploadError } = await supabase
-      .storage.from('course-materials')
-      .upload(path, buffer, { contentType, upsert: false });
-
-    if (uploadError) throw uploadError;
-
-    const { data: last } = await supabase
-      .from('lesson_attachments')
-      .select('order_number')
-      .eq('lesson_id', lesson_id)
-      .order('order_number', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    const { data: attachment, error: insertError } = await supabase
-      .from('lesson_attachments')
-      .insert({
-        id: uuidv4(),
-        lesson_id,
-        file_url: path,
-        title: title || liveClass.title,
-        content_type: contentType,
-        size_bytes: buffer.length,
-        order_number: (last?.order_number || 0) + 1,
-        created_at: new Date()
-      })
-      .select()
-      .single();
-
-    if (insertError) throw insertError;
-
-    await supabase
-      .from('live_classes')
-      .update({ recording_saved_lesson_id: lesson_id, recording_saved_at: new Date() })
-      .eq('id', id);
-
-    res.json({
-      success: true,
-      message: 'Recording saved to course',
-      data: {
-        lesson_id,
-        attachment: { ...attachment, file_url: publicUrl(path) }
-      }
-    });
-  } catch (err) {
-    console.error('Save recording error:', err);
-    res.status(500).json({ success: false, error: 'Failed to save recording: ' + err.message });
-  }
-});
-
-/**
- * POST /api/live-classes/webhooks/hms
- * 100ms calls this when a recording finishes (or fails). Configure a custom
- * header in the 100ms dashboard's webhook settings matching
- * HMS_WEBHOOK_HEADER_NAME/VALUE below — 100ms has no signature scheme, so
- * this shared header is the only thing standing between a real event and
- * someone forging a "recording ready" payload that points /recording/save
- * at an arbitrary URL.
- */
-router.post('/webhooks/hms', async (req, res) => {
-  const expectedName = process.env.HMS_WEBHOOK_HEADER_NAME;
-  const expectedValue = process.env.HMS_WEBHOOK_HEADER_VALUE;
-  const gotValue = expectedName && req.headers[expectedName.toLowerCase()];
-
-  if (!expectedName || !expectedValue || gotValue !== expectedValue) {
-    return res.status(401).json({ success: false, error: 'Invalid webhook credentials' });
-  }
-
-  try {
-    const { type, data } = req.body || {};
-    const roomId = data?.room_id;
-
-    if (roomId && type === 'beam.recording.success') {
-      const { data: matched } = await supabase
-        .from('live_classes')
-        .select('id, recording_status')
-        .eq('hms_room_id', roomId)
-        .maybeSingle();
-
-      if (matched && matched.recording_status === 'processing') {
-        await supabase
-          .from('live_classes')
-          .update({
-            recording_status: 'ready',
-            recording_url: data.recording_presigned_url || null,
-            recording_duration_seconds: data.duration || null
-          })
-          .eq('id', matched.id);
-        emitRecordingStatus(matched.id, 'ready');
-      }
-    } else if (roomId && (type === 'recording.failed' || /\.recording\.failure$/.test(type || ''))) {
-      const { data: matched } = await supabase
-        .from('live_classes')
-        .select('id')
-        .eq('hms_room_id', roomId)
-        .maybeSingle();
-
-      if (matched) {
-        await supabase.from('live_classes').update({ recording_status: 'failed' }).eq('id', matched.id);
-        emitRecordingStatus(matched.id, 'failed');
-      }
-    }
-  } catch (err) {
-    console.error('HMS webhook error:', err);
-  }
-
-  res.json({ received: true });
 });
 
 /**
@@ -1001,11 +731,9 @@ router.post('/:id/hand', authenticateToken, async (req, res) => {
       const { data: me } = await supabase
         .from('users').select('name').eq('id', req.user.userId).single();
       emitHandRaised(id, req.user.userId, me?.name || 'Student');
-    } else {
-      // "speak" -> push the co-host role straight to their live 100ms peer —
-      // no client-side re-token/renegotiation needed.
-      await changeActivePeerRole({ roomId: liveClass.hms_room_id, userId: req.user.userId, role: 'co-host' });
     }
+    // "speak" -> the client calls POST /:id/token again to get a fresh
+    // co-host-shaped Agora token and re-joins with publish rights.
     emitHandUpdate(id, req.user.userId, status);
     await emitStageChanged(id);
 
@@ -1023,7 +751,7 @@ router.post('/:id/hand', authenticateToken, async (req, res) => {
 router.delete('/:id/hand', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { liveClass, error } = await loadClassWithAccess(id, req.user);
+    const { error } = await loadClassWithAccess(id, req.user);
     if (error) return res.status(error.status).json({ success: false, error: error.message, code: error.code });
 
     const prev = await readStatus(id, req.user.userId);
@@ -1037,7 +765,8 @@ router.delete('/:id/hand', authenticateToken, async (req, res) => {
     if (delError) throw delError;
 
     if (prev === 'raised') emitHandLowered(id, req.user.userId);
-    else if (prev === 'speaking') await changeActivePeerRole({ roomId: liveClass.hms_room_id, userId: req.user.userId, role: 'student' });
+    // "stop speaking" -> the client re-fetches an audience-shaped token next
+    // time it needs one; no server-side role push required for Agora.
     emitHandUpdate(id, req.user.userId, 'none');
     await emitStageChanged(id);
 
@@ -1090,7 +819,7 @@ router.get('/:id/stage', authenticateToken, async (req, res) => {
 router.post('/:id/speakers/:userId/invite', authenticateToken, async (req, res) => {
   try {
     const { id, userId } = req.params;
-    const { liveClass, access, error } = await loadClassWithAccess(id, req.user);
+    const { access, error } = await loadClassWithAccess(id, req.user);
     if (error) return res.status(error.status).json({ success: false, error: error.message, code: error.code });
     if (access.role !== 'teacher') {
       return res.status(403).json({ success: false, error: 'Teacher only' });
@@ -1107,7 +836,6 @@ router.post('/:id/speakers/:userId/invite', authenticateToken, async (req, res) 
 
     if (upsertError) throw upsertError;
 
-    await changeActivePeerRole({ roomId: liveClass.hms_room_id, userId, role: 'co-host' });
     emitHandUpdate(id, userId, 'speaking');
     await emitStageChanged(id);
 
@@ -1150,7 +878,7 @@ router.post('/:id/speakers/:userId/mute', authenticateToken, async (req, res) =>
 async function removeSpeaker(req, res) {
   try {
     const { id, userId } = req.params;
-    const { liveClass, access, error } = await loadClassWithAccess(id, req.user);
+    const { access, error } = await loadClassWithAccess(id, req.user);
     if (error) return res.status(error.status).json({ success: false, error: error.message, code: error.code });
     if (access.role !== 'teacher') {
       return res.status(403).json({ success: false, error: 'Teacher only' });
@@ -1167,7 +895,6 @@ async function removeSpeaker(req, res) {
     if (delErr) throw delErr;
 
     if (prev === 'raised') emitHandLowered(id, userId);
-    else if (prev === 'speaking') await changeActivePeerRole({ roomId: liveClass.hms_room_id, userId, role: 'student' });
     emitHandUpdate(id, userId, 'none');
     await emitStageChanged(id);
 

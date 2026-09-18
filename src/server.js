@@ -101,7 +101,7 @@ const server = httpServer.listen(PORT, HOST, () => {
 📡 Network:   http://0.0.0.0:${PORT}
 🔧 Environment: ${process.env.NODE_ENV}
 📊 Database: Supabase
-🎥 Video: 100ms
+🎥 Video: Agora
 🔌 Realtime: Socket.IO (/socket.io)
  
 ✅ Press Ctrl+C to stop the server
