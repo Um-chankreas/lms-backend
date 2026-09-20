@@ -31,6 +31,19 @@ const publicUser = u => ({
   created_at: u.created_at
 });
 
+// Teachers have no subscription / XP — a leaner shape than publicUser.
+const publicTeacher = (u, courseCount) => ({
+  id: u.id,
+  name: u.name,
+  email: u.email || null,
+  phone: u.phone || null,
+  role: u.role,
+  avatar_url: u.avatar_url || null,
+  is_active: u.is_active !== false,
+  course_count: courseCount ?? undefined,
+  created_at: u.created_at
+});
+
 // Every route here is admin-only.
 router.use(authenticateToken, isAdmin);
 
@@ -371,34 +384,18 @@ router.post('/students/:id/subscription', async (req, res) => {
   }
 });
 
-/* ────────────────────────────────────────────────────────────────────────────
- * TEACHERS
- *
- * Teachers are `users` rows with role:"teacher" — same account model as
- * students (bcrypt password, JWT login) but no subscription. Email is
- * required. Removal is a soft deactivate (is_active = false); the teacher's
- * courses and content are left untouched.
- * ──────────────────────────────────────────────────────────────────────────── */
-
-// Count courses per teacher id. Returns { [teacherId]: count }.
-const courseCountsByTeacher = async (teacherIds) => {
-  if (!teacherIds.length) return {};
-  const { data, error } = await supabase
-    .from('courses')
-    .select('teacher_id')
-    .in('teacher_id', teacherIds);
-  if (error) throw error;
-  return (data || []).reduce((acc, row) => {
-    acc[row.teacher_id] = (acc[row.teacher_id] || 0) + 1;
-    return acc;
-  }, {});
-};
+// ─────────────────────────── TEACHERS ───────────────────────────
+// Same account model as students (users row, bcrypt password, JWT login),
+// just role:"teacher". No subscription. Email is required — teachers sign in
+// with it, matching POST /api/auth/register. Removal is a soft deactivate;
+// their courses and content are left untouched.
 
 /**
  * GET /api/admin/teachers
- *   ?search=   name / email / phone (partial, case-insensitive)
+ *   ?search=                name / email / phone (partial, case-insensitive)
  *   ?include_inactive=true  include deactivated accounts
  *   ?page=1 &limit=20
+ * Each row also carries course_count (courses they own).
  */
 router.get('/teachers', async (req, res) => {
   try {
@@ -410,7 +407,7 @@ router.get('/teachers', async (req, res) => {
 
     let query = supabase
       .from('users')
-      .select('id, name, email, phone, avatar_url, role, is_active, created_at', { count: 'exact' })
+      .select('id, name, email, phone, avatar_url, is_active, created_at', { count: 'exact' })
       .eq('role', 'teacher')
       .order('created_at', { ascending: false });
 
@@ -418,30 +415,27 @@ router.get('/teachers', async (req, res) => {
 
     if (search) {
       const esc = search.replace(/[^a-zA-Z0-9 @._+-]/g, '').trim();
-      if (esc) {
-        query = query.or(`name.ilike.%${esc}%,email.ilike.%${esc}%,phone.ilike.%${esc}%`);
-      }
+      if (esc) query = query.or(`name.ilike.%${esc}%,email.ilike.%${esc}%,phone.ilike.%${esc}%`);
     }
 
     const { data: teachers, count, error } = await query.range(from, from + limit - 1);
     if (error) throw error;
 
-    const counts = await courseCountsByTeacher((teachers || []).map(t => t.id));
+    // Course counts for the teachers on this page.
+    const ids = (teachers || []).map(t => t.id);
+    const countByTeacher = {};
+    if (ids.length) {
+      const { data: courseRows } = await supabase
+        .from('courses').select('teacher_id').in('teacher_id', ids);
+      (courseRows || []).forEach(c => {
+        countByTeacher[c.teacher_id] = (countByTeacher[c.teacher_id] || 0) + 1;
+      });
+    }
 
     res.json({
       success: true,
       data: {
-        teachers: (teachers || []).map(t => ({
-          id: t.id,
-          name: t.name,
-          email: t.email || null,
-          phone: t.phone || null,
-          role: t.role,
-          avatar_url: t.avatar_url || null,
-          is_active: t.is_active !== false,
-          course_count: counts[t.id] || 0,
-          created_at: t.created_at
-        })),
+        teachers: (teachers || []).map(t => publicTeacher(t, countByTeacher[t.id] || 0)),
         pagination: { page, limit, total: count || 0, total_pages: Math.ceil((count || 0) / limit) }
       }
     });
@@ -453,7 +447,7 @@ router.get('/teachers', async (req, res) => {
 
 /**
  * POST /api/admin/teachers
- * body: { name, email, phone?, password }  — email + password required.
+ * body: { name, email, password, phone? }  — email + password required.
  */
 router.post('/teachers', async (req, res) => {
   try {
@@ -466,7 +460,7 @@ router.post('/teachers', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Password must be at least 6 characters' });
     }
     if (!email) {
-      return res.status(400).json({ success: false, error: 'Email is required' });
+      return res.status(400).json({ success: false, error: 'Email is required for a teacher account' });
     }
 
     const normalizedEmail = normalizeEmail(email);
@@ -482,11 +476,11 @@ router.post('/teachers', async (req, res) => {
       }
     }
 
-    const { data: dupeEmail } = await supabase.from('users').select('id').eq('email', normalizedEmail).maybeSingle();
-    if (dupeEmail) return res.status(409).json({ success: false, error: 'Email already registered' });
+    const { data: emailDupe } = await supabase.from('users').select('id').eq('email', normalizedEmail).maybeSingle();
+    if (emailDupe) return res.status(409).json({ success: false, error: 'Email already registered' });
     if (normalizedPhone) {
-      const { data: dupePhone } = await supabase.from('users').select('id').eq('phone', normalizedPhone).maybeSingle();
-      if (dupePhone) return res.status(409).json({ success: false, error: 'Phone number already registered' });
+      const { data: phoneDupe } = await supabase.from('users').select('id').eq('phone', normalizedPhone).maybeSingle();
+      if (phoneDupe) return res.status(409).json({ success: false, error: 'Phone number already registered' });
     }
 
     const hashed = await bcrypt.hash(password, 10);
@@ -505,7 +499,7 @@ router.post('/teachers', async (req, res) => {
       .single();
     if (error) throw error;
 
-    res.status(201).json({ success: true, message: 'Teacher created', data: { teacher: { ...publicUser(newUser), course_count: 0 } } });
+    res.status(201).json({ success: true, message: 'Teacher created', data: { teacher: publicTeacher(newUser, 0) } });
   } catch (error) {
     console.error('Admin create teacher error:', error);
     res.status(500).json({ success: false, error: 'Failed to create teacher: ' + error.message });
@@ -537,7 +531,7 @@ router.get('/teachers/:id', async (req, res) => {
     res.json({
       success: true,
       data: {
-        teacher: { ...publicUser(teacher), course_count: (courses || []).length },
+        teacher: publicTeacher(teacher, (courses || []).length),
         courses: courses || []
       }
     });
@@ -565,8 +559,9 @@ router.patch('/teachers/:id', async (req, res) => {
     if (typeof req.body.is_active === 'boolean') updates.is_active = req.body.is_active;
 
     if (email !== undefined) {
+      // A teacher must always keep an email — clearing it is rejected.
       if (email === null || email === '') {
-        return res.status(400).json({ success: false, error: 'Email is required' });
+        return res.status(400).json({ success: false, error: 'A teacher account must have an email' });
       }
       const e = normalizeEmail(email);
       if (!EMAIL_REGEX.test(e)) return res.status(400).json({ success: false, error: 'Invalid email address' });
@@ -602,8 +597,7 @@ router.patch('/teachers/:id', async (req, res) => {
       .from('users').update(updates).eq('id', id).select().single();
     if (error) throw error;
 
-    const counts = await courseCountsByTeacher([id]);
-    res.json({ success: true, message: 'Teacher updated', data: { teacher: { ...publicUser(updated), course_count: counts[id] || 0 } } });
+    res.json({ success: true, message: 'Teacher updated', data: { teacher: publicTeacher(updated) } });
   } catch (error) {
     console.error('Admin update teacher error:', error);
     res.status(500).json({ success: false, error: 'Failed to update teacher: ' + error.message });
@@ -612,8 +606,8 @@ router.patch('/teachers/:id', async (req, res) => {
 
 /**
  * DELETE /api/admin/teachers/:id
- * Soft delete — deactivates the account (is_active = false). Courses and
- * content are kept; restore with PATCH { is_active: true }.
+ * Soft delete — is_active = false. Courses and content the teacher owns are
+ * left in place; restore with PATCH { is_active: true }.
  */
 router.delete('/teachers/:id', async (req, res) => {
   try {
@@ -624,10 +618,14 @@ router.delete('/teachers/:id', async (req, res) => {
     if (!teacher) return res.status(404).json({ success: false, error: 'Teacher not found' });
 
     const { data: updated, error } = await supabase
-      .from('users').update({ is_active: false }).eq('id', id).select().single();
+      .from('users')
+      .update({ is_active: false })
+      .eq('id', id)
+      .select()
+      .single();
     if (error) throw error;
 
-    res.json({ success: true, message: 'Teacher deactivated', data: { teacher: publicUser(updated) } });
+    res.json({ success: true, message: 'Teacher deactivated', data: { teacher: publicTeacher(updated) } });
   } catch (error) {
     console.error('Admin delete teacher error:', error);
     res.status(500).json({ success: false, error: 'Failed to deactivate teacher: ' + error.message });
@@ -749,6 +747,168 @@ router.get('/live-classes', async (req, res) => {
   } catch (error) {
     console.error('Admin list live classes error:', error);
     res.status(500).json({ success: false, error: 'Failed to list live classes: ' + error.message });
+  }
+});
+
+/**
+ * GET /api/admin/analytics
+ * School-wide teacher dashboard: headline KPIs, weekly signups, and the
+ * "most improved" / "at-risk" student lists. All aggregation is in JS over a
+ * handful of bulk reads — fine at a single school's scale.
+ */
+router.get('/analytics', async (req, res) => {
+  try {
+    const now = new Date();
+    const ms = 86400000;
+    const daysAgo = (n) => new Date(now.getTime() - n * ms);
+    const iso = (d) => d.toISOString();
+    const ymd = (d) => d.toISOString().slice(0, 10);
+    const d7 = daysAgo(7), d14 = daysAgo(14), d30 = daysAgo(30), d45 = daysAgo(45), d60 = daysAgo(60);
+    const WEEKS = 12;
+    const mondayOf = (d) => {
+      const x = new Date(d); x.setUTCHours(0, 0, 0, 0);
+      x.setUTCDate(x.getUTCDate() - ((x.getUTCDay() + 6) % 7));
+      return x;
+    };
+    const firstWeek = mondayOf(daysAgo(WEEKS * 7));
+
+    const [
+      { data: students },
+      { data: subs },
+      { data: xpRows },
+      { data: lessons },
+      { data: enrolls },
+    ] = await Promise.all([
+      supabase.from('users').select('id, name, avatar_url, created_at, is_active, paid_until').eq('role', 'student'),
+      supabase.from('quiz_submissions').select('student_id, score, submitted_at').gte('submitted_at', iso(d60)),
+      supabase.from('xp_events').select('student_id, created_at').gte('created_at', iso(d45)),
+      supabase.from('lesson_completions').select('student_id, completed_at').gte('completed_at', iso(d30)),
+      supabase.from('course_enrollments').select('student_id'),
+    ]);
+
+    const S = students || [];
+    const meta = new Map(S.map(s => [s.id, s]));
+    const today = todayYmd();
+
+    // ── KPIs ──────────────────────────────────────────────────────────────
+    const countCreatedBetween = (from, to) =>
+      S.filter(s => { const c = new Date(s.created_at); return c >= from && c < to; }).length;
+    const kpis = {
+      total_students: S.length,
+      active_eligible: S.filter(s => s.is_active !== false).length,
+      new_students_7d: countCreatedBetween(d7, now),
+      new_students_prev_7d: countCreatedBetween(d14, d7),
+      paid_students: S.filter(s => s.paid_until && s.paid_until >= today).length,
+    };
+
+    // ── Last-active (max of any XP event or quiz submission) ──────────────
+    const lastActive = new Map();
+    const touch = (id, ts) => {
+      const cur = lastActive.get(id);
+      if (!cur || ts > cur) lastActive.set(id, ts);
+    };
+    (xpRows || []).forEach(r => touch(r.student_id, r.created_at));
+    (subs || []).forEach(r => touch(r.student_id, r.submitted_at));
+    const active7 = [...lastActive].filter(([, ts]) => new Date(ts) >= d7).length;
+    kpis.active_students_7d = active7;
+
+    // ── Weekly signups (last 12 weeks) + cumulative ──────────────────────
+    const weekBuckets = new Map();
+    for (let i = 0; i < WEEKS; i++) weekBuckets.set(ymd(new Date(firstWeek.getTime() + i * 7 * ms)), 0);
+    let carried = 0;
+    S.forEach(s => {
+      const c = new Date(s.created_at);
+      if (c < firstWeek) { carried += 1; return; }
+      const wk = ymd(mondayOf(c));
+      if (weekBuckets.has(wk)) weekBuckets.set(wk, weekBuckets.get(wk) + 1);
+    });
+    let cum = carried;
+    const signups_weekly = [...weekBuckets].map(([week, count]) => {
+      cum += count;
+      return { week, count, cumulative: cum };
+    });
+
+    // ── Quiz-score windows: recent (0–30d) vs prior (30–60d) ─────────────
+    const recent = new Map(), prior = new Map();
+    const push = (map, k, v) => { const a = map.get(k); if (a) a.push(v); else map.set(k, [v]); };
+    const all30 = [], allPrev30 = [];
+    (subs || []).forEach(x => {
+      const sc = Number(x.score);
+      if (!Number.isFinite(sc)) return;
+      const t = new Date(x.submitted_at);
+      if (t >= d30) { push(recent, x.student_id, sc); all30.push(sc); }
+      else if (t >= d60) { push(prior, x.student_id, sc); allPrev30.push(sc); }
+    });
+    const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
+    kpis.avg_quiz_score_30d = all30.length ? Math.round(mean(all30)) : null;
+    kpis.avg_quiz_score_prev_30d = allPrev30.length ? Math.round(mean(allPrev30)) : null;
+
+    const trend = new Map();
+    new Set([...recent.keys(), ...prior.keys()]).forEach(id => {
+      const r = recent.get(id) || [], p = prior.get(id) || [];
+      const ra = mean(r), pa = mean(p);
+      trend.set(id, { rn: r.length, pn: p.length, ra, pa, delta: (ra != null && pa != null) ? ra - pa : null });
+    });
+
+    const most_improved = [...trend]
+      .filter(([, x]) => x.delta != null && x.delta > 2 && x.rn >= 2 && x.pn >= 2)
+      .sort((a, b) => b[1].delta - a[1].delta)
+      .slice(0, 8)
+      .map(([id, x]) => ({
+        student_id: id,
+        name: meta.get(id)?.name || null,
+        avatar_url: meta.get(id)?.avatar_url || null,
+        recent_avg: Math.round(x.ra),
+        prior_avg: Math.round(x.pa),
+        delta: Math.round(x.delta),
+        quizzes: x.rn + x.pn,
+      }));
+
+    // ── At-risk ─────────────────────────────────────────────────────────
+    const enrolledSet = new Set((enrolls || []).map(e => e.student_id));
+    const finishedLesson14 = new Set((lessons || []).filter(l => new Date(l.completed_at) >= d14).map(l => l.student_id));
+    const atRisk = [];
+    S.forEach(s => {
+      if (s.is_active === false || !enrolledSet.has(s.id)) return;
+      const la = lastActive.get(s.id) || null;
+      const daysIdle = la ? Math.floor((now - new Date(la)) / ms) : null;
+      const tr = trend.get(s.id);
+      let reason = null, sev = 0;
+      if (tr && tr.delta != null && tr.delta <= -8 && tr.rn >= 2 && tr.pn >= 2) { reason = 'declining'; sev = 4 + Math.min(-tr.delta / 20, 1); }
+      else if (daysIdle != null && daysIdle >= 10) { reason = 'inactive'; sev = 3 + Math.min(daysIdle / 30, 1); }
+      else if (daysIdle != null && daysIdle >= 7) { reason = 'slowing'; sev = 2.5; }
+      else if (la && daysIdle >= 3 && !finishedLesson14.has(s.id)) { reason = 'stuck'; sev = 2; }
+      else if (!la && new Date(s.created_at) < d7) { reason = 'never_started'; sev = 1.5; }
+      if (reason) {
+        atRisk.push({
+          student_id: s.id,
+          name: meta.get(s.id)?.name || null,
+          avatar_url: meta.get(s.id)?.avatar_url || null,
+          reason,
+          last_active: la,
+          days_inactive: daysIdle,
+          recent_avg: tr?.ra != null ? Math.round(tr.ra) : null,
+          delta: tr?.delta != null ? Math.round(tr.delta) : null,
+          _sev: sev,
+        });
+      }
+    });
+    atRisk.sort((a, b) => b._sev - a._sev);
+
+    res.json({
+      success: true,
+      data: {
+        kpis,
+        signups_weekly,
+        most_improved,
+        at_risk: atRisk.slice(0, 20).map(({ _sev, ...x }) => x),
+        at_risk_total: atRisk.length,
+        generated_at: iso(now),
+      },
+    });
+  } catch (error) {
+    console.error('Admin analytics error:', error);
+    res.status(500).json({ success: false, error: 'Failed to load analytics: ' + error.message });
   }
 });
 

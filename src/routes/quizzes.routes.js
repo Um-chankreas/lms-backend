@@ -2,13 +2,17 @@ const express = require('express');
 const router = express.Router();
 const path = require('path');
 const multer = require('multer');
-const { parse: parseCsv } = require('csv-parse/sync');
 const supabase = require('../config/supabase');
-const { authenticateToken, isTeacher, isStudent } = require('../middleware/auth');
+const { authenticateToken, optionalAuth, isTeacher, isStudent } = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
-const { awardXp, XP_VALUES } = require('../utils/xp');
+const { awardXp, XP_VALUES, xpForQuizScore, levelInfo } = require('../utils/xp');
+const { recordActivity } = require('../utils/streak');
+const { guestCanAccessStep, sendGuestWall } = require('../utils/guest');
+const { notifyQuizComplete } = require('../utils/notifyEvents');
 const { evaluateAchievements } = require('../utils/achievements');
 const { hasCourseAccess, ensureEnrolled } = require('../utils/access');
+const { checkChapterAutoComplete } = require('../utils/progress');
+const { normalizeQuestionType, parseQuestionRows } = require('../utils/csvQuestions');
 
 // Configure multer for quiz question CSV imports
 const csvUpload = multer({
@@ -27,13 +31,91 @@ function pickRandom(arr, n) {
   return picked;
 }
 
+// Pasted math symbols → the LaTeX command word a teacher would actually type
+// / that already sits in the stored $\sqrt{…}$ source, so a search using the
+// symbol still matches. Same set as the MathInput quick-insert toolbar.
+const SEARCH_SYMBOL_WORDS = {
+  '√': 'sqrt', '×': 'times', '÷': 'div', '±': 'pm', 'π': 'pi',
+  '≤': 'le', '≥': 'ge', '∞': 'infty', '≠': 'neq', '≈': 'approx',
+};
+
+// Turns a "normal text" search term — plain prose, or math typed loosely
+// ("sqrt(-4)", "sqrt -4", "√-4") — into the alphanumeric tokens it should
+// match, so it finds a prompt stored as LaTeX ("$\sqrt{-4}$") without the
+// teacher needing to type backslashes / braces / `$` themselves. Kept
+// together: letters (\p{L}), digits (\p{N}), AND combining marks (\p{M}) —
+// Khmer (and other scripts) build a syllable out of a base letter plus
+// dependent vowel/subscript marks that Unicode itself doesn't classify as
+// "letters", so without \p{M} a single Khmer word gets shredded into
+// fragments at every diacritic instead of splitting only on real
+// spaces/punctuation.
+function tokenizeSearchTerm(term) {
+  let t = term;
+  for (const [sym, word] of Object.entries(SEARCH_SYMBOL_WORDS)) t = t.split(sym).join(` ${word} `);
+  return t.split(/[^\p{L}\p{N}\p{M}]+/u).filter(Boolean);
+}
+
+// Escape ILIKE's own special characters (its default escape char IS
+// backslash, and LaTeX is full of them: \sqrt, \frac, …) so a literal
+// backslash / % / _ in a pattern piece is matched literally.
+const likeEscape = (s) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
+
+// Builds an ILIKE pattern requiring each token to appear, in order, anywhere
+// in the text — so any punctuation/LaTeX markup between them (backslashes,
+// braces, `$`, parentheses, extra spaces) is simply skipped over.
+function toSearchPattern(term) {
+  const tokens = tokenizeSearchTerm(term);
+  if (tokens.length === 0) return `%${likeEscape(term)}%`; // pure punctuation/symbols with no mapping — fall back to a plain substring
+  return `%${tokens.map(likeEscape).join('%')}%`;
+}
+
+// A unit/lesson quiz question bank can hold more than this (e.g. the CSV
+// import gives every unit 6); a student only ever takes a random draw of
+// this many per attempt. Teachers still see the full bank when building it.
+const QUIZ_TAKE_SIZE = 5;
+
+// Shared gate for the two student-facing "play" endpoints (per-question
+// /check and final /submit): the quiz must be published and the caller must
+// have course access (or the parent lesson is a free preview). Returns
+// { ok: true } or { ok: false, status, error } ready to send.
+async function checkQuizPlayAccess(quiz, user) {
+  if (!quiz || quiz.status !== 'published') {
+    return { ok: false, status: 404, error: 'Quiz is not available' };
+  }
+
+  // Signed-out guest: only the first couple of steps of the course, then wall.
+  if (!user) {
+    const courseId = quiz.course_id || quiz.courses?.id;
+    if (courseId && await guestCanAccessStep(courseId, `quiz:${quiz.id}`)) {
+      return { ok: true, guest: true };
+    }
+    return { ok: false, status: 403, code: 'GUEST_WALL', error: 'Create a free account to keep learning.' };
+  }
+
+  let lessonIsFree = false;
+  if (quiz.lesson_id) {
+    const { data: lesson } = await supabase
+      .from('lessons')
+      .select('is_free')
+      .eq('id', quiz.lesson_id)
+      .maybeSingle();
+    lessonIsFree = !!lesson?.is_free;
+  }
+  await ensureEnrolled({ supabase, course: quiz.courses, user });
+  const courseAccess = await hasCourseAccess({ supabase, course: quiz.courses, user });
+  if (!courseAccess && !lessonIsFree) {
+    return { ok: false, status: 403, error: 'You do not have access to this quiz yet' };
+  }
+  return { ok: true };
+}
+
 /**
  * POST /api/quizzes
  * Create a new quiz (Teacher only)
  */
 router.post('/', authenticateToken, isTeacher, async (req, res) => {
   try {
-    let { course_id, lesson_id, unit_id, title, description, pass_percentage, time_limit, status, questions } = req.body;
+    let { course_id, lesson_id, unit_id, title, description, pass_percentage, time_limit, xp_reward, status, questions } = req.body;
 
     if (!course_id || !title) {
       return res.status(400).json({
@@ -99,6 +181,7 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
         description: description || '',
         pass_percentage: pass_percentage || 70,
         time_limit: time_limit || 60,
+        xp_reward: Number.isFinite(Number(xp_reward)) ? Number(xp_reward) : 80,
         status: status || 'draft', // 'draft' or 'published'
         created_at: new Date()
       })
@@ -156,38 +239,8 @@ router.get('/questions/import/template', authenticateToken, isTeacher, (req, res
   );
 });
 
-// ── Shared quiz-question CSV parsing ─────────────────────────────────────
-
-const LETTER_INDEX = { a: 0, b: 1, c: 2, d: 3, e: 4, f: 5 };
-
-// First non-empty value among the given column names.
-const pickCol = (row, ...names) => {
-  for (const n of names) {
-    if (row[n] != null && String(row[n]).trim() !== '') return String(row[n]).trim();
-  }
-  return '';
-};
-
-const normalizeTier = (v) => {
-  const t = String(v || '').trim().toLowerCase();
-  if (t.startsWith('e')) return 'Easy';
-  if (t.startsWith('m')) return 'Medium';
-  if (t.startsWith('h')) return 'Hard';
-  return null;
-};
-
-// Canonical question types stored in quiz_questions.question_type:
-//   'QCM'          multiple choice
-//   'number_input' the student types a number
-// Accepts a range of spellings; returns null when nothing recognisable is
-// given (caller then infers from whether options are present).
-const normalizeQuestionType = (v) => {
-  const t = String(v || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
-  if (!t) return null;
-  if (['qcm', 'mcq', 'mcq4', 'multiplechoice', 'choice', 'mc'].includes(t)) return 'QCM';
-  if (['numberinput', 'numericentry', 'numeric', 'number', 'input', 'num'].includes(t)) return 'number_input';
-  return null;
-};
+// ── Grading helpers (LETTER_INDEX / pickCol / normalizeTier / parseQuestionRows
+// live in utils/csvQuestions.js, shared with assignments.routes.js) ────────
 
 // Khmer digits → Arabic, then strip spaces / thousands separators / a leading +.
 const KHMER_DIGITS = { '០': '0', '១': '1', '២': '2', '៣': '3', '៤': '4', '៥': '5', '៦': '6', '៧': '7', '៨': '8', '៩': '9' };
@@ -215,106 +268,6 @@ const answersMatch = (studentAnswer, correctAnswer, questionType) => {
   }
   return studentAnswer === correctAnswer;
 };
-
-/**
- * Parse a quiz-question CSV into normalized rows. Accepts the clean teacher
- * template — question, option_a..f, correct, tier, explanation — and the
- * richer exports (stem in khmer, option a.., correct answer, what each wrong
- * option catches, unit id, ...).
- *
- * question_type column: "QCM" or "number_input" (aliases accepted). When
- * absent it is inferred — options present → QCM, none → number_input.
- * A number_input row has no options; `correct` is the number.
- *
- * Returns { questions: [{ unitNo?, question, options, correct_answer,
- * explanation, difficulty, question_type }], rowErrors }.
- * With opts.requireUnit, every row must carry a Unit ID (U1 / 1 / ...).
- */
-function parseQuestionRows(buffer, opts = {}) {
-  const records = parseCsv(buffer.toString('utf8'), {
-    bom: true,
-    columns: header => header.map(h => h.trim().toLowerCase()),
-    skip_empty_lines: true,
-    trim: true,
-    relax_column_count: true
-  });
-
-  const questions = [];
-  const rowErrors = [];
-
-  records.forEach((r, idx) => {
-    const rowNumber = idx + 2; // +1 header, +1 for 1-based
-    const question = pickCol(r, 'question', 'stem in khmer', 'stem', 'question text');
-    const explanation = pickCol(r, 'explanation', 'what each wrong option catches') || null;
-    const difficulty = normalizeTier(pickCol(r, 'tier', 'difficulty', 'level'));
-
-    const letterOpts = ['a', 'b', 'c', 'd', 'e', 'f'].map(l => pickCol(r, `option_${l}`, `option ${l}`, `option${l}`));
-    const numberOpts = [1, 2, 3, 4, 5, 6].map(n => pickCol(r, `option_${n}`, `option ${n}`, `option${n}`));
-    const options = (letterOpts.some(Boolean) ? letterOpts : numberOpts).filter(v => v && v.length > 0);
-
-    let unitNo;
-    if (opts.requireUnit) {
-      const unitRaw = pickCol(r, 'unit id', 'unit', 'unit_id', 'unit no');
-      unitNo = parseInt(unitRaw.replace(/\D/g, ''), 10);
-      if (!Number.isFinite(unitNo) || unitNo < 1) {
-        rowErrors.push({ row: rowNumber, error: `Unrecognised Unit "${unitRaw}"` });
-        return;
-      }
-    }
-
-    if (!question) { rowErrors.push({ row: rowNumber, error: 'Question text is required' }); return; }
-
-    const declaredType = normalizeQuestionType(pickCol(r, 'question_type', 'question type', 'type'));
-    const isNumeric = declaredType === 'number_input' || (declaredType == null && options.length === 0);
-
-    // number_input reads its answer from `input_answer` (falls back to `correct`);
-    // QCM reads from `correct`.
-    const correctRaw = isNumeric
-      ? pickCol(r, 'input_answer', 'input answer', 'input_anwser', 'numeric_answer', 'correct', 'correct answer', 'correct_answer', 'answer')
-      : pickCol(r, 'correct', 'correct answer', 'correct_answer', 'answer');
-
-    if (!correctRaw) {
-      rowErrors.push({ row: rowNumber, error: isNumeric ? 'input_answer is required' : 'Correct answer is required' });
-      return;
-    }
-
-    if (isNumeric) {
-      // number_input has no options; the answer is the number in input_answer.
-      questions.push({
-        unitNo, question, options: [],
-        correct_answer: correctRaw.replace(/[\s,]/g, ''),
-        explanation, difficulty, question_type: 'number_input'
-      });
-      return;
-    }
-
-    if (options.length < 2) {
-      rowErrors.push({ row: rowNumber, error: 'A QCM question needs at least 2 options' });
-      return;
-    }
-
-    // correct may be a letter (A/B/C/…) or the full option text
-    let correctText = null;
-    const asLetter = correctRaw.toLowerCase();
-    if (asLetter.length === 1 && asLetter in LETTER_INDEX && LETTER_INDEX[asLetter] < options.length) {
-      correctText = options[LETTER_INDEX[asLetter]];
-    } else if (options.includes(correctRaw)) {
-      correctText = correctRaw;
-    }
-    if (!correctText) {
-      rowErrors.push({ row: rowNumber, error: `Correct answer "${correctRaw}" is not a valid option letter or text` });
-      return;
-    }
-
-    questions.push({
-      unitNo, question, options,
-      correct_answer: correctText, explanation, difficulty,
-      question_type: 'QCM'
-    });
-  });
-
-  return { questions, rowErrors };
-}
 
 /**
  * POST /api/quizzes/:id/questions/import
@@ -608,7 +561,7 @@ router.post('/import/units', authenticateToken, isTeacher, csvUpload.single('fil
 router.put('/:id', authenticateToken, isTeacher, async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, description, pass_percentage, time_limit, status, questions } = req.body;
+    const { title, description, pass_percentage, time_limit, xp_reward, status, questions } = req.body;
 
     // Verify ownership
     const { data: quiz } = await supabase
@@ -630,6 +583,7 @@ router.put('/:id', authenticateToken, isTeacher, async (req, res) => {
     if (description !== undefined) updatePayload.description = description;
     if (pass_percentage !== undefined) updatePayload.pass_percentage = pass_percentage;
     if (time_limit !== undefined) updatePayload.time_limit = time_limit;
+    if (xp_reward !== undefined) updatePayload.xp_reward = xp_reward;
     if (status !== undefined) updatePayload.status = status;
 
     const { data: updatedQuiz, error: quizError } = await supabase
@@ -679,6 +633,136 @@ router.put('/:id', authenticateToken, isTeacher, async (req, res) => {
       success: false,
       error: 'Failed to update quiz: ' + error.message
     });
+  }
+});
+
+// Shared ownership check for the per-question endpoints below: the quiz
+// must exist and belong (via its course) to the calling teacher.
+async function loadOwnedQuiz(quizId, teacherId) {
+  const { data: quiz } = await supabase
+    .from('quizzes')
+    .select('id, courses(teacher_id)')
+    .eq('id', quizId)
+    .single();
+  if (!quiz) return { error: { status: 404, message: 'Quiz not found' } };
+  if (quiz.courses?.teacher_id !== teacherId) return { error: { status: 403, message: 'Unauthorized quiz access' } };
+  return { quiz };
+}
+
+/**
+ * POST /api/quizzes/:id/questions
+ * Add ONE question to an existing quiz (Teacher only). Lets the editor add a
+ * question without resending the whole bank — see PUT /:id/questions/:qid
+ * and DELETE /:id/questions/:qid alongside it; together they let a big bank
+ * be edited (and paginated) without ever replacing the bank wholesale.
+ */
+router.post('/:id/questions', authenticateToken, isTeacher, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { error: ownError } = await loadOwnedQuiz(id, req.user.userId);
+    if (ownError) return res.status(ownError.status).json({ success: false, error: ownError.message });
+
+    const { question, options, correct_answer, explanation, difficulty, question_type } = req.body;
+    if (!question || !question.trim()) {
+      return res.status(400).json({ success: false, error: 'question is required' });
+    }
+
+    // New questions always go after whatever the bank already has.
+    const { data: lastQuestion } = await supabase
+      .from('quiz_questions')
+      .select('order_number')
+      .eq('quiz_id', id)
+      .order('order_number', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const { data: created, error } = await supabase
+      .from('quiz_questions')
+      .insert({
+        id: uuidv4(),
+        quiz_id: id,
+        question,
+        options: typeof options === 'string' ? options : JSON.stringify(options || []),
+        correct_answer,
+        explanation: explanation || null,
+        question_type: normalizeQuestionType(question_type) || 'QCM',
+        difficulty: difficulty || null,
+        order_number: (lastQuestion?.order_number || 0) + 1,
+      })
+      .select()
+      .single();
+    if (error) throw error;
+
+    res.status(201).json({
+      success: true,
+      data: { question: { ...created, options: typeof created.options === 'string' ? JSON.parse(created.options) : created.options } },
+    });
+  } catch (error) {
+    console.error('Add quiz question error:', error);
+    res.status(500).json({ success: false, error: 'Failed to add question: ' + error.message });
+  }
+});
+
+/**
+ * PUT /api/quizzes/:id/questions/:questionId
+ * Update ONE question in place (Teacher only) — no effect on the rest of the bank.
+ */
+router.put('/:id/questions/:questionId', authenticateToken, isTeacher, async (req, res) => {
+  try {
+    const { id, questionId } = req.params;
+    const { error: ownError } = await loadOwnedQuiz(id, req.user.userId);
+    if (ownError) return res.status(ownError.status).json({ success: false, error: ownError.message });
+
+    const { question, options, correct_answer, explanation, difficulty, question_type } = req.body;
+    const updatePayload = {};
+    if (question !== undefined) updatePayload.question = question;
+    if (options !== undefined) updatePayload.options = typeof options === 'string' ? options : JSON.stringify(options);
+    if (correct_answer !== undefined) updatePayload.correct_answer = correct_answer;
+    if (explanation !== undefined) updatePayload.explanation = explanation || null;
+    if (difficulty !== undefined) updatePayload.difficulty = difficulty;
+    if (question_type !== undefined) updatePayload.question_type = normalizeQuestionType(question_type) || 'QCM';
+
+    const { data: updated, error } = await supabase
+      .from('quiz_questions')
+      .update(updatePayload)
+      .eq('id', questionId)
+      .eq('quiz_id', id)
+      .select()
+      .single();
+    if (error) throw error;
+    if (!updated) return res.status(404).json({ success: false, error: 'Question not found in this quiz' });
+
+    res.json({
+      success: true,
+      data: { question: { ...updated, options: typeof updated.options === 'string' ? JSON.parse(updated.options) : updated.options } },
+    });
+  } catch (error) {
+    console.error('Update quiz question error:', error);
+    res.status(500).json({ success: false, error: 'Failed to update question: ' + error.message });
+  }
+});
+
+/**
+ * DELETE /api/quizzes/:id/questions/:questionId
+ * Remove ONE question (Teacher only) — no effect on the rest of the bank.
+ */
+router.delete('/:id/questions/:questionId', authenticateToken, isTeacher, async (req, res) => {
+  try {
+    const { id, questionId } = req.params;
+    const { error: ownError } = await loadOwnedQuiz(id, req.user.userId);
+    if (ownError) return res.status(ownError.status).json({ success: false, error: ownError.message });
+
+    const { error } = await supabase
+      .from('quiz_questions')
+      .delete()
+      .eq('id', questionId)
+      .eq('quiz_id', id);
+    if (error) throw error;
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Delete quiz question error:', error);
+    res.status(500).json({ success: false, error: 'Failed to delete question: ' + error.message });
   }
 });
 
@@ -811,12 +895,26 @@ router.get('/daily', authenticateToken, isStudent, async (req, res) => {
 
     let attempt = existingAttempt;
 
-    if (!attempt) {
-      const { data: enrollments } = await supabase
-        .from('course_enrollments')
-        .select('course_id')
-        .eq('student_id', studentId);
-      const courseIds = (enrollments || []).map(e => e.course_id);
+    // Self-heal a stuck attempt: today's row exists but was created empty
+    // (e.g. before the student had any reachable course) and isn't started.
+    const emptyUnstarted = attempt
+      && (!Array.isArray(attempt.question_ids) || attempt.question_ids.length === 0)
+      && !attempt.completed_at
+      && !attempt.answers;
+
+    if (!attempt || emptyUnstarted) {
+      // Pool = every course the student can actually reach: the ones they're
+      // enrolled in, plus every free course (open to everyone, same as
+      // hasCourseAccess treats them elsewhere). Without the free-course part
+      // a brand-new student with no enrollments yet gets an empty daily quiz.
+      const [{ data: enrollments }, { data: freeCourses }] = await Promise.all([
+        supabase.from('course_enrollments').select('course_id').eq('student_id', studentId),
+        supabase.from('courses').select('id').eq('is_free', true)
+      ]);
+      const courseIds = [...new Set([
+        ...(enrollments || []).map(e => e.course_id),
+        ...(freeCourses || []).map(c => c.id)
+      ])];
 
       let questionPool = [];
       if (courseIds.length > 0) {
@@ -838,20 +936,27 @@ router.get('/daily', authenticateToken, isStudent, async (req, res) => {
 
       const questionIds = pickRandom(questionPool, 5).map(q => q.id);
 
-      const { data: newAttempt, error } = await supabase
-        .from('daily_quiz_attempts')
-        .insert({
-          id: uuidv4(),
-          student_id: studentId,
-          quiz_date: today,
-          question_ids: questionIds,
-          created_at: new Date()
-        })
-        .select()
-        .single();
+      const { data: savedAttempt, error } = emptyUnstarted
+        ? await supabase
+            .from('daily_quiz_attempts')
+            .update({ question_ids: questionIds })
+            .eq('id', attempt.id)
+            .select()
+            .single()
+        : await supabase
+            .from('daily_quiz_attempts')
+            .insert({
+              id: uuidv4(),
+              student_id: studentId,
+              quiz_date: today,
+              question_ids: questionIds,
+              created_at: new Date()
+            })
+            .select()
+            .single();
 
       if (error) throw error;
-      attempt = newAttempt;
+      attempt = savedAttempt;
     }
 
     const questionIds = Array.isArray(attempt.question_ids) ? attempt.question_ids : [];
@@ -987,7 +1092,9 @@ router.post('/daily/submit', authenticateToken, isStudent, async (req, res) => {
     }
 
     const score = totalCount > 0 ? Math.round((correctCount / totalCount) * 100) : 0;
-    const xpAwarded = correctCount * XP_VALUES.DAILY_QUIZ_PER_CORRECT;
+    // Flat reward for finishing the daily practice set — it's practice, so
+    // it's not scored by accuracy. Course-agnostic (course_id stays null).
+    const xpAwarded = XP_VALUES.DAILY_QUIZ_COMPLETE;
 
     const { data: updatedAttempt, error } = await supabase
       .from('daily_quiz_attempts')
@@ -1009,6 +1116,9 @@ router.post('/daily/submit', authenticateToken, isStudent, async (req, res) => {
     }
     await evaluateAchievements(studentId);
 
+    const streak = await recordActivity(studentId);
+    const { data: userXpRow } = await supabase.from('users').select('xp').eq('id', studentId).single();
+
     res.json({
       success: true,
       message: 'Daily quiz submitted successfully',
@@ -1018,7 +1128,9 @@ router.post('/daily/submit', authenticateToken, isStudent, async (req, res) => {
         score,
         xp_awarded: xpAwarded,
         review,
-        attempt: updatedAttempt
+        attempt: updatedAttempt,
+        streak,
+        level: levelInfo(userXpRow?.xp || 0),
       }
     });
   } catch (error) {
@@ -1034,7 +1146,7 @@ router.post('/daily/submit', authenticateToken, isStudent, async (req, res) => {
  * GET /api/quizzes/:id
  * Get quiz details with questions
  */
-router.get('/:id', authenticateToken, async (req, res) => {
+router.get('/:id', optionalAuth, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -1051,16 +1163,90 @@ router.get('/:id', authenticateToken, async (req, res) => {
       });
     }
 
-    const { data: questions } = await supabase
+    // Signed-out guest: only quizzes within this course's free preview steps.
+    if (!req.user) {
+      if (!quiz.course_id || !(await guestCanAccessStep(quiz.course_id, `quiz:${quiz.id}`))) {
+        return sendGuestWall(res);
+      }
+    }
+
+    const isTeacher = req.user?.role === 'teacher';
+
+    // Teacher building/editing the bank: paginated (a bank can grow into the
+    // hundreds over time as questions get added, and the editor only needs
+    // one page rendered at a time). Pagination only kicks in when `page` is
+    // passed — an older caller that doesn't pass it still gets everything,
+    // so nothing that reads the full array unpaginated silently breaks.
+    if (isTeacher && req.query.page !== undefined) {
+      const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+      const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+      const from = (page - 1) * limit;
+      const searchTerm = String(req.query.q || '').trim();
+
+      let questionQuery = supabase
+        .from('quiz_questions')
+        .select('*', { count: 'exact' })
+        .eq('quiz_id', id)
+        .order('order_number', { ascending: true });
+
+      // Search mode: return every matching question (by prompt text — Khmer
+      // prose and the raw LaTeX/math both live in the same column, so a
+      // search matches either) so the client can compute which page each one
+      // lives on and jump there — not paginated itself, just capped, since a
+      // match list is normally small even in a large bank. The term is
+      // tokenized (see toSearchPattern) so plain text like "sqrt(-4)" or
+      // "sqrt -4" still finds a prompt stored as "$\sqrt{-4}$" — the teacher
+      // doesn't have to type the LaTeX punctuation themselves.
+      questionQuery = searchTerm
+        ? questionQuery.ilike('question', toSearchPattern(searchTerm)).limit(50)
+        : questionQuery.range(from, from + limit - 1);
+
+      const { data: questions, count, error: qError } = await questionQuery;
+      if (qError) throw qError;
+
+      const questionsWithParsedOptions = (questions || []).map(q => ({
+        ...q,
+        options: typeof q.options === 'string' ? JSON.parse(q.options) : q.options
+      }));
+
+      return res.json({
+        success: true,
+        data: {
+          quiz: {
+            ...quiz,
+            questions: questionsWithParsedOptions,
+            total_questions: count || 0,
+            bank_size: count || 0,
+            ...(searchTerm
+              ? { search: { query: searchTerm, count: questionsWithParsedOptions.length } }
+              : { pagination: { page, limit, total: count || 0, total_pages: Math.ceil((count || 0) / limit) } })
+          }
+        }
+      });
+    }
+
+    const { data: allQuestions } = await supabase
       .from('quiz_questions')
       .select('*')
       .eq('quiz_id', id)
       .order('order_number', { ascending: true });
 
-    const questionsWithParsedOptions = (questions || []).map(q => ({
-      ...q,
-      options: typeof q.options === 'string' ? JSON.parse(q.options) : q.options
-    }));
+    // A student takes a random draw of QUIZ_TAKE_SIZE from the bank (varies
+    // every attempt), never the correct_answer/explanation up front — those
+    // are only revealed in the submit response / results review. A teacher
+    // previewing or editing the quiz still sees the full bank with answers.
+    const forStudent = (allQuestions || []).length > QUIZ_TAKE_SIZE
+      ? pickRandom(allQuestions, QUIZ_TAKE_SIZE).sort((a, b) => (a.order_number || 0) - (b.order_number || 0))
+      : (allQuestions || []);
+
+    const questionsToSend = isTeacher ? (allQuestions || []) : forStudent;
+
+    const questionsWithParsedOptions = questionsToSend.map(q => {
+      const options = typeof q.options === 'string' ? JSON.parse(q.options) : q.options;
+      if (isTeacher) return { ...q, options };
+      const { correct_answer, explanation, ...safe } = q;
+      return { ...safe, options };
+    });
 
     res.json({
       success: true,
@@ -1068,7 +1254,8 @@ router.get('/:id', authenticateToken, async (req, res) => {
         quiz: {
           ...quiz,
           questions: questionsWithParsedOptions,
-          total_questions: questionsWithParsedOptions.length
+          total_questions: questionsWithParsedOptions.length,
+          bank_size: (allQuestions || []).length
         }
       }
     });
@@ -1082,10 +1269,97 @@ router.get('/:id', authenticateToken, async (req, res) => {
 });
 
 /**
+ * POST /api/quizzes/:id/check   (Student)
+ * Grade ONE question mid-quiz for the Duolingo-style flow: the client sends
+ * { question_id, answer } when the student taps "Check", and gets back
+ * whether it was right, the correct answer, and the explanation to reveal
+ * inline before moving on. Persists nothing — the whole attempt is still
+ * recorded (and re-graded, authoritatively) by POST /:id/submit at the end.
+ */
+router.post('/:id/check', optionalAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { question_id, answer } = req.body;
+
+    if (!question_id) {
+      return res.status(400).json({ success: false, error: 'question_id is required' });
+    }
+
+    const { data: quiz } = await supabase
+      .from('quizzes')
+      .select('*, courses(*)')
+      .eq('id', id)
+      .single();
+
+    const access = await checkQuizPlayAccess(quiz, req.user);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error, code: access.code });
+    }
+
+    const { data: question } = await supabase
+      .from('quiz_questions')
+      .select('id, correct_answer, explanation, question_type')
+      .eq('id', question_id)
+      .eq('quiz_id', id)
+      .maybeSingle();
+
+    if (!question) {
+      return res.status(404).json({ success: false, error: 'Question not found in this quiz' });
+    }
+
+    const isCorrect = answersMatch(answer, question.correct_answer, question.question_type);
+
+    res.json({
+      success: true,
+      data: {
+        question_id: question.id,
+        is_correct: isCorrect,
+        correct_answer: question.correct_answer,
+        explanation: question.explanation || null
+      }
+    });
+  } catch (error) {
+    console.error('Quiz check error:', error);
+    res.status(500).json({ success: false, error: 'Failed to check answer: ' + error.message });
+  }
+});
+
+/**
+ * GET /api/quizzes/:id/question/:questionId   (Student)
+ * One specific question, by id — used by the Review Mistakes flow to
+ * re-fetch a question the student previously answered wrong, correct answer
+ * and explanation included (the whole point of reviewing a mistake).
+ *
+ * Deliberately does NOT go through GET /:id — that endpoint hands a student
+ * a random draw of QUIZ_TAKE_SIZE questions from the bank, varying every
+ * call, so it can't reliably be used to find one already-known question
+ * back again once the bank is bigger than that draw size.
+ */
+router.get('/:id/question/:questionId', authenticateToken, isStudent, async (req, res) => {
+  try {
+    const { id, questionId } = req.params;
+    const { data: question, error } = await supabase
+      .from('quiz_questions')
+      .select('*')
+      .eq('id', questionId)
+      .eq('quiz_id', id)
+      .maybeSingle();
+    if (error || !question) {
+      return res.status(404).json({ success: false, error: 'Question not found in this quiz' });
+    }
+    const options = typeof question.options === 'string' ? JSON.parse(question.options) : question.options;
+    res.json({ success: true, data: { question: { ...question, options } } });
+  } catch (error) {
+    console.error('Quiz question fetch error:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch question: ' + error.message });
+  }
+});
+
+/**
  * POST /api/quizzes/:id/submit
  * Submit quiz answers (Student)
  */
-router.post('/:id/submit', authenticateToken, async (req, res) => {
+router.post('/:id/submit', optionalAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const { answers } = req.body;
@@ -1103,36 +1377,20 @@ router.post('/:id/submit', authenticateToken, async (req, res) => {
       .eq('id', id)
       .single();
 
-    if (!quiz || quiz.status !== 'published') {
-      return res.status(404).json({
-        success: false,
-        error: 'Quiz is not available'
-      });
+    const access = await checkQuizPlayAccess(quiz, req.user);
+    if (!access.ok) {
+      return res.status(access.status).json({ success: false, error: access.error, code: access.code });
     }
 
-    let lessonIsFree = false;
-    if (quiz.lesson_id) {
-      const { data: lesson } = await supabase
-        .from('lessons')
-        .select('is_free')
-        .eq('id', quiz.lesson_id)
-        .maybeSingle();
-      lessonIsFree = !!lesson?.is_free;
-    }
-
-    await ensureEnrolled({ supabase, course: quiz.courses, user: req.user });
-    const courseAccess = await hasCourseAccess({ supabase, course: quiz.courses, user: req.user });
-    if (!courseAccess && !lessonIsFree) {
-      return res.status(403).json({
-        success: false,
-        error: 'You do not have access to this quiz yet'
-      });
-    }
-
-    const { data: questions } = await supabase
-      .from('quiz_questions')
-      .select('*')
-      .eq('quiz_id', id);
+    // Grade only the questions this attempt actually presented — the
+    // student was only ever given the ids of their random QUIZ_TAKE_SIZE
+    // draw (see GET /:id), so the answer keys they can possibly submit are
+    // exactly that draw. Scoping the query the same way means the score is
+    // out of however many were actually served, not the whole bank.
+    const answeredIds = Object.keys(answers || {});
+    const { data: questions } = answeredIds.length > 0
+      ? await supabase.from('quiz_questions').select('*').eq('quiz_id', id).in('id', answeredIds)
+      : { data: [] };
 
     let correctCount = 0;
     const totalCount = questions?.length || 0;
@@ -1159,22 +1417,50 @@ router.post('/:id/submit', authenticateToken, async (req, res) => {
     const score = totalCount > 0 ? Math.round((correctCount / totalCount) * 100) : 0;
     const passed = score >= quiz.pass_percentage;
 
+    // Guest: grade + return the review, but persist nothing (no submission
+    // row, no XP, no achievements, no chapter auto-complete). The client
+    // tracks the guest's step locally.
+    if (!req.user) {
+      return res.json({
+        success: true,
+        message: passed ? 'Quiz passed!' : 'Quiz failed. Try again.',
+        data: {
+          submission: {
+            quiz_id: id,
+            score,
+            passed,
+            correct_answers: correctCount,
+            total_questions: totalCount,
+            answers,
+          },
+          review,
+          xp_awarded: 0,
+          chapter_completed: false,
+          streak: null,
+          level: null,
+          context: null,
+          guest: true,
+        }
+      });
+    }
+
+    // Has this student ever submitted this quiz before? (drives "first
+    // attempt" notifications + the passed-before XP guard)
+    const { data: priorSubs } = await supabase
+      .from('quiz_submissions')
+      .select('passed')
+      .eq('quiz_id', id)
+      .eq('student_id', req.user.userId);
+    const firstAttempt = (priorSubs || []).length === 0;
+    const passedBefore = (priorSubs || []).some(s => s.passed);
+
     // Only award XP the first time this student passes this quiz, so
     // retaking an already-passed quiz doesn't farm infinite XP.
     let xpAwarded = 0;
-    if (passed) {
-      const { data: priorPass } = await supabase
-        .from('quiz_submissions')
-        .select('id')
-        .eq('quiz_id', id)
-        .eq('student_id', req.user.userId)
-        .eq('passed', true)
-        .limit(1)
-        .maybeSingle();
-
-      if (!priorPass) {
-        xpAwarded = XP_VALUES.QUIZ_PASS;
-      }
+    if (passed && !passedBefore) {
+      // Flat per-quiz reward (026_quiz_xp_reward); older callers without the
+      // column fall back to the score-scaled award.
+      xpAwarded = Number.isFinite(Number(quiz.xp_reward)) ? Number(quiz.xp_reward) : xpForQuizScore(score);
     }
 
     const submissionId = uuidv4();
@@ -1195,9 +1481,47 @@ router.post('/:id/submit', authenticateToken, async (req, res) => {
     if (error) throw error;
 
     if (xpAwarded > 0) {
-      await awardXp(req.user.userId, xpAwarded, 'quiz_pass');
+      await awardXp(req.user.userId, xpAwarded, 'quiz_pass', quiz.course_id || null);
     }
     await evaluateAchievements(req.user.userId);
+    notifyQuizComplete(req.user.userId, id, score, {
+      firstAttempt,
+      xpAwarded,
+      passed,
+      passPercentage: quiz.pass_percentage ?? 70,
+      lessonId: quiz.lesson_id || null,
+      courseId: quiz.course_id || null,
+      correctCount,
+      totalCount,
+    });
+
+    // A passed quiz that belongs to a chapter — whether it's a unit's
+    // practice quiz or the chapter's own end-of-lesson quiz — is a path step.
+    // Check whether it was the last thing needed to auto-complete the chapter.
+    // (No-op for a chapter with no authored units.)
+    let chapterCompleted = false;
+    if (passed && quiz.lesson_id) {
+      chapterCompleted = await checkChapterAutoComplete({ lessonId: quiz.lesson_id, studentId: req.user.userId });
+    }
+
+    // Streak + combo bonus + level for the quiz-complete screen. Only a pass
+    // counts as an active day.
+    const streak = passed ? await recordActivity(req.user.userId) : null;
+
+    const [{ data: userXpRow }, { data: lessonRow }, { data: unitRow }] = await Promise.all([
+      supabase.from('users').select('xp').eq('id', req.user.userId).single(),
+      quiz.lesson_id
+        ? supabase.from('lessons').select('title, order_number').eq('id', quiz.lesson_id).maybeSingle()
+        : Promise.resolve({ data: null }),
+      // Set for a unit's own practice quiz, null for the chapter's
+      // end-of-lesson quiz — lets the quiz-complete screen show which unit
+      // this was, alongside the chapter, instead of a numbered "Chapter N"
+      // (order_number isn't a reliable position — some courses have every
+      // lesson sharing order_number 0, which showed as "Chapter 0").
+      quiz.unit_id
+        ? supabase.from('lesson_units').select('title').eq('id', quiz.unit_id).maybeSingle()
+        : Promise.resolve({ data: null }),
+    ]);
 
     res.json({
       success: true,
@@ -1210,7 +1534,15 @@ router.post('/:id/submit', authenticateToken, async (req, res) => {
           answers: typeof submission.answers === 'string' ? JSON.parse(submission.answers) : submission.answers
         },
         review,
-        xp_awarded: xpAwarded
+        xp_awarded: xpAwarded,
+        chapter_completed: chapterCompleted,
+        streak,
+        level: levelInfo(userXpRow?.xp || 0),
+        context: {
+          course_title: quiz.courses?.title || null,
+          chapter_title: lessonRow?.title || null,
+          unit_title: unitRow?.title || null,
+        },
       }
     });
   } catch (error) {
@@ -1250,11 +1582,18 @@ router.get('/:id/results', authenticateToken, async (req, res) => {
       ? JSON.parse(submission.answers)
       : (submission.answers || {});
 
-    const { data: questions } = await supabase
-      .from('quiz_questions')
-      .select('id, question, correct_answer, explanation, order_number, question_type')
-      .eq('quiz_id', id)
-      .order('order_number', { ascending: true });
+    // Only the questions this particular attempt actually served (its
+    // random QUIZ_TAKE_SIZE draw) — the bank may hold more, or have changed
+    // since this submission.
+    const answeredIds = Object.keys(submittedAnswers);
+    const { data: questions } = answeredIds.length > 0
+      ? await supabase
+          .from('quiz_questions')
+          .select('id, question, correct_answer, explanation, order_number, question_type')
+          .eq('quiz_id', id)
+          .in('id', answeredIds)
+          .order('order_number', { ascending: true })
+      : { data: [] };
 
     const review = (questions || []).map(question => {
       const studentAnswer = submittedAnswers[question.id];

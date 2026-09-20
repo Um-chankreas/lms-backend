@@ -1,9 +1,16 @@
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
+const tex2svg = require('node-tikzjax').default;
+const sharp = require('sharp');
 const supabase = require('../config/supabase');
-const { authenticateToken, isTeacher } = require('../middleware/auth');
+const { authenticateToken, optionalAuth, isTeacher } = require('../middleware/auth');
+const { guestCanAccessStep, guestFreeStepKeys, sendGuestWall } = require('../utils/guest');
 const { v4: uuidv4 } = require('uuid');
 const { hasCourseAccess, ensureEnrolled } = require('../utils/access');
+const { awardXp, XP_VALUES } = require('../utils/xp');
+const { checkChapterAutoComplete } = require('../utils/progress');
+const { recordActivity } = require('../utils/streak');
 
 /**
  * Units (sections) live inside a chapter (a `lessons` row). See
@@ -15,11 +22,27 @@ const { hasCourseAccess, ensureEnrolled } = require('../utils/access');
  *   POST   /api/units                  add a unit                         (teacher)
  *   POST   /api/units/bulk             paste a chapter's Markdown, split on `##` (teacher)
  *   POST   /api/units/reorder          { lesson_id, order: [id, ...] }    (teacher)
+ *   POST   /api/units/render-tikz      { source } -> { svg }, TikZ figure  (teacher)
+ *   POST   /api/units/figure-image     multipart image upload -> { url }  (teacher)
  *   PUT    /api/units/:id              edit a unit                        (teacher)
  *   DELETE /api/units/:id              remove a unit                      (teacher)
  */
 
 const PREVIEW_LEN = 200;
+
+// Figure images uploaded from the unit editor (replacing a `\`\`\`figure`
+// placeholder the LaTeX importer left where a TikZ / \includegraphics figure
+// was). Stored in the existing public `course-materials` bucket.
+const FIGURE_ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/svg+xml'];
+const FIGURE_EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/svg+xml': 'svg' };
+const figureUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 }, // 8MB
+  fileFilter: (req, file, cb) => {
+    if (FIGURE_ALLOWED_TYPES.includes(file.mimetype)) cb(null, true);
+    else cb(new Error('Invalid file type. Upload a PNG, JPEG, WEBP, GIF or SVG image.'));
+  }
+});
 
 // Strip Markdown / LaTeX noise down to a short plain-text preview.
 const toPreview = (content) => {
@@ -56,6 +79,19 @@ const parseUnitsFromMarkdown = (markdown) => {
     }
   }
   if (current) units.push(current);
+
+  // No `## ` headings at all (e.g. a converted single-topic .tex) — treat the
+  // whole thing as one unit, titled from a leading `# ` line if there is one.
+  if (units.length === 0) {
+    const body = lines.join('\n').trim();
+    if (body) {
+      const h1 = body.match(/^#\s+(.*\S)\s*$/m);
+      units.push({
+        title: h1 ? h1[1].trim() : 'Unit 1',
+        content: h1 ? body.replace(h1[0], '').trim() : body,
+      });
+    }
+  }
 
   return units.map((u, i) => ({
     title: u.title,
@@ -272,6 +308,100 @@ router.post('/bulk', authenticateToken, isTeacher, async (req, res) => {
   }
 });
 
+// node-tikzjax runs a single shared WASM TeX engine and its own docs warn
+// against overlapping renders, so calls are serialized through one queue
+// instead of running concurrently.
+let tikzQueue = Promise.resolve();
+const renderTikz = (source) => {
+  const run = tikzQueue.then(() => tex2svg(source, { showConsole: false }));
+  tikzQueue = run.then(() => {}, () => {}); // keep the queue alive after a failure
+  return run;
+};
+const withTimeout = (promise, ms, message) => Promise.race([
+  promise,
+  new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
+]);
+const TIKZ_RENDER_TIMEOUT_MS = 20000;
+const TIKZ_SOURCE_MAX_LEN = 20000;
+
+const TIKZ_PNG_MAX_WIDTH = 1200;
+
+/**
+ * POST /api/units/render-tikz   (Teacher)
+ * Body: { source }  — a `\begin{tikzpicture}…\end{tikzpicture}` (or
+ * pgfplots/axis) block, as kept by the web LaTeX importer.
+ * Renders it with node-tikzjax (WASM TeX, no LaTeX install needed) so the
+ * importer can embed a real diagram instead of asking the teacher to upload
+ * one, then rasterizes the SVG to a PNG with sharp — markdown-it's link
+ * validator rejects `data:image/svg+xml` (SVG can carry scripts) but allows
+ * `data:image/png`, and a PNG needs no extra SVG support from the mobile
+ * image component either. Returns a ready `data:image/png;base64,…` URL.
+ * A figure that can't be rendered (unsupported package, bad syntax) should
+ * fall back to the manual image-upload placeholder client-side.
+ */
+router.post('/render-tikz', authenticateToken, isTeacher, async (req, res) => {
+  try {
+    const source = String(req.body.source || '').trim();
+    if (!source) return res.status(400).json({ success: false, error: 'source is required' });
+    if (source.length > TIKZ_SOURCE_MAX_LEN) {
+      return res.status(400).json({ success: false, error: 'Figure source is too large to render' });
+    }
+
+    const doc = /\\begin\s*\{document\}/.test(source) ? source : `\\begin{document}\n${source}\n\\end{document}`;
+    const svg = await withTimeout(renderTikz(doc), TIKZ_RENDER_TIMEOUT_MS, 'Rendering this figure took too long');
+
+    // Oversample for a crisp result, but cap the final width — dense_ 220
+    // is comfortably retina for a typical diagram; resize only kicks in for
+    // an unusually large one, keeping the embedded data URI reasonable.
+    const png = await sharp(Buffer.from(svg), { density: 220 })
+      .resize({ width: TIKZ_PNG_MAX_WIDTH, withoutEnlargement: true })
+      .png()
+      .toBuffer();
+
+    res.json({ success: true, data: { dataUrl: `data:image/png;base64,${png.toString('base64')}` } });
+  } catch (error) {
+    console.error('TikZ render error:', error);
+    res.status(422).json({ success: false, error: 'Could not render this figure: ' + error.message });
+  }
+});
+
+/**
+ * POST /api/units/figure-image   (Teacher)
+ * multipart: field `image`, plus `lesson_id` in the body.
+ * Uploads a figure image for a chapter the teacher owns and returns its
+ * public URL, which the unit editor writes into the Markdown in place of a
+ * `figure` placeholder. Not tied to a saved unit — works while adding one too.
+ */
+router.post('/figure-image', authenticateToken, isTeacher, figureUpload.single('image'), async (req, res) => {
+  try {
+    const file = req.file;
+    const lessonId = req.body.lesson_id ? String(req.body.lesson_id) : null;
+    if (!file) return res.status(400).json({ success: false, error: 'image file is required' });
+    if (!lessonId) return res.status(400).json({ success: false, error: 'lesson_id is required' });
+
+    const chapter = await loadChapter(lessonId);
+    if (!chapter) return res.status(404).json({ success: false, error: 'Chapter not found' });
+    if (!teacherOwnsCourse(chapter.courses, req.user)) {
+      return res.status(403).json({ success: false, error: 'You can only edit your own courses' });
+    }
+
+    const ext = FIGURE_EXT[file.mimetype] || 'png';
+    const path = `unit-figures/${lessonId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+
+    const { error: uploadError } = await supabase
+      .storage
+      .from('course-materials')
+      .upload(path, file.buffer, { contentType: file.mimetype, upsert: false });
+    if (uploadError) throw uploadError;
+
+    const url = `${process.env.SUPABASE_URL}/storage/v1/object/public/course-materials/${path}`;
+    res.status(201).json({ success: true, message: 'Figure uploaded', data: { url, path } });
+  } catch (error) {
+    console.error('Unit figure upload error:', error);
+    res.status(500).json({ success: false, error: 'Failed to upload figure: ' + error.message });
+  }
+});
+
 /**
  * POST /api/units   (Teacher)
  * Body: { lesson_id, title, content?, order_number?, is_free? }
@@ -321,7 +451,7 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
  * A chapter's units — titles, order and preview. Full `content` only for
  * units the caller can access (course access, or a free unit).
  */
-router.get('/', authenticateToken, async (req, res) => {
+router.get('/', optionalAuth, async (req, res) => {
   try {
     const lessonId = req.query.lesson_id ? String(req.query.lesson_id) : null;
     if (!lessonId) {
@@ -331,8 +461,15 @@ router.get('/', authenticateToken, async (req, res) => {
     const chapter = await loadChapter(lessonId);
     if (!chapter) return res.status(404).json({ success: false, error: 'Chapter not found' });
 
-    await ensureEnrolled({ supabase, course: chapter.courses, user: req.user });
-    const courseAccess = await hasCourseAccess({ supabase, course: chapter.courses, user: req.user });
+    let courseAccess = false;
+    let guestFreeUnits = null; // Set of unit ids a guest may read
+    if (!req.user) {
+      const free = chapter.courses ? await guestFreeStepKeys(chapter.courses.id) : [];
+      guestFreeUnits = new Set(free.filter(k => k.startsWith('unit:')).map(k => k.slice(5)));
+    } else {
+      await ensureEnrolled({ supabase, course: chapter.courses, user: req.user });
+      courseAccess = await hasCourseAccess({ supabase, course: chapter.courses, user: req.user });
+    }
 
     const { data: units, error } = await supabase
       .from('lesson_units')
@@ -351,7 +488,8 @@ router.get('/', authenticateToken, async (req, res) => {
         },
         course_access: courseAccess,
         units: (units || []).map(u => {
-          const unlocked = courseAccess || chapter.is_free || u.is_free;
+          const unlocked = courseAccess || chapter.is_free || u.is_free
+            || (guestFreeUnits ? guestFreeUnits.has(u.id) : false);
           return {
             id: u.id,
             title: u.title,
@@ -375,7 +513,7 @@ router.get('/', authenticateToken, async (req, res) => {
  * GET /api/units/:id
  * One unit with its full Markdown content (access-checked via the course).
  */
-router.get('/:id', authenticateToken, async (req, res) => {
+router.get('/:id', optionalAuth, async (req, res) => {
   try {
     const { data: unit, error } = await supabase
       .from('lesson_units')
@@ -390,10 +528,18 @@ router.get('/:id', authenticateToken, async (req, res) => {
     const chapter = unit.lessons;
     const course = chapter?.courses;
 
-    await ensureEnrolled({ supabase, course, user: req.user });
-    const courseAccess = await hasCourseAccess({ supabase, course, user: req.user });
-    if (!courseAccess && !chapter?.is_free && !unit.is_free) {
-      return res.status(403).json({ success: false, error: 'Enroll in this course to read this unit' });
+    // Signed-out guest: allowed only for the first couple of steps of this
+    // course (a preview), then the sign-up wall.
+    if (!req.user) {
+      if (!course || !(await guestCanAccessStep(course.id, `unit:${unit.id}`))) {
+        return sendGuestWall(res);
+      }
+    } else {
+      await ensureEnrolled({ supabase, course, user: req.user });
+      const courseAccess = await hasCourseAccess({ supabase, course, user: req.user });
+      if (!courseAccess && !chapter?.is_free && !unit.is_free) {
+        return res.status(403).json({ success: false, error: 'Enroll in this course to read this unit' });
+      }
     }
 
     res.json({
@@ -414,6 +560,79 @@ router.get('/:id', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Unit fetch error:', error);
     res.status(500).json({ success: false, error: 'Failed to fetch unit: ' + error.message });
+  }
+});
+
+/**
+ * POST /api/units/:id/complete   (Student)
+ * Mark a unit as read/done — one path step. Idempotent: awards
+ * UNIT_COMPLETE XP only the first time. If this was the last thing needed
+ * (every unit in the chapter read + every one of their quizzes passed), the
+ * chapter itself auto-completes (see utils/progress.js).
+ */
+router.post('/:id/complete', optionalAuth, async (req, res) => {
+  try {
+    const { data: unit } = await supabase
+      .from('lesson_units')
+      .select('id, lesson_id, is_free, lessons(is_free, courses(*))')
+      .eq('id', req.params.id)
+      .single();
+    if (!unit) return res.status(404).json({ success: false, error: 'Unit not found' });
+
+    const chapter = unit.lessons;
+    const course = chapter?.courses;
+
+    // Guest: no persistence — just acknowledge the step (client tracks it
+    // locally) if it's within the free preview, otherwise the wall.
+    if (!req.user) {
+      if (!course || !(await guestCanAccessStep(course.id, `unit:${unit.id}`))) {
+        return sendGuestWall(res);
+      }
+      return res.json({
+        success: true,
+        message: 'Unit marked as complete',
+        data: { xp_awarded: 0, chapter_completed: false, guest: true }
+      });
+    }
+
+    if (req.user.role !== 'student') {
+      return res.status(403).json({ success: false, error: 'This action requires student privileges' });
+    }
+
+    await ensureEnrolled({ supabase, course, user: req.user });
+    const courseAccess = await hasCourseAccess({ supabase, course, user: req.user });
+    if (!courseAccess && !chapter?.is_free && !unit.is_free) {
+      return res.status(403).json({ success: false, error: 'Enroll in this course to complete this unit' });
+    }
+
+    const { data: existing } = await supabase
+      .from('unit_completions')
+      .select('id')
+      .eq('unit_id', unit.id)
+      .eq('student_id', req.user.userId)
+      .maybeSingle();
+
+    let xpAwarded = 0;
+    if (!existing) {
+      const { error } = await supabase
+        .from('unit_completions')
+        .insert({ id: uuidv4(), unit_id: unit.id, student_id: req.user.userId, completed_at: new Date() });
+      if (error) throw error;
+      xpAwarded = XP_VALUES.UNIT_COMPLETE;
+      await awardXp(req.user.userId, xpAwarded, 'unit_complete', course?.id || null);
+      await recordActivity(req.user.userId).catch(() => {});
+    }
+
+    const chapterCompleted = await checkChapterAutoComplete({ lessonId: unit.lesson_id, studentId: req.user.userId });
+
+    res.json({
+      success: true,
+      message: existing ? 'Unit already completed' : 'Unit marked as complete',
+      data: { xp_awarded: xpAwarded, chapter_completed: chapterCompleted }
+    });
+  } catch (error) {
+    console.error('Unit complete error:', error);
+    res.status(500).json({ success: false, error: 'Failed to complete unit: ' + error.message });
   }
 });
 

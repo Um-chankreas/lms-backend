@@ -17,10 +17,18 @@ app.use(cors({
   },
   credentials: true,
   allowedHeaders: ['Content-Type', 'Authorization'],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
+  // PATCH is used by admin.routes.js and notifications.routes.js — without
+  // it here, a browser's CORS preflight for those routes fails silently and
+  // the request never goes out, surfacing to the client as a bare
+  // "Network Error" with no indication it was a CORS problem.
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
 }));
 
-app.use(express.json());
+// No explicit limit here defaults to Express's 100kb — too small once a
+// unit's content embeds a base64 diagram image (rendered TikZ figures from
+// the LaTeX import can easily be several hundred KB), which was surfacing
+// to the client as a bare "Network Error" instead of a clear 413.
+app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // ============ Routes ============
@@ -35,6 +43,8 @@ app.use('/api/dashboard', require('./routes/dashboard.routes'));
 app.use('/api/leaderboard', require('./routes/leaderboard.routes'));
 app.use('/api/profile', require('./routes/profile.routes'));
 app.use('/api/admin', require('./routes/admin.routes'));
+app.use('/api/notifications', require('./routes/notifications.routes'));
+app.use('/api/daily-challenge', require('./routes/dailyChallenge.routes'));
 
 // ============ Health Check ============
 app.get('/', (req, res) => {

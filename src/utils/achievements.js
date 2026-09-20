@@ -1,15 +1,24 @@
 const { v4: uuidv4 } = require('uuid');
 const supabase = require('../config/supabase');
+const { totalXpForLevel } = require('./xp');
 
 // Which badge to show when a student has earned several (first match wins).
 const BADGE_PRIORITY = [
-  'streak_master', 'quiz_grinder', 'knowledge_seeker', 'fast_finisher',
-  'quick_learner', 'rising_star', 'first_step'
+  'streak_30', 'streak_14', 'streak_7', 'streak_master',
+  'level_10', 'quiz_master', 'quiz_grinder', 'assignment_champion',
+  'knowledge_seeker', 'fast_finisher', 'quick_learner', 'rising_star',
+  'first_hundred', 'first_step'
 ];
 
-const RISING_STAR_XP = 50;      // XP in the last 7 days
-const QUIZ_GRINDER_COUNT = 5;   // distinct quizzes passed
-const STREAK_MASTER_DAYS = 3;   // consecutive daily-quiz days
+const RISING_STAR_XP = 50;        // XP in the last 7 days
+const QUIZ_GRINDER_COUNT = 5;     // distinct quizzes passed
+const QUIZ_MASTER_COUNT = 10;     // distinct quizzes passed
+const STREAK_MASTER_DAYS = 3;     // consecutive daily-quiz days
+const ASSIGNMENT_CHAMPION_COUNT = 5;  // assignments turned in on time
+const RISING_SCHOLAR_LEVEL = 10;  // level for the 'level_10' badge
+
+// Consecutive daily-quiz-day milestones: { code: days required }
+const STREAK_MILESTONES = { streak_7: 7, streak_14: 14, streak_30: 30 };
 
 // Lesson-count milestone badges: { code: lessons required }
 const LESSON_MILESTONES = {
@@ -78,12 +87,16 @@ async function evaluateAchievements(studentId) {
     const earned = new Set((earnedRows || []).map(r => r.badge_code));
 
     const toCheck = [
-      'fast_finisher', 'quiz_grinder', 'streak_master', 'rising_star',
+      'fast_finisher', 'quiz_grinder', 'quiz_master', 'streak_master', 'rising_star',
+      'first_hundred', 'assignment_champion', 'level_10',
+      ...Object.keys(STREAK_MILESTONES),
       ...Object.keys(LESSON_MILESTONES)
     ].filter(code => !earned.has(code));
     if (toCheck.length === 0) return;
 
-    // lesson_completions count (drives the milestone badges)
+    const need = (...codes) => codes.some(c => toCheck.includes(c));
+
+    // lesson_completions count (drives the lesson milestone badges)
     let lessonsCompleted = 0;
     if (Object.keys(LESSON_MILESTONES).some(code => toCheck.includes(code))) {
       const { count } = await supabase
@@ -96,7 +109,7 @@ async function evaluateAchievements(studentId) {
     // quiz_submissions: perfect score + distinct passed quizzes
     let perfectScore = false;
     let passedQuizCount = 0;
-    if (toCheck.includes('fast_finisher') || toCheck.includes('quiz_grinder')) {
+    if (need('fast_finisher', 'quiz_grinder', 'quiz_master')) {
       const { data: subs } = await supabase
         .from('quiz_submissions')
         .select('quiz_id, score, passed')
@@ -107,13 +120,21 @@ async function evaluateAchievements(studentId) {
 
     // daily-quiz streak
     let streak = 0;
-    if (toCheck.includes('streak_master')) {
+    if (need('streak_master', ...Object.keys(STREAK_MILESTONES))) {
       const { data: attempts } = await supabase
         .from('daily_quiz_attempts')
         .select('quiz_date, completed_at')
         .eq('student_id', studentId)
         .not('completed_at', 'is', null);
       streak = currentStreak((attempts || []).map(a => a.quiz_date));
+    }
+
+    // Lifetime XP + level (first_hundred, level_10)
+    let lifetimeXp = 0;
+    if (need('rising_star', 'first_hundred', 'level_10')) {
+      const { data: userRow } = await supabase
+        .from('users').select('xp').eq('id', studentId).maybeSingle();
+      lifetimeXp = userRow?.xp || 0;
     }
 
     // XP in the last 7 days
@@ -129,11 +150,29 @@ async function evaluateAchievements(studentId) {
       weekXp = (events || []).reduce((sum, e) => sum + (e.amount || 0), 0);
     }
 
+    // On-time assignment submissions (assignment_champion)
+    let ontimeAssignments = 0;
+    if (toCheck.includes('assignment_champion')) {
+      const { count } = await supabase
+        .from('xp_events')
+        .select('id', { count: 'exact', head: true })
+        .eq('student_id', studentId)
+        .eq('reason', 'assignment_ontime');
+      ontimeAssignments = count || 0;
+    }
+
     const grants = [];
     if (toCheck.includes('fast_finisher') && perfectScore) grants.push('fast_finisher');
     if (toCheck.includes('quiz_grinder') && passedQuizCount >= QUIZ_GRINDER_COUNT) grants.push('quiz_grinder');
+    if (toCheck.includes('quiz_master') && passedQuizCount >= QUIZ_MASTER_COUNT) grants.push('quiz_master');
     if (toCheck.includes('streak_master') && streak >= STREAK_MASTER_DAYS) grants.push('streak_master');
     if (toCheck.includes('rising_star') && weekXp >= RISING_STAR_XP) grants.push('rising_star');
+    if (toCheck.includes('first_hundred') && lifetimeXp >= 100) grants.push('first_hundred');
+    if (toCheck.includes('level_10') && lifetimeXp >= totalXpForLevel(RISING_SCHOLAR_LEVEL)) grants.push('level_10');
+    if (toCheck.includes('assignment_champion') && ontimeAssignments >= ASSIGNMENT_CHAMPION_COUNT) grants.push('assignment_champion');
+    for (const [code, required] of Object.entries(STREAK_MILESTONES)) {
+      if (toCheck.includes(code) && streak >= required) grants.push(code);
+    }
     for (const [code, required] of Object.entries(LESSON_MILESTONES)) {
       if (toCheck.includes(code) && lessonsCompleted >= required) grants.push(code);
     }

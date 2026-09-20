@@ -3,7 +3,7 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const { authenticateToken } = require('../middleware/auth');
 const { bestBadgeByStudent, getStreak } = require('../utils/achievements');
-const { levelInfo } = require('../utils/xp');
+const { levelInfo, getXpBreakdown } = require('../utils/xp');
 
 const NEW_SCHOLAR_DAYS = 14;
 const TOP_COMPETITOR_RANK = 3;
@@ -186,10 +186,11 @@ router.get('/profile/:studentId', authenticateToken, async (req, res) => {
     const rank = rankIdx >= 0 ? rankIdx + 1 : null;
 
     // Activity summary
-    const [lessonsRes, passedSubsRes, streak] = await Promise.all([
+    const [lessonsRes, passedSubsRes, streak, xpBreakdown] = await Promise.all([
       supabase.from('lesson_completions').select('id', { count: 'exact', head: true }).eq('student_id', studentId),
       supabase.from('quiz_submissions').select('quiz_id').eq('student_id', studentId).eq('passed', true),
-      getStreak(studentId)
+      getStreak(studentId),
+      getXpBreakdown(studentId)
     ]);
     const challengesMastered = new Set((passedSubsRes.data || []).map(s => s.quiz_id)).size;
 
@@ -233,6 +234,7 @@ router.get('/profile/:studentId', authenticateToken, async (req, res) => {
           lessons_completed: lessonsRes.count || 0,
           challenges_mastered: challengesMastered
         },
+        xp_breakdown: xpBreakdown,
         badges
       }
     });

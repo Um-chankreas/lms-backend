@@ -4,6 +4,8 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const { authenticateToken, isTeacher } = require('../middleware/auth');
 const { hasActiveSubscription } = require('../utils/access');
+const { awardXp, XP_VALUES } = require('../utils/xp');
+const { evaluateAchievements } = require('../utils/achievements');
 const { generateAgoraToken, appId } = require('../utils/agoraToken');
 const { generateAgoraUid } = require('../utils/agoraUid');
 const {
@@ -17,9 +19,10 @@ const {
   emitForceMute
 } = require('../realtime/liveClassSocket');
 const { v4: uuidv4 } = require('uuid');
+const jwt = require('jsonwebtoken');
 
 // Mobile deep link the app opens to jump straight into a live class screen.
-// The app still has to call POST /:id/token to get the Agora credentials.
+// The app still has to call POST /:id/token to get Agora credentials.
 const JOIN_URL_BASE = (process.env.LIVE_CLASS_JOIN_URL_BASE || 'lms://live-class').replace(/\/$/, '');
 const joinUrlFor = (liveClassId) => `${JOIN_URL_BASE}/${liveClassId}`;
 
@@ -63,10 +66,10 @@ async function resolveLiveClassAccess(liveClass, user) {
     return subscribed
       ? { allowed: true, role: 'student' }
       : {
-          allowed: false,
-          code: 'payment_required',
-          reason: 'A weekly subscription is required to join live classes'
-        };
+        allowed: false,
+        code: 'payment_required',
+        reason: 'A weekly subscription is required to join live classes'
+      };
   }
 
   return { allowed: false, reason: 'Not allowed' };
@@ -101,7 +104,9 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
       });
     }
 
-    // Generate unique channel name
+    // Generate a unique Agora channel name up front — a live class always has
+    // a channel to join by the time anyone requests a token, whether or not
+    // it's started yet.
     const classId = uuidv4();
     const channelName = `class_${classId}`;
 
@@ -127,8 +132,8 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
       success: true,
       message: 'Live class created successfully',
       data: {
-        liveClass: { ...newClass, join_url: joinUrlFor(newClass.id) },
-        appId: appId
+        appId,
+        liveClass: { ...newClass, join_url: joinUrlFor(newClass.id) }
       }
     });
   } catch (error) {
@@ -230,6 +235,8 @@ router.get('/my', authenticateToken, async (req, res) => {
         scheduled_at: lc.scheduled_at,
         started_at: lc.started_at,
         ended_at: lc.ended_at,
+        recording_lesson_id: lc.recording_lesson_id || null,
+        recording_saved_at: lc.recording_saved_at || null,
         course: courseById[lc.course_id] || { id: lc.course_id },
         teacher: teacherById[lc.teacher_id] || { id: lc.teacher_id },
         locked,
@@ -369,7 +376,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
 
 /**
  * POST /api/live-classes/:id/token
- * Get Agora token for joining a live class.
+ * Get an Agora RTC token for joining a live class.
  * Teacher (owner) or an enrolled student only. Students can only join an
  * "active" class.
  */
@@ -404,8 +411,9 @@ router.post('/:id/token', authenticateToken, async (req, res) => {
       });
     }
 
-    // A student who is "speaking" joins as a co-host: publisher token so they
-    // can turn on mic/camera in the same channel. No teacher approval needed.
+    // A student who is "speaking" joins as a co-host: their token carries the
+    // co-host role (publish audio) instead of the audience-only student role.
+    // No teacher approval needed.
     let rtcRole = access.role; // 'teacher' | 'student'
     if (rtcRole === 'student') {
       const { data: hand } = await supabase
@@ -418,9 +426,6 @@ router.post('/:id/token', authenticateToken, async (req, res) => {
     }
 
     const numericUid = generateAgoraUid(req.user.userId);
-
-    // generateAgoraToken maps 'teacher' -> PUBLISHER, anything else ->
-    // SUBSCRIBER; pass 'teacher' for a co-host so they get a publisher token.
     const token = generateAgoraToken(
       liveClass.channel_name,
       numericUid,
@@ -443,6 +448,16 @@ router.post('/:id/token', authenticateToken, async (req, res) => {
         .update({ joined_at: new Date() })
         .eq('id', openRow.id);
     } else {
+      // First time this user joins this class ever? (No row at all — an open
+      // row was ruled out above, so check for any closed one.)
+      const { data: priorRow } = await supabase
+        .from('live_class_participants')
+        .select('id')
+        .eq('live_class_id', id)
+        .eq('user_id', req.user.userId)
+        .limit(1)
+        .maybeSingle();
+
       await supabase
         .from('live_class_participants')
         .insert({
@@ -453,14 +468,21 @@ router.post('/:id/token', authenticateToken, async (req, res) => {
           joined_at: new Date()
         });
       await emitParticipantsChanged(id);
+
+      // Attendance XP — students only, once per class, for a class that has
+      // actually started.
+      if (access.role === 'student' && !priorRow && liveClass.status === 'active') {
+        await awardXp(req.user.userId, XP_VALUES.LIVE_CLASS_ATTEND, 'live_class', liveClass.course_id || null);
+        await evaluateAchievements(req.user.userId);
+      }
     }
 
     res.json({
       success: true,
       data: {
         token,
+        appId,
         channel: liveClass.channel_name,
-        appId: appId,
         uid: numericUid,
         role: rtcRole, // 'teacher' | 'student' | 'co_host'
         liveClass: {
@@ -476,6 +498,140 @@ router.post('/:id/token', authenticateToken, async (req, res) => {
       success: false,
       error: 'Failed to generate token: ' + error.message
     });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// OBS recorder page
+// The teacher opens /live/:id/record?key=<recorder key> in OBS (Browser Source)
+// or a spare browser window. OBS's browser has no login session, so access is
+// a short-lived JWT scoped to this one class, and the page only ever gets a
+// subscriber-only Agora token (it can watch, never publish).
+// ---------------------------------------------------------------------------
+const RECORDER_KEY_TTL = '8h';
+const recorderUidFor = (liveClassId) => generateAgoraUid(`recorder:${liveClassId}`);
+
+/**
+ * POST /api/live-classes/:id/recorder-link
+ * Teacher (owner) gets a recorder key to put in the recorder page URL.
+ */
+router.post('/:id/recorder-link', authenticateToken, isTeacher, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data: liveClass } = await supabase
+      .from('live_classes')
+      .select('id, teacher_id')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (!liveClass) return res.status(404).json({ success: false, error: 'Live class not found' });
+    if (liveClass.teacher_id !== req.user.userId) {
+      return res.status(403).json({ success: false, error: 'You do not own this live class' });
+    }
+
+    const key = jwt.sign(
+      { purpose: 'live_recorder', liveClassId: id },
+      process.env.JWT_SECRET || 'your_jwt_secret_key_here',
+      { expiresIn: RECORDER_KEY_TTL }
+    );
+    res.json({ success: true, data: { key, expires_in: RECORDER_KEY_TTL } });
+  } catch (error) {
+    console.error('Recorder link error:', error);
+    res.status(500).json({ success: false, error: 'Failed to create recorder link' });
+  }
+});
+
+/**
+ * POST /api/live-classes/:id/recorder-token   body: { key }
+ * No login — authorised by the recorder key. Returns a subscriber-only Agora
+ * token. Deliberately does not touch live_class_participants (the recorder is
+ * not a student: no attendance row, no XP, no roster entry).
+ */
+router.post('/:id/recorder-token', async (req, res) => {
+  try {
+    const { id } = req.params;
+    let claims;
+    try {
+      claims = jwt.verify(req.body?.key || '', process.env.JWT_SECRET || 'your_jwt_secret_key_here');
+    } catch (_) {
+      return res.status(401).json({ success: false, error: 'Recorder key is invalid or expired' });
+    }
+    if (claims.purpose !== 'live_recorder' || claims.liveClassId !== id) {
+      return res.status(403).json({ success: false, error: 'Recorder key does not match this class' });
+    }
+
+    const { data: liveClass } = await supabase
+      .from('live_classes')
+      .select('id, title, status, channel_name')
+      .eq('id', id)
+      .maybeSingle();
+    if (!liveClass) return res.status(404).json({ success: false, error: 'Live class not found' });
+    if (liveClass.status === 'completed') {
+      return res.status(409).json({ success: false, error: 'This live class has ended' });
+    }
+
+    const uid = recorderUidFor(id);
+    const token = generateAgoraToken(liveClass.channel_name, uid, 'student');
+
+    res.json({
+      success: true,
+      data: {
+        token,
+        appId,
+        channel: liveClass.channel_name,
+        uid,
+        liveClass: { id: liveClass.id, title: liveClass.title, status: liveClass.status }
+      }
+    });
+  } catch (error) {
+    console.error('Recorder token error:', error);
+    res.status(500).json({ success: false, error: 'Failed to generate recorder token' });
+  }
+});
+
+/**
+ * PUT /api/live-classes/:id/recording   body: { lesson_id }
+ * Teacher links the lesson their OBS recording was uploaded to (via the normal
+ * lesson video upload flow) so the class remembers it.
+ */
+router.put('/:id/recording', authenticateToken, isTeacher, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { lesson_id } = req.body || {};
+    if (!lesson_id) return res.status(400).json({ success: false, error: '`lesson_id` is required' });
+
+    const { data: liveClass } = await supabase
+      .from('live_classes')
+      .select('id, teacher_id, course_id')
+      .eq('id', id)
+      .maybeSingle();
+    if (!liveClass) return res.status(404).json({ success: false, error: 'Live class not found' });
+    if (liveClass.teacher_id !== req.user.userId) {
+      return res.status(403).json({ success: false, error: 'You do not own this live class' });
+    }
+
+    const { data: lesson } = await supabase
+      .from('lessons')
+      .select('id, course_id, video_url')
+      .eq('id', lesson_id)
+      .maybeSingle();
+    if (!lesson || lesson.course_id !== liveClass.course_id) {
+      return res.status(400).json({ success: false, error: 'Lesson must belong to this class\'s course' });
+    }
+    if (!lesson.video_url) {
+      return res.status(409).json({ success: false, error: 'That lesson has no video yet' });
+    }
+
+    const { error } = await supabase
+      .from('live_classes')
+      .update({ recording_lesson_id: lesson_id, recording_saved_at: new Date() })
+      .eq('id', id);
+    if (error) throw error;
+
+    res.json({ success: true, message: 'Recording linked to lesson', data: { lesson_id } });
+  } catch (error) {
+    console.error('Link recording error:', error);
+    res.status(500).json({ success: false, error: 'Failed to link recording' });
   }
 });
 
@@ -713,6 +869,8 @@ router.post('/:id/hand', authenticateToken, async (req, res) => {
         .from('users').select('name').eq('id', req.user.userId).single();
       emitHandRaised(id, req.user.userId, me?.name || 'Student');
     }
+    // "speak" -> the client calls POST /:id/token again to get a fresh
+    // co-host-shaped Agora token and re-joins with publish rights.
     emitHandUpdate(id, req.user.userId, status);
     await emitStageChanged(id);
 
@@ -744,6 +902,8 @@ router.delete('/:id/hand', authenticateToken, async (req, res) => {
     if (delError) throw delError;
 
     if (prev === 'raised') emitHandLowered(id, req.user.userId);
+    // "stop speaking" -> the client re-fetches an audience-shaped token next
+    // time it needs one; no server-side role push required for Agora.
     emitHandUpdate(id, req.user.userId, 'none');
     await emitStageChanged(id);
 
