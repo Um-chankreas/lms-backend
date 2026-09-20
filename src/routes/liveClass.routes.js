@@ -20,6 +20,7 @@ const {
 } = require('../realtime/liveClassSocket');
 const { v4: uuidv4 } = require('uuid');
 const jwt = require('jsonwebtoken');
+const { endLiveClassRecord } = require('../utils/liveClassEnd');
 
 // Mobile deep link the app opens to jump straight into a live class screen.
 // The app still has to call POST /:id/token to get Agora credentials.
@@ -705,30 +706,7 @@ router.put('/:id/end', authenticateToken, isTeacher, async (req, res) => {
       });
     }
 
-    const { data: updatedClass, error } = await supabase
-      .from('live_classes')
-      .update({
-        status: 'completed',
-        ended_at: new Date()
-      })
-      .eq('id', id)
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    // Mark all participants as left
-    await supabase
-      .from('live_class_participants')
-      .update({ left_at: new Date() })
-      .eq('live_class_id', id)
-      .is('left_at', null);
-
-    // Clear all hand-raise / co-host requests for the finished class.
-    await supabase
-      .from('live_class_hand_raises')
-      .delete()
-      .eq('live_class_id', id);
+    const updatedClass = await endLiveClassRecord(id);
 
     // "End class" is also the teacher's "leave" — everyone is now out.
     emitClassStatus(id, 'completed');

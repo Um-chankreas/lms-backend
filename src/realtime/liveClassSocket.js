@@ -2,6 +2,7 @@ const { Server } = require('socket.io');
 const supabase = require('../config/supabase');
 const { verifyToken } = require('../utils/jwt');
 const { generateAgoraUid } = require('../utils/agoraUid');
+const { endLiveClassRecord } = require('../utils/liveClassEnd');
 
 /**
  * Realtime layer for live classes (Google-Meet-style). No approval / request
@@ -237,7 +238,60 @@ function initLiveClassRealtime(httpServer) {
     });
   });
 
+  startTeacherPresenceSweeper();
   return io;
+}
+
+
+// ---- auto-end when the teacher vanishes ----------------------------------
+// A teacher who closes the tab (or loses power) never calls PUT /:id/end, so
+// the class would stay "active" forever. Every SWEEP_MS we look at each active
+// class: if a teacher socket is in its room we note the time; if none has been
+// there for TEACHER_GRACE_MS we end the class. The grace covers page refreshes
+// and network blips. Timestamps live in memory, so after a server restart the
+// clock simply starts again from the first sweep.
+const TEACHER_GRACE_MS = (parseInt(process.env.LIVE_CLASS_TEACHER_GRACE_MIN, 10) || 3) * 60 * 1000;
+const SWEEP_MS = 30 * 1000;
+const teacherLastSeen = new Map(); // liveClassId -> ms
+
+async function sweepTeacherPresence() {
+  if (!io) return;
+  const { data: active, error } = await supabase
+    .from('live_classes')
+    .select('id')
+    .eq('status', 'active');
+  if (error) return console.error('Teacher sweep error:', error.message);
+
+  const now = Date.now();
+  const activeIds = new Set((active || []).map(c => c.id));
+  for (const id of teacherLastSeen.keys()) {
+    if (!activeIds.has(id)) teacherLastSeen.delete(id);
+  }
+
+  for (const id of activeIds) {
+    const sockets = await io.in(roomAll(id)).fetchSockets();
+    if (sockets.some(s => s.data?.user?.role === 'teacher')) {
+      teacherLastSeen.set(id, now);
+      continue;
+    }
+    if (!teacherLastSeen.has(id)) { teacherLastSeen.set(id, now); continue; }
+    if (now - teacherLastSeen.get(id) < TEACHER_GRACE_MS) continue;
+
+    try {
+      await endLiveClassRecord(id);
+      teacherLastSeen.delete(id);
+      emitClassStatus(id, 'completed');
+      await emitStageChanged(id);
+      await emitParticipantsChanged(id);
+      console.log(`Live class ${id} auto-ended: teacher gone for ${Math.round(TEACHER_GRACE_MS / 60000)} min`);
+    } catch (err) {
+      console.error(`Auto-end failed for live class ${id}:`, err.message);
+    }
+  }
+}
+
+function startTeacherPresenceSweeper() {
+  setInterval(() => sweepTeacherPresence().catch(() => {}), SWEEP_MS).unref();
 }
 
 const LEAVE_GRACE_MS = 8000;
