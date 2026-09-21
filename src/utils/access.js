@@ -69,23 +69,52 @@ async function ensureEnrolled({ supabase, course, user }) {
   }
 }
 
-/**
- * Whether a student's account-level weekly subscription is currently active
- * (users.paid_until >= today). This is what gates joining live classes; an
- * active subscription covers every course.
- */
-async function hasActiveSubscription({ supabase, studentId }) {
-  const { data } = await supabase
-    .from('users')
-    .select('paid_until')
-    .eq('id', studentId)
-    .maybeSingle();
-
-  if (!data || !data.paid_until) return false;
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return new Date(data.paid_until) >= today;
+/** Today as "YYYY-MM-DD" (server-local), the format subscription expiries use. */
+function todayYmd() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-module.exports = { hasCourseAccess, ensureEnrolled, hasActiveSubscription };
+/** A subscription is active through its expiry day (expiry_date >= today). */
+const isSubscriptionActive = (expiryDate) => !!expiryDate && String(expiryDate).slice(0, 10) >= todayYmd();
+
+/**
+ * Whether a student has an active subscription for THIS course
+ * (student_course_subscriptions.expiry_date >= today). This is what gates
+ * joining that course's live classes; paying for one course does not unlock
+ * another.
+ */
+async function hasCourseSubscription({ supabase, studentId, courseId }) {
+  if (!studentId || !courseId) return false;
+  const { data } = await supabase
+    .from('student_course_subscriptions')
+    .select('expiry_date')
+    .eq('student_id', studentId)
+    .eq('course_id', courseId)
+    .maybeSingle();
+  return isSubscriptionActive(data?.expiry_date);
+}
+
+/**
+ * Of `courseIds`, the ones this student has an active subscription for
+ * (one query — used to annotate a whole list). Returns a Set of course ids.
+ */
+async function subscribedCourseIds({ supabase, studentId, courseIds }) {
+  if (!studentId || !courseIds || courseIds.length === 0) return new Set();
+  const { data } = await supabase
+    .from('student_course_subscriptions')
+    .select('course_id')
+    .eq('student_id', studentId)
+    .in('course_id', courseIds)
+    .gte('expiry_date', todayYmd());
+  return new Set((data || []).map(r => r.course_id));
+}
+
+module.exports = {
+  hasCourseAccess,
+  ensureEnrolled,
+  hasCourseSubscription,
+  subscribedCourseIds,
+  isSubscriptionActive,
+  todayYmd
+};

@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const { authenticateToken, isTeacher } = require('../middleware/auth');
-const { hasActiveSubscription } = require('../utils/access');
+const { hasCourseSubscription, subscribedCourseIds } = require('../utils/access');
 const { awardXp, XP_VALUES } = require('../utils/xp');
 const { evaluateAchievements } = require('../utils/achievements');
 const { generateAgoraToken, appId } = require('../utils/agoraToken');
@@ -31,8 +31,8 @@ const joinUrlFor = (liveClassId) => `${JOIN_URL_BASE}/${liveClassId}`;
 /**
  * Works out whether `user` is allowed to see / join `liveClass`:
  *  - the teacher who owns the class, or
- *  - a student with an active weekly subscription (covers every course),
- *    as long as the course still has live classes enabled by an admin.
+ *  - a student with an active subscription FOR THIS COURSE, as long as the
+ *    course still has live classes enabled by an admin (courses.live_enabled).
  * Returns { allowed, role, reason, code }.
  */
 async function resolveLiveClassAccess(liveClass, user) {
@@ -63,14 +63,18 @@ async function resolveLiveClassAccess(liveClass, user) {
       };
     }
 
-    const subscribed = await hasActiveSubscription({ supabase, studentId: user.userId });
+    const subscribed = await hasCourseSubscription({
+      supabase,
+      studentId: user.userId,
+      courseId: liveClass.course_id
+    });
 
     return subscribed
       ? { allowed: true, role: 'student' }
       : {
         allowed: false,
         code: 'payment_required',
-        reason: 'A weekly subscription is required to join live classes'
+        reason: "A subscription for this course is required to join its live classes"
       };
   }
 
@@ -169,7 +173,8 @@ router.get('/my', authenticateToken, async (req, res) => {
       .order('scheduled_at', { ascending: false });
 
     // course_id -> { joinable, reason }. joinable is false when the student
-    // has no active subscription, or the course has live classes disabled.
+    // has no active subscription FOR THAT COURSE, or the course has live
+    // classes disabled.
     const courseGate = new Map();
 
     if (user.role === 'teacher') {
@@ -185,15 +190,15 @@ router.get('/my', authenticateToken, async (req, res) => {
         return res.json({ success: true, data: { liveClasses: [] } });
       }
 
-      const [{ data: courses }, subscribed] = await Promise.all([
+      const [{ data: courses }, subscribedCourses] = await Promise.all([
         supabase.from('courses').select('id, live_enabled').in('id', courseIds),
-        hasActiveSubscription({ supabase, studentId: user.userId })
+        subscribedCourseIds({ supabase, studentId: user.userId, courseIds })
       ]);
 
       (courses || []).forEach(c => {
         if (c.live_enabled === false) {
           courseGate.set(c.id, { joinable: false, reason: 'live_disabled' });
-        } else if (subscribed) {
+        } else if (subscribedCourses.has(c.id)) {
           courseGate.set(c.id, { joinable: true, reason: null });
         } else {
           courseGate.set(c.id, { joinable: false, reason: 'payment_required' });

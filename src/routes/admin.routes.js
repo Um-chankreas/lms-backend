@@ -10,13 +10,31 @@ const PHONE_REGEX = /^\+?[0-9]{8,15}$/;
 const normalizeEmail = e => String(e).trim().toLowerCase();
 const normalizePhone = p => String(p).replace(/[\s\-()]/g, '');
 
-const todayYmd = () => {
-  const d = new Date();
+const { todayYmd, isSubscriptionActive, ensureEnrolled } = require('../utils/access');
+
+// PostgREST caps one response at 1000 rows; page through anything that can
+// outgrow that. `build` must return a fresh query each call.
+async function fetchAllRows(build, pageSize = 1000) {
+  const out = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await build().range(from, from + pageSize - 1);
+    if (error) throw error;
+    out.push(...(data || []));
+    if (!data || data.length < pageSize) break;
+  }
+  return out;
+}
+
+const addDaysYmd = (ymd, days) => {
+  const d = new Date(`${ymd}T00:00:00`);
+  d.setDate(d.getDate() + days);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
-const isSubscribed = paidUntil => !!paidUntil && paidUntil >= todayYmd();
 
-const publicUser = u => ({
+// Subscriptions are per course (student_course_subscriptions), so a student row
+// carries a summary instead of one paid_until: { enrolled, active, active_courses }.
+// is_paid = "has at least one active course subscription" (used by the list filter).
+const publicUser = (u, summary) => ({
   id: u.id,
   name: u.name,
   email: u.email || null,
@@ -25,11 +43,43 @@ const publicUser = u => ({
   avatar_url: u.avatar_url || null,
   xp: u.xp || 0,
   is_active: u.is_active !== false,
-  paid_until: u.paid_until || null,
-  last_paid_at: u.last_paid_at || null,
-  is_paid: isSubscribed(u.paid_until),
+  ...(summary ? { subscription_summary: summary, is_paid: summary.active > 0 } : {}),
   created_at: u.created_at
 });
+
+/**
+ * For a page of students: how many courses each is in, and which of them have
+ * an active subscription. The denominator is every course the student is
+ * enrolled in OR subscribed to, so "active/enrolled" can never exceed 100%.
+ * Returns Map(studentId -> { enrolled, active, active_courses: [{ course_id, title, expiry_date }] }).
+ */
+async function subscriptionSummaries(studentIds) {
+  const out = new Map(studentIds.map(id => [id, { enrolled: 0, active: 0, active_courses: [] }]));
+  if (studentIds.length === 0) return out;
+
+  const [enrollments, subs] = await Promise.all([
+    fetchAllRows(() => supabase.from('course_enrollments').select('student_id, course_id').in('student_id', studentIds)),
+    fetchAllRows(() => supabase.from('student_course_subscriptions').select('student_id, course_id, expiry_date').in('student_id', studentIds)),
+  ]);
+
+  const courseIds = [...new Set([...enrollments, ...subs].map(r => r.course_id))];
+  const { data: courses } = courseIds.length
+    ? await supabase.from('courses').select('id, title').in('id', courseIds)
+    : { data: [] };
+  const titleById = Object.fromEntries((courses || []).map(c => [c.id, c.title]));
+
+  const coursesOf = new Map(studentIds.map(id => [id, new Set()]));
+  enrollments.forEach(r => coursesOf.get(r.student_id)?.add(r.course_id));
+  subs.forEach(r => coursesOf.get(r.student_id)?.add(r.course_id));
+
+  studentIds.forEach(id => { out.get(id).enrolled = coursesOf.get(id).size; });
+  subs.filter(r => isSubscriptionActive(r.expiry_date)).forEach(r => {
+    const s = out.get(r.student_id);
+    s.active += 1;
+    s.active_courses.push({ course_id: r.course_id, title: titleById[r.course_id] || 'Course', expiry_date: r.expiry_date });
+  });
+  return out;
+}
 
 // Teachers have no subscription / XP — a leaner shape than publicUser.
 const publicTeacher = (u, courseCount) => ({
@@ -50,9 +100,11 @@ router.use(authenticateToken, isAdmin);
 /**
  * GET /api/admin/students
  *   ?search=   name / email / phone (partial, case-insensitive)
- *   ?paid=true|false        filter by active weekly subscription
+ *   ?paid=true|false        has / has no ACTIVE subscription on any course
  *   ?include_inactive=true  include soft-deleted accounts
  *   ?page=1 &limit=20
+ * Each student carries `subscription_summary` ({ enrolled, active, active_courses })
+ * and `is_paid` (active > 0).
  */
 router.get('/students', async (req, res) => {
   try {
@@ -63,34 +115,60 @@ router.get('/students', async (req, res) => {
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
     const from = (page - 1) * limit;
 
-    let query = supabase
-      .from('users')
-      .select('id, name, email, phone, avatar_url, xp, is_active, paid_until, last_paid_at, created_at', { count: 'exact' })
-      .eq('role', 'student')
-      .order('created_at', { ascending: false });
-
-    if (!includeInactive) query = query.eq('is_active', true);
-
-    // Active subscription = paid_until >= today. Filter at the DB level.
-    if (paidFilter === true) query = query.gte('paid_until', todayYmd());
-    if (paidFilter === false) query = query.or(`paid_until.is.null,paid_until.lt.${todayYmd()}`);
-
-    if (search) {
-      // Keep only characters safe inside a PostgREST or() filter expression.
-      const esc = search.replace(/[^a-zA-Z0-9 @._+-]/g, '').trim();
-      if (esc) {
-        query = query.or(`name.ilike.%${esc}%,email.ilike.%${esc}%,phone.ilike.%${esc}%`);
+    const COLS = 'id, name, email, phone, avatar_url, xp, is_active, created_at';
+    // id as a tiebreaker keeps paging stable across equal created_at values.
+    const filtered = (select, opts) => {
+      let q = supabase
+        .from('users')
+        .select(select, opts)
+        .eq('role', 'student')
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: true });
+      if (!includeInactive) q = q.eq('is_active', true);
+      if (search) {
+        // Keep only characters safe inside a PostgREST or() filter expression.
+        const esc = search.replace(/[^a-zA-Z0-9 @._+-]/g, '').trim();
+        if (esc) q = q.or(`name.ilike.%${esc}%,email.ilike.%${esc}%,phone.ilike.%${esc}%`);
       }
+      return q;
+    };
+
+    let students;
+    let total;
+
+    if (paidFilter === null) {
+      const { data, count, error } = await filtered(COLS, { count: 'exact' }).range(from, from + limit - 1);
+      if (error) throw error;
+      students = data || [];
+      total = count || 0;
+    } else {
+      // "Subscribed" now means "active on at least one course", which lives in
+      // another table: resolve the matching ids here, then page over them
+      // (a giant id list in the query string would outgrow URL limits).
+      const [idRows, activeRows] = await Promise.all([
+        fetchAllRows(() => filtered('id')),
+        fetchAllRows(() => supabase.from('student_course_subscriptions').select('student_id').gte('expiry_date', todayYmd())),
+      ]);
+      const activeIds = new Set(activeRows.map(r => r.student_id));
+      const matching = idRows.map(r => r.id).filter(id => activeIds.has(id) === paidFilter);
+      total = matching.length;
+
+      const pageIds = matching.slice(from, from + limit);
+      const { data, error } = pageIds.length
+        ? await supabase.from('users').select(COLS).in('id', pageIds)
+        : { data: [], error: null };
+      if (error) throw error;
+      const byId = Object.fromEntries((data || []).map(u => [u.id, u]));
+      students = pageIds.map(id => byId[id]).filter(Boolean);
     }
 
-    const { data: students, count, error } = await query.range(from, from + limit - 1);
-    if (error) throw error;
+    const summaries = await subscriptionSummaries(students.map(s => s.id));
 
     res.json({
       success: true,
       data: {
-        students: (students || []).map(publicUser),
-        pagination: { page, limit, total: count || 0, total_pages: Math.ceil((count || 0) / limit) }
+        students: students.map(s => publicUser(s, summaries.get(s.id))),
+        pagination: { page, limit, total, total_pages: Math.ceil(total / limit) }
       }
     });
   } catch (error) {
@@ -168,7 +246,9 @@ router.post('/students', async (req, res) => {
 
 /**
  * GET /api/admin/students/:id
- * Student detail + subscription + the courses they're enrolled in.
+ * Student detail + one subscription per course they're in.
+ * enrolled_courses[]: { course, enrolled_at,
+ *   subscription: { is_active, expiry_date, last_updated } }
  */
 router.get('/students/:id', async (req, res) => {
   try {
@@ -176,37 +256,46 @@ router.get('/students/:id', async (req, res) => {
 
     const { data: student } = await supabase
       .from('users')
-      .select('id, name, email, phone, avatar_url, xp, role, is_active, paid_until, last_paid_at, created_at')
+      .select('id, name, email, phone, avatar_url, xp, role, is_active, created_at')
       .eq('id', id)
       .eq('role', 'student')
       .maybeSingle();
     if (!student) return res.status(404).json({ success: false, error: 'Student not found' });
 
-    const { data: enrollments } = await supabase
-      .from('course_enrollments')
-      .select('course_id, enrolled_at')
-      .eq('student_id', id);
+    const [{ data: enrollments }, { data: subs }] = await Promise.all([
+      supabase.from('course_enrollments').select('course_id, enrolled_at').eq('student_id', id),
+      supabase.from('student_course_subscriptions')
+        .select('course_id, expiry_date, last_paid_at, last_updated').eq('student_id', id),
+    ]);
 
-    const courseIds = (enrollments || []).map(e => e.course_id);
+    const subByCourse = Object.fromEntries((subs || []).map(s => [s.course_id, s]));
+    const enrolledAt = Object.fromEntries((enrollments || []).map(e => [e.course_id, e.enrolled_at]));
+    // Enrolled courses, plus any course that has a subscription row but no
+    // enrollment (so the admin can still see and revoke it).
+    const courseIds = [...new Set([...(enrollments || []).map(e => e.course_id), ...(subs || []).map(s => s.course_id)])];
+
     const { data: courses } = courseIds.length
       ? await supabase.from('courses').select('id, title, is_free, live_enabled').in('id', courseIds)
       : { data: [] };
     const courseById = Object.fromEntries((courses || []).map(c => [c.id, c]));
 
-    const enrolledCourses = (enrollments || []).map(e => ({
-      course: courseById[e.course_id] || { id: e.course_id },
-      enrolled_at: e.enrolled_at
-    }));
+    const enrolledCourses = courseIds.map(courseId => {
+      const s = subByCourse[courseId];
+      return {
+        course: courseById[courseId] || { id: courseId },
+        enrolled_at: enrolledAt[courseId] || null,
+        subscription: {
+          is_active: isSubscriptionActive(s?.expiry_date),
+          expiry_date: s?.expiry_date || null,
+          last_updated: s?.last_updated || null
+        }
+      };
+    });
 
     res.json({
       success: true,
       data: {
         student: publicUser(student),
-        subscription: {
-          is_paid: isSubscribed(student.paid_until),
-          paid_until: student.paid_until || null,
-          last_paid_at: student.last_paid_at || null
-        },
         enrolled_courses: enrolledCourses
       }
     });
@@ -309,72 +398,81 @@ router.delete('/students/:id', async (req, res) => {
 });
 
 /**
- * POST /api/admin/students/:id/subscription
- * Grant / extend / revoke the student's weekly live-class subscription.
+ * POST /api/admin/students/:id/courses/:courseId/subscription
+ * Grant / extend / revoke ONE course's live-class subscription for a student.
+ * Paying for one course does not unlock another.
  *
- *   { weeks: 1 }                 -> extend paid_until by 1 week (from today or
- *                                   from the current expiry if still active)
- *   { paid_until: "2026-12-31" } -> set the expiry date explicitly
- *   { paid_until: null }         -> revoke immediately
+ *   { weeks: 1 }                  -> extend expiry by 1 week (from today, or
+ *                                    from the current expiry if still active)
+ *   { expiry_date: "2026-12-31" } -> set the expiry date explicitly
+ *   { expiry_date: null }         -> revoke immediately
  *
- * `weeks` and `paid_until` are mutually exclusive; `weeks` defaults to 1 if
- * neither is given.
+ * `weeks` and `expiry_date` are mutually exclusive; `weeks` defaults to 1 if
+ * neither is given. If the student isn't enrolled in the course yet they're
+ * enrolled (same as the old per-course payment flow), so the class shows up in
+ * their app.
  */
-router.post('/students/:id/subscription', async (req, res) => {
+router.post('/students/:id/courses/:courseId/subscription', async (req, res) => {
   try {
-    const { id } = req.params;
-    let { weeks, paid_until } = req.body;
+    const { id, courseId } = req.params;
+    const { weeks, expiry_date } = req.body;
 
-    const { data: student } = await supabase
-      .from('users')
-      .select('id, paid_until')
-      .eq('id', id)
-      .eq('role', 'student')
-      .maybeSingle();
+    const [{ data: student }, { data: course }] = await Promise.all([
+      supabase.from('users').select('id').eq('id', id).eq('role', 'student').maybeSingle(),
+      supabase.from('courses').select('id, title, is_free, live_enabled').eq('id', courseId).maybeSingle(),
+    ]);
     if (!student) return res.status(404).json({ success: false, error: 'Student not found' });
+    if (!course) return res.status(404).json({ success: false, error: 'Course not found' });
 
-    const updates = {};
+    const { data: existing } = await supabase
+      .from('student_course_subscriptions')
+      .select('expiry_date')
+      .eq('student_id', id)
+      .eq('course_id', courseId)
+      .maybeSingle();
 
-    if (paid_until !== undefined) {
-      if (paid_until === null || paid_until === '') {
-        updates.paid_until = null;
-      } else if (!/^\d{4}-\d{2}-\d{2}$/.test(paid_until) || Number.isNaN(Date.parse(paid_until))) {
-        return res.status(400).json({ success: false, error: 'paid_until must be "YYYY-MM-DD" or null' });
+    const row = { student_id: id, course_id: courseId, last_updated: new Date() };
+
+    if (expiry_date !== undefined) {
+      if (expiry_date === null || expiry_date === '') {
+        row.expiry_date = null;
+      } else if (!/^\d{4}-\d{2}-\d{2}$/.test(expiry_date) || Number.isNaN(Date.parse(expiry_date))) {
+        return res.status(400).json({ success: false, error: 'expiry_date must be "YYYY-MM-DD" or null' });
       } else {
-        updates.paid_until = paid_until;
-        updates.last_paid_at = new Date();
+        row.expiry_date = expiry_date;
+        row.last_paid_at = new Date();
       }
     } else {
       const n = Number.isFinite(weeks) ? Math.trunc(weeks) : 1;
       if (n < 1 || n > 52) {
         return res.status(400).json({ success: false, error: 'weeks must be between 1 and 52' });
       }
-      // Extend from whichever is later: today, or the student's current expiry.
+      // Extend from whichever is later: today, or the current expiry.
       const today = todayYmd();
-      const base = student.paid_until && student.paid_until > today ? student.paid_until : today;
-      const d = new Date(base + 'T00:00:00');
-      d.setDate(d.getDate() + n * 7);
-      updates.paid_until = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      updates.last_paid_at = new Date();
+      const current = existing?.expiry_date ? String(existing.expiry_date).slice(0, 10) : null;
+      row.expiry_date = addDaysYmd(current && current > today ? current : today, n * 7);
+      row.last_paid_at = new Date();
     }
 
-    const { data: updated, error } = await supabase
-      .from('users')
-      .update(updates)
-      .eq('id', id)
-      .select()
+    const { data: saved, error } = await supabase
+      .from('student_course_subscriptions')
+      .upsert(row, { onConflict: 'student_id,course_id' })
+      .select('expiry_date, last_updated')
       .single();
     if (error) throw error;
 
+    if (row.expiry_date) await ensureEnrolled({ supabase, course, user: { role: 'student', userId: id } });
+
     res.json({
       success: true,
-      message: updates.paid_until ? 'Subscription updated' : 'Subscription revoked',
+      message: row.expiry_date ? 'Subscription updated' : 'Subscription revoked',
       data: {
         subscription: {
           student_id: id,
-          is_paid: isSubscribed(updated.paid_until),
-          paid_until: updated.paid_until || null,
-          last_paid_at: updated.last_paid_at || null
+          course_id: courseId,
+          is_active: isSubscriptionActive(saved.expiry_date),
+          expiry_date: saved.expiry_date || null,
+          last_updated: saved.last_updated
         }
       }
     });
@@ -778,17 +876,20 @@ router.get('/analytics', async (req, res) => {
       { data: xpRows },
       { data: lessons },
       { data: enrolls },
+      activeSubRows,
     ] = await Promise.all([
-      supabase.from('users').select('id, name, avatar_url, created_at, is_active, paid_until').eq('role', 'student'),
+      supabase.from('users').select('id, name, avatar_url, created_at, is_active').eq('role', 'student'),
       supabase.from('quiz_submissions').select('student_id, score, submitted_at').gte('submitted_at', iso(d60)),
       supabase.from('xp_events').select('student_id, created_at').gte('created_at', iso(d45)),
       supabase.from('lesson_completions').select('student_id, completed_at').gte('completed_at', iso(d30)),
       supabase.from('course_enrollments').select('student_id'),
+      fetchAllRows(() => supabase.from('student_course_subscriptions').select('student_id').gte('expiry_date', todayYmd())),
     ]);
 
     const S = students || [];
     const meta = new Map(S.map(s => [s.id, s]));
-    const today = todayYmd();
+    // "Paid" = subscribed to at least one course right now.
+    const paidIds = new Set(activeSubRows.map(r => r.student_id));
 
     // ── KPIs ──────────────────────────────────────────────────────────────
     const countCreatedBetween = (from, to) =>
@@ -798,7 +899,7 @@ router.get('/analytics', async (req, res) => {
       active_eligible: S.filter(s => s.is_active !== false).length,
       new_students_7d: countCreatedBetween(d7, now),
       new_students_prev_7d: countCreatedBetween(d14, d7),
-      paid_students: S.filter(s => s.paid_until && s.paid_until >= today).length,
+      paid_students: S.filter(s => paidIds.has(s.id)).length,
     };
 
     // ── Last-active (max of any XP event or quiz submission) ──────────────

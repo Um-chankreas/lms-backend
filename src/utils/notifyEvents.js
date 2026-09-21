@@ -2,6 +2,7 @@ const supabase = require('../config/supabase');
 const { createNotification, createNotifications, coursePeers } = require('./notifications');
 const { friendNotification } = require('./notificationTemplates');
 const { XP_VALUES } = require('./xp');
+const { todayYmd } = require('./access');
 
 // Best-effort wrappers — a notification failure must never break the action
 // that triggered it. Every export is safe to `await` (or fire-and-forget).
@@ -232,8 +233,7 @@ async function notifyAssignmentPublished(assignmentId) {
 
 /**
  * The teacher started a live class: tell every student who can actually join it
- * (enrolled in the course, active subscription, live classes enabled for the
- * course). Students who couldn't join are skipped — a "live now" they can't
+ * (active subscription for that course, live classes enabled for the course). Students who couldn't join are skipped — a "live now" they can't
  * open is just noise. Bell entry + push via createNotifications.
  */
 async function notifyLiveClassStarted(liveClassId) {
@@ -245,23 +245,17 @@ async function notifyLiveClassStarted(liveClassId) {
       .maybeSingle();
     if (!lc || lc.courses?.live_enabled === false) return;
 
-    const [{ data: enrollments }, { data: teacher }] = await Promise.all([
-      supabase.from('course_enrollments').select('student_id').eq('course_id', lc.course_id),
+    // Only students subscribed to THIS course (the same rule that gates
+    // joining it), so someone who paid for a different course isn't pinged.
+    const [{ data: subs }, { data: teacher }] = await Promise.all([
+      supabase
+        .from('student_course_subscriptions')
+        .select('student_id')
+        .eq('course_id', lc.course_id)
+        .gte('expiry_date', todayYmd()),
       supabase.from('users').select('name').eq('id', lc.teacher_id).maybeSingle(),
     ]);
-    const enrolledIds = [...new Set((enrollments || []).map(e => e.student_id))].filter(Boolean);
-    if (enrolledIds.length === 0) return;
-
-    // Same rule as hasActiveSubscription(), in one query for the whole roster.
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const { data: students } = await supabase
-      .from('users')
-      .select('id, paid_until')
-      .in('id', enrolledIds);
-    const recipients = (students || [])
-      .filter(s => s.paid_until && new Date(s.paid_until) >= today)
-      .map(s => s.id);
+    const recipients = [...new Set((subs || []).map(s => s.student_id))].filter(Boolean);
     if (recipients.length === 0) return;
 
     const teacherName = teacher?.name || 'Your teacher';

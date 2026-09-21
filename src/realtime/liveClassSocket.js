@@ -3,6 +3,7 @@ const supabase = require('../config/supabase');
 const { verifyToken } = require('../utils/jwt');
 const { generateAgoraUid } = require('../utils/agoraUid');
 const { endLiveClassRecord } = require('../utils/liveClassEnd');
+const { hasCourseSubscription } = require('../utils/access');
 
 /**
  * Realtime layer for live classes (Google-Meet-style). No approval / request
@@ -74,15 +75,11 @@ async function resolveAccess(liveClass, user) {
 
     if (course && course.live_enabled === false) return { allowed: false, code: 'live_disabled' };
 
-    const { data: me } = await supabase
-      .from('users')
-      .select('paid_until')
-      .eq('id', user.userId)
-      .maybeSingle();
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const active = me?.paid_until && new Date(me.paid_until) >= today;
+    const active = await hasCourseSubscription({
+      supabase,
+      studentId: user.userId,
+      courseId: liveClass.course_id
+    });
 
     return active ? { allowed: true, role: 'student' } : { allowed: false, code: 'payment_required' };
   }
