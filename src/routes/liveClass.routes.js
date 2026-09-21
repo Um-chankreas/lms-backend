@@ -21,6 +21,7 @@ const {
 const { v4: uuidv4 } = require('uuid');
 const jwt = require('jsonwebtoken');
 const { endLiveClassRecord } = require('../utils/liveClassEnd');
+const { notifyLiveClassStarted } = require('../utils/notifyEvents');
 
 // Mobile deep link the app opens to jump straight into a live class screen.
 // The app still has to call POST /:id/token to get Agora credentials.
@@ -646,7 +647,7 @@ router.put('/:id/start', authenticateToken, isTeacher, async (req, res) => {
 
     const { data: liveClass } = await supabase
       .from('live_classes')
-      .select('teacher_id')
+      .select('teacher_id, status')
       .eq('id', id)
       .single();
 
@@ -670,6 +671,12 @@ router.put('/:id/start', authenticateToken, isTeacher, async (req, res) => {
     if (error) throw error;
 
     emitClassStatus(id, 'active');
+
+    // Tell enrolled students it's live (bell + push). Only on the actual
+    // scheduled -> active transition, so a repeat "start" call (double tap,
+    // page refresh) doesn't notify everyone twice. Fire-and-forget: a
+    // notification problem must never fail the start.
+    if (liveClass.status !== 'active') notifyLiveClassStarted(id);
 
     res.json({
       success: true,

@@ -230,4 +230,59 @@ async function notifyAssignmentPublished(assignmentId) {
   }
 }
 
-module.exports = { notifyLessonComplete, notifyQuizComplete, notifyAssignmentPublished };
+/**
+ * The teacher started a live class: tell every student who can actually join it
+ * (enrolled in the course, active subscription, live classes enabled for the
+ * course). Students who couldn't join are skipped — a "live now" they can't
+ * open is just noise. Bell entry + push via createNotifications.
+ */
+async function notifyLiveClassStarted(liveClassId) {
+  try {
+    const { data: lc } = await supabase
+      .from('live_classes')
+      .select('id, title, course_id, teacher_id, courses(title, live_enabled)')
+      .eq('id', liveClassId)
+      .maybeSingle();
+    if (!lc || lc.courses?.live_enabled === false) return;
+
+    const [{ data: enrollments }, { data: teacher }] = await Promise.all([
+      supabase.from('course_enrollments').select('student_id').eq('course_id', lc.course_id),
+      supabase.from('users').select('name').eq('id', lc.teacher_id).maybeSingle(),
+    ]);
+    const enrolledIds = [...new Set((enrollments || []).map(e => e.student_id))].filter(Boolean);
+    if (enrolledIds.length === 0) return;
+
+    // Same rule as hasActiveSubscription(), in one query for the whole roster.
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const { data: students } = await supabase
+      .from('users')
+      .select('id, paid_until')
+      .in('id', enrolledIds);
+    const recipients = (students || [])
+      .filter(s => s.paid_until && new Date(s.paid_until) >= today)
+      .map(s => s.id);
+    if (recipients.length === 0) return;
+
+    const teacherName = teacher?.name || 'Your teacher';
+    const courseTitle = lc.courses?.title || null;
+
+    await createNotifications(recipients.map(uid => ({
+      user_id: uid,
+      type: 'live_class_started',
+      title: `🔴 Live now: ${lc.title}`,
+      body: `${teacherName} just started a live class${courseTitle ? ` in ${courseTitle}` : ''}. Tap to join.`,
+      data: {
+        live_class_id: lc.id,
+        live_class_title: lc.title,
+        course_id: lc.course_id,
+        course_title: courseTitle,
+        teacher_name: teacherName,
+      },
+    })));
+  } catch (e) {
+    console.warn('notifyLiveClassStarted failed:', e.message);
+  }
+}
+
+module.exports = { notifyLessonComplete, notifyQuizComplete, notifyAssignmentPublished, notifyLiveClassStarted };
