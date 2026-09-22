@@ -279,4 +279,52 @@ async function notifyLiveClassStarted(liveClassId) {
   }
 }
 
-module.exports = { notifyLessonComplete, notifyQuizComplete, notifyAssignmentPublished, notifyLiveClassStarted };
+/**
+ * A recurring class_schedules slot is about to start (called by the reminder
+ * cron in src/utils/classScheduler.js, ~10-15 min ahead). Distinct from
+ * notifyLiveClassStarted: this fires on the SCHEDULE, whether or not the
+ * teacher has actually pressed "Start" yet, so it must read as a heads-up
+ * ("starts in 15 minutes"), not "live now" — a student tapping in wouldn't
+ * find anything to join if the teacher is running a couple minutes late.
+ */
+async function notifyClassScheduleReminder(schedule) {
+  try {
+    const { data: course } = await supabase
+      .from('courses')
+      .select('id, title, live_enabled')
+      .eq('id', schedule.course_id)
+      .maybeSingle();
+    if (!course || course.live_enabled === false) return;
+
+    const { data: subs } = await supabase
+      .from('student_course_subscriptions')
+      .select('student_id')
+      .eq('course_id', schedule.course_id)
+      .gte('expiry_date', todayYmd());
+    const recipients = [...new Set((subs || []).map(s => s.student_id))].filter(Boolean);
+    if (recipients.length === 0) return;
+
+    await createNotifications(recipients.map(uid => ({
+      user_id: uid,
+      type: 'live_class_reminder',
+      title: `⏰ Starting soon: ${course.title}`,
+      body: `Your live class starts in 15 minutes.`,
+      data: {
+        course_id: course.id,
+        course_title: course.title,
+        schedule_id: schedule.id,
+        start_time: schedule.start_time
+      }
+    })));
+  } catch (e) {
+    console.warn('notifyClassScheduleReminder failed:', e.message);
+  }
+}
+
+module.exports = {
+  notifyLessonComplete,
+  notifyQuizComplete,
+  notifyAssignmentPublished,
+  notifyLiveClassStarted,
+  notifyClassScheduleReminder
+};

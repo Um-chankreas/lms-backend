@@ -7,6 +7,7 @@ const cors = require('cors');
 
 const app = express();
 const { initLiveClassRealtime } = require('./realtime/liveClassSocket');
+const { startClassScheduler } = require('./utils/classScheduler');
 
 // ============ Middleware ============
 // Dynamically allow requests from localhost, local IP addresses, or any origin in development
@@ -39,6 +40,7 @@ app.use('/api/units', require('./routes/units.routes'));
 app.use('/api/quizzes', require('./routes/quizzes.routes'));
 app.use('/api/assignments', require('./routes/assignments.routes'));
 app.use('/api/live-classes', require('./routes/liveClass.routes'));
+app.use('/api/class-schedules', require('./routes/classSchedule.routes'));
 app.use('/api/dashboard', require('./routes/dashboard.routes'));
 app.use('/api/leaderboard', require('./routes/leaderboard.routes'));
 app.use('/api/profile', require('./routes/profile.routes'));
@@ -90,6 +92,11 @@ const httpServer = http.createServer(app);
 
 // Attach the live-class realtime (Socket.IO) layer to the same HTTP server.
 initLiveClassRealtime(httpServer);
+
+// Polls class_schedules and fires "starting soon" reminders — see
+// src/utils/classScheduler.js for why this is an in-process interval
+// rather than pg_cron/Edge Functions.
+startClassScheduler();
 
 const server = httpServer.listen(PORT, HOST, () => {
   console.log(`
