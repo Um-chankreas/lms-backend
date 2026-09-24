@@ -7,9 +7,10 @@ const { pushMany, pushToUsers } = require('./push');
  * request path.
  * @param {string} userId  recipient (a logged-in user; guests have no row)
  * @param {string} type
- * @param {{ title: string, body: string, data?: object }} payload
+ * @param {{ title: string, body: string, data?: object, push?: boolean }} payload
+ *   `push: false` stores the bell entry silently, with no OS push banner.
  */
-async function createNotification(userId, type, { title, body, data = {} } = {}) {
+async function createNotification(userId, type, { title, body, data = {}, push = true } = {}) {
   if (!userId || !title || !body) return;
   const { error } = await supabase.from('notifications').insert({
     id: uuidv4(),
@@ -21,7 +22,7 @@ async function createNotification(userId, type, { title, body, data = {} } = {})
     created_at: new Date(),
   });
   if (error) { console.warn('createNotification failed:', error.message); return; }
-  pushToUsers([userId], { title, body, data: { ...data, type } });
+  if (push) pushToUsers([userId], { title, body, data: { ...data, type } });
 }
 
 /**

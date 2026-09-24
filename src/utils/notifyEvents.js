@@ -25,20 +25,22 @@ async function stylesFor(userIds) {
 }
 
 /**
- * A student finished a lesson/chapter.
- *  - owner:   "You finished …"
- *  - friends: "<Name> completed a lesson"
+ * A student finished a lesson/chapter (fires when its last unit is read).
+ * Only the owner's "You finished …" entry, and it is silent: it lands in the
+ * in-app list (the mobile Lessons tab reads it) but sends no push banner.
+ * Classmates are deliberately NOT notified — that fan-out reached every
+ * student in the course on each chapter completion and was too noisy.
  */
 async function notifyLessonComplete(studentId, lessonId) {
   try {
     const { data: lesson } = await supabase
       .from('lessons').select('id, title, order_number, course_id, courses(title)').eq('id', lessonId).maybeSingle();
     if (!lesson) return;
-    const name = await actorName(studentId);
 
     await createNotification(studentId, 'lesson_complete', {
       title: 'Lesson complete',
       body: `You finished “${lesson.title}”. +15 XP`,
+      push: false,
       data: {
         lesson_id: lesson.id,
         lesson_title: lesson.title,
@@ -48,28 +50,6 @@ async function notifyLessonComplete(studentId, lessonId) {
         xp: 15,
       },
     });
-
-    const peers = await coursePeers(studentId);
-    const styles = await stylesFor(peers);
-    await createNotifications(peers.map(uid => {
-      const style = styles.get(uid) || 'balanced';
-      const { title, body, cta } = friendNotification('friend_lesson', style, { name, lessonTitle: lesson.title });
-      return {
-        user_id: uid,
-        type: 'friend_lesson',
-        title,
-        body,
-        data: {
-          lesson_id: lesson.id,
-          lesson_title: lesson.title,
-          course_id: lesson.course_id || null,
-          actor_id: studentId,
-          actor_name: name,
-          style,
-          cta,
-        },
-      };
-    }));
   } catch (e) {
     console.warn('notifyLessonComplete failed:', e.message);
   }
