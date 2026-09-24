@@ -1484,16 +1484,7 @@ router.post('/:id/submit', optionalAuth, async (req, res) => {
       await awardXp(req.user.userId, xpAwarded, 'quiz_pass', quiz.course_id || null);
     }
     await evaluateAchievements(req.user.userId);
-    notifyQuizComplete(req.user.userId, id, score, {
-      firstAttempt,
-      xpAwarded,
-      passed,
-      passPercentage: quiz.pass_percentage ?? 70,
-      lessonId: quiz.lesson_id || null,
-      courseId: quiz.course_id || null,
-      correctCount,
-      totalCount,
-    });
+    notifyQuizComplete(req.user.userId, id, score, { firstAttempt });
 
     // A passed quiz that belongs to a chapter — whether it's a unit's
     // practice quiz or the chapter's own end-of-lesson quiz — is a path step.

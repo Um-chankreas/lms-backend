@@ -1,5 +1,5 @@
 const supabase = require('../config/supabase');
-const { createNotification, createNotifications, coursePeers } = require('./notifications');
+const { createNotifications, coursePeers } = require('./notifications');
 const { friendNotification } = require('./notificationTemplates');
 const { XP_VALUES } = require('./xp');
 const { todayYmd } = require('./access');
@@ -25,42 +25,18 @@ async function stylesFor(userIds) {
 }
 
 /**
- * A student submitted a quiz.
- *  - owner:   "You scored X% …"  (first attempt, or the run that earned XP)
+ * A student submitted a quiz. Classmates only — the student themself is
+ * deliberately not notified (they already see their result on the quiz-complete
+ * screen).
  *  - friends: "<Name> took a quiz"  (their first attempt only)
  *  - beaten:  "<Name> beat your score"  (once per quiz per friend)
  */
-async function notifyQuizComplete(studentId, quizId, score, {
-  firstAttempt = false, xpAwarded = 0, passed = null, passPercentage = 70,
-  lessonId = null, courseId = null, correctCount = null, totalCount = null,
-} = {}) {
+async function notifyQuizComplete(studentId, quizId, score, { firstAttempt = false } = {}) {
   try {
     const { data: quiz } = await supabase
       .from('quizzes').select('id, title').eq('id', quizId).maybeSingle();
     if (!quiz) return;
     const name = await actorName(studentId);
-    const didPass = passed == null ? score >= passPercentage : !!passed;
-
-    // Notify on: first attempt (pass or fail — a failed first try becomes the
-    // "NEEDS REVIEW" card), or any run that earned XP.
-    if (firstAttempt || xpAwarded > 0) {
-      await createNotification(studentId, 'quiz_complete', {
-        title: 'Quiz submitted',
-        body: `You scored ${score}% on “${quiz.title}”${xpAwarded > 0 ? ` · +${xpAwarded} XP` : ''}`,
-        data: {
-          quiz_id: quiz.id,
-          quiz_title: quiz.title,
-          score,
-          passed: didPass,
-          pass_percentage: passPercentage,
-          xp_awarded: xpAwarded,
-          lesson_id: lessonId,
-          course_id: courseId,
-          correct_count: correctCount,
-          total_questions: totalCount,
-        },
-      });
-    }
 
     const peers = new Set(await coursePeers(studentId));
     if (peers.size === 0) return;
