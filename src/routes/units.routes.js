@@ -362,7 +362,7 @@ router.post('/bulk', authenticateToken, isTeacher, async (req, res) => {
 let tikzQueue = Promise.resolve();
 const renderTikz = (source) => {
   const run = tikzQueue.then(() => tex2svg(source, { showConsole: false }));
-  tikzQueue = run.then(() => {}, () => {}); // keep the queue alive after a failure
+  tikzQueue = run.then(() => { }, () => { }); // keep the queue alive after a failure
   return run;
 };
 const withTimeout = (promise, ms, message) => Promise.race([
@@ -789,7 +789,7 @@ router.post('/:id/complete', optionalAuth, async (req, res) => {
       if (error) throw error;
       xpAwarded = XP_VALUES.UNIT_COMPLETE;
       await awardXp(req.user.userId, xpAwarded, 'unit_complete', course?.id || null);
-      await recordActivity(req.user.userId).catch(() => {});
+      await recordActivity(req.user.userId).catch(() => { });
     }
 
     const chapterCompleted = await checkChapterAutoComplete({ lessonId: unit.lesson_id, studentId: req.user.userId });
