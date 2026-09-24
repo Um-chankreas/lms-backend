@@ -10,7 +10,6 @@ const { evaluateAchievements } = require('../utils/achievements');
 const { hasCourseAccess, ensureEnrolled } = require('../utils/access');
 const { starsForScore } = require('../utils/progress');
 const { guestCanAccessStep, guestFreeStepKeys, sendGuestWall } = require('../utils/guest');
-const { notifyLessonComplete } = require('../utils/notifyEvents');
 
 // Safe resolver for pdf-parse module interop issues
 const rawPdfParse = require('pdf-parse');
@@ -398,7 +397,7 @@ router.get('/:id/path', optionalAuth, async (req, res) => {
     const completedUnitSet = new Set((unitCompletions || []).map(c => c.unit_id));
     const { data: lessonCompletion } = studentId
       ? await supabase.from('lesson_completions').select('id')
-          .eq('student_id', studentId).eq('lesson_id', id).maybeSingle()
+        .eq('student_id', studentId).eq('lesson_id', id).maybeSingle()
       : { data: null };
     let lessonDone = !!lessonCompletion;
 
@@ -1306,9 +1305,9 @@ router.post('/:id/mark-complete', optionalAuth, async (req, res) => {
     if (error) throw error;
 
     await awardXp(studentId, XP_VALUES.LESSON_COMPLETE, 'lesson_complete', lesson.courses?.id || null);
-    await require('../utils/streak').recordActivity(studentId).catch(() => {});
+    await require('../utils/streak').recordActivity(studentId).catch(() => { });
     await evaluateAchievements(studentId);
-    notifyLessonComplete(studentId, id);
+    // notifyLessonComplete(studentId, id);
 
     res.json({
       success: true,

@@ -25,37 +25,6 @@ async function stylesFor(userIds) {
 }
 
 /**
- * A student finished a lesson/chapter (fires when its last unit is read).
- * Only the owner's "You finished …" entry, and it is silent: it lands in the
- * in-app list (the mobile Lessons tab reads it) but sends no push banner.
- * Classmates are deliberately NOT notified — that fan-out reached every
- * student in the course on each chapter completion and was too noisy.
- */
-async function notifyLessonComplete(studentId, lessonId) {
-  try {
-    const { data: lesson } = await supabase
-      .from('lessons').select('id, title, order_number, course_id, courses(title)').eq('id', lessonId).maybeSingle();
-    if (!lesson) return;
-
-    await createNotification(studentId, 'lesson_complete', {
-      title: 'Lesson complete',
-      body: `You finished “${lesson.title}”. +15 XP`,
-      push: false,
-      data: {
-        lesson_id: lesson.id,
-        lesson_title: lesson.title,
-        course_id: lesson.course_id || null,
-        course_title: lesson.courses?.title || null,
-        chapter_number: lesson.order_number ?? null,
-        xp: 15,
-      },
-    });
-  } catch (e) {
-    console.warn('notifyLessonComplete failed:', e.message);
-  }
-}
-
-/**
  * A student submitted a quiz.
  *  - owner:   "You scored X% …"  (first attempt, or the run that earned XP)
  *  - friends: "<Name> took a quiz"  (their first attempt only)
@@ -302,7 +271,6 @@ async function notifyClassScheduleReminder(schedule) {
 }
 
 module.exports = {
-  notifyLessonComplete,
   notifyQuizComplete,
   notifyAssignmentPublished,
   notifyLiveClassStarted,
