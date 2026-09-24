@@ -24,6 +24,9 @@ const { recordActivity } = require('../utils/streak');
  *   POST   /api/units/reorder          { lesson_id, order: [id, ...] }    (teacher)
  *   POST   /api/units/render-tikz      { source } -> { svg }, TikZ figure  (teacher)
  *   POST   /api/units/figure-image     multipart image upload -> { url }  (teacher)
+ *   POST   /api/units/:id/video/upload-url   signed upload URL for a unit's video (teacher)
+ *   POST   /api/units/:id/video        attach the uploaded video           (teacher)
+ *   DELETE /api/units/:id/video        remove a unit's video               (teacher)
  *   PUT    /api/units/:id              edit a unit                        (teacher)
  *   DELETE /api/units/:id              remove a unit                      (teacher)
  */
@@ -35,6 +38,51 @@ const PREVIEW_LEN = 200;
 // was). Stored in the existing public `course-materials` bucket.
 const FIGURE_ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/svg+xml'];
 const FIGURE_EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/svg+xml': 'svg' };
+
+// A unit's own optional video (in addition to a chapter's intro video —
+// lessons.video_url). Same direct-to-storage flow as lessons.routes.js's
+// /lessons/:id/video (see the big comment there for why): the file never
+// streams through this server.
+const VIDEO_CONTENT_TYPES = {
+  'video/mp4': 'mp4',
+  'video/quicktime': 'mov',
+  'video/webm': 'webm',
+  'video/x-m4v': 'm4v',
+  'video/x-matroska': 'mkv'
+};
+const publicUrl = (path) =>
+  `${process.env.SUPABASE_URL}/storage/v1/object/public/course-materials/${path}`;
+
+const absoluteUploadUrl = (signedUrl) => {
+  if (/^https?:\/\//i.test(signedUrl)) return signedUrl;
+  const base = signedUrl.startsWith('/storage/v1')
+    ? process.env.SUPABASE_URL
+    : `${process.env.SUPABASE_URL}/storage/v1`;
+  return `${base}${signedUrl.startsWith('/') ? '' : '/'}${signedUrl}`;
+};
+
+/** true if `path` exists in the given bucket folder. */
+async function storageObjectExists(folder, path) {
+  const { data } = await supabase
+    .storage
+    .from('course-materials')
+    .list(folder, { search: path.slice(folder.length + 1) });
+  return !!(data && data.length);
+}
+
+/** Load a unit + confirm the caller owns its course. */
+async function loadOwnedUnit(id, userId) {
+  const { data: unit } = await supabase
+    .from('lesson_units')
+    .select('id, video_url, lessons(courses(teacher_id))')
+    .eq('id', id)
+    .single();
+  if (!unit) return { error: { status: 404, message: 'Unit not found' } };
+  if (unit.lessons?.courses?.teacher_id !== userId) {
+    return { error: { status: 403, message: 'You can only edit your own units' } };
+  }
+  return { unit };
+}
 const figureUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 8 * 1024 * 1024 }, // 8MB
@@ -403,6 +451,123 @@ router.post('/figure-image', authenticateToken, isTeacher, figureUpload.single('
 });
 
 /**
+ * POST /api/units/:id/video/upload-url   (Teacher)
+ * body: { content_type }  ->  { path, token, signed_url, upload_url, public_url }
+ * Client uploads the file DIRECTLY to `upload_url`, then calls POST :id/video.
+ */
+router.post('/:id/video/upload-url', authenticateToken, isTeacher, async (req, res) => {
+  try {
+    const ext = VIDEO_CONTENT_TYPES[req.body?.content_type];
+    if (!ext) {
+      return res.status(400).json({
+        success: false,
+        error: 'content_type must be one of: ' + Object.keys(VIDEO_CONTENT_TYPES).join(', ')
+      });
+    }
+
+    const { unit, error } = await loadOwnedUnit(req.params.id, req.user.userId);
+    if (error) return res.status(error.status).json({ success: false, error: error.message });
+
+    const path = `unit-videos/${unit.id}-${Date.now()}.${ext}`;
+    const { data, error: signError } = await supabase
+      .storage.from('course-materials').createSignedUploadUrl(path);
+    if (signError) throw signError;
+
+    res.json({
+      success: true,
+      data: {
+        path,
+        token: data.token,
+        signed_url: data.signedUrl,
+        upload_url: absoluteUploadUrl(data.signedUrl),
+        public_url: publicUrl(path)
+      }
+    });
+  } catch (error) {
+    console.error('Unit video upload-url error:', error);
+    res.status(500).json({ success: false, error: 'Failed to create upload URL: ' + error.message });
+  }
+});
+
+/**
+ * POST /api/units/:id/video   (Teacher)
+ * body: { path, duration_seconds? }
+ * Attaches (or replaces) the unit's video after the direct upload finished.
+ */
+router.post('/:id/video', authenticateToken, isTeacher, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { path, duration_seconds } = req.body || {};
+    if (!path || !path.startsWith(`unit-videos/${id}-`)) {
+      return res.status(400).json({
+        success: false,
+        error: 'A valid `path` from /video/upload-url is required'
+      });
+    }
+
+    const { unit, error } = await loadOwnedUnit(id, req.user.userId);
+    if (error) return res.status(error.status).json({ success: false, error: error.message });
+
+    if (!(await storageObjectExists('unit-videos', path))) {
+      return res.status(409).json({
+        success: false,
+        error: 'Upload not found in storage — finish the upload before calling this'
+      });
+    }
+
+    const { data: updated, error: updateError } = await supabase
+      .from('lesson_units')
+      .update({
+        video_url: path,
+        duration_seconds: duration_seconds ? parseInt(duration_seconds, 10) : null,
+        updated_at: new Date()
+      })
+      .eq('id', id)
+      .select()
+      .single();
+    if (updateError) throw updateError;
+
+    if (unit.video_url && unit.video_url !== path) {
+      await supabase.storage.from('course-materials').remove([unit.video_url]);
+    }
+
+    res.json({
+      success: true,
+      message: 'Video attached to unit',
+      data: { unit: { ...updated, video_url: publicUrl(path) } }
+    });
+  } catch (error) {
+    console.error('Unit video attach error:', error);
+    res.status(500).json({ success: false, error: 'Failed to attach video: ' + error.message });
+  }
+});
+
+/**
+ * DELETE /api/units/:id/video   (Teacher)
+ */
+router.delete('/:id/video', authenticateToken, isTeacher, async (req, res) => {
+  try {
+    const { unit, error } = await loadOwnedUnit(req.params.id, req.user.userId);
+    if (error) return res.status(error.status).json({ success: false, error: error.message });
+
+    if (unit.video_url) await supabase.storage.from('course-materials').remove([unit.video_url]);
+
+    const { data: updated, error: updateError } = await supabase
+      .from('lesson_units')
+      .update({ video_url: null, duration_seconds: null, updated_at: new Date() })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (updateError) throw updateError;
+
+    res.json({ success: true, message: 'Video removed', data: { unit: updated } });
+  } catch (error) {
+    console.error('Unit video remove error:', error);
+    res.status(500).json({ success: false, error: 'Failed to remove video: ' + error.message });
+  }
+});
+
+/**
  * POST /api/units   (Teacher)
  * Body: { lesson_id, title, content?, order_number?, is_free? }
  */
@@ -473,7 +638,7 @@ router.get('/', optionalAuth, async (req, res) => {
 
     const { data: units, error } = await supabase
       .from('lesson_units')
-      .select('id, title, content, order_number, is_free, updated_at')
+      .select('id, title, content, order_number, is_free, video_url, duration_seconds, updated_at')
       .eq('lesson_id', lessonId)
       .order('order_number', { ascending: true });
     if (error) throw error;
@@ -498,6 +663,8 @@ router.get('/', optionalAuth, async (req, res) => {
             locked: !unlocked,
             preview: toPreview(u.content),
             content: unlocked ? (u.content || '') : null,
+            video_url: unlocked && u.video_url ? publicUrl(u.video_url) : null,
+            duration_seconds: unlocked ? u.duration_seconds : null,
             updated_at: u.updated_at
           };
         })
@@ -551,6 +718,8 @@ router.get('/:id', optionalAuth, async (req, res) => {
           content: unit.content || '',
           order_number: unit.order_number,
           is_free: unit.is_free,
+          video_url: unit.video_url ? publicUrl(unit.video_url) : null,
+          duration_seconds: unit.duration_seconds,
           updated_at: unit.updated_at,
           chapter: chapter ? { id: chapter.id, title: chapter.title } : null,
           course: course ? { id: course.id, title: course.title } : null
