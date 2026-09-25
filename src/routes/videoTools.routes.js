@@ -9,6 +9,7 @@ const { ZipArchive } = require('archiver');
 const ffmpegPath = require('ffmpeg-static');
 const { v4: uuidv4 } = require('uuid');
 const { authenticateToken } = require('../middleware/auth');
+const { requireFeature } = require('../utils/permissions');
 
 /**
  * Video trimming / splitting — a standalone tool (not tied to any course
@@ -77,7 +78,7 @@ function runFfmpeg(args) {
 
 const cleanup = (paths) => paths.filter(Boolean).forEach((p) => fs.unlink(p, () => {}));
 
-router.post('/trim', authenticateToken, upload.single('video'), async (req, res, next) => {
+router.post('/trim', authenticateToken, requireFeature('trim_video'), upload.single('video'), async (req, res, next) => {
   const inputPath = req.file?.path;
   const outputPaths = [];
   try {
@@ -166,7 +167,7 @@ const QUALITY_PRESETS = {
   small: { crf: 28, maxHeight: 720 }      // smallest file, noticeable softening on fast motion
 };
 
-router.post('/compress', authenticateToken, upload.single('video'), async (req, res, next) => {
+router.post('/compress', authenticateToken, requireFeature('compress_video'), upload.single('video'), async (req, res, next) => {
   const inputPath = req.file?.path;
   let outputPath;
   try {

@@ -46,6 +46,7 @@ app.use('/api/quizzes', require('./routes/quizzes.routes'));
 app.use('/api/assignments', require('./routes/assignments.routes'));
 app.use('/api/live-classes', require('./routes/liveClass.routes'));
 app.use('/api/class-schedules', require('./routes/classSchedule.routes'));
+app.use('/api/permissions', require('./routes/permissions.routes'));
 app.use('/api/dashboard', require('./routes/dashboard.routes'));
 app.use('/api/leaderboard', require('./routes/leaderboard.routes'));
 app.use('/api/profile', require('./routes/profile.routes'));

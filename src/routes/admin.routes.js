@@ -4,6 +4,7 @@ const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const supabase = require('../config/supabase');
 const { authenticateToken, isAdmin, isSuperAdmin } = require('../middleware/auth');
+const { FEATURES, effectivePermissions, getRoleDefaultsMatrix } = require('../utils/permissions');
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE_REGEX = /^\+?[0-9]{8,15}$/;
@@ -1013,11 +1014,137 @@ router.get('/analytics', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/admin/role-permissions
+ * The full role x feature default matrix (see sql/044_role_permissions.sql)
+ * — what each of student/teacher/admin/super_admin gets before any per-user
+ * override. Readable by any admin (router-wide isAdmin gate); editing it is
+ * super_admin only (below) since a change here moves every account with
+ * that role at once, not just one person.
+ */
+router.get('/role-permissions', async (req, res) => {
+  try {
+    const matrix = await getRoleDefaultsMatrix();
+    res.json({ success: true, data: { matrix, features: FEATURES } });
+  } catch (error) {
+    console.error('Get role permissions error:', error);
+    res.status(500).json({ success: false, error: 'Failed to load role permissions: ' + error.message });
+  }
+});
+
+/**
+ * PUT /api/admin/role-permissions   body: { updates: [{ role, feature_key, allowed }, ...] }
+ * Super admin only.
+ */
+router.put('/role-permissions', isSuperAdmin, async (req, res) => {
+  try {
+    const updates = req.body?.updates;
+    if (!Array.isArray(updates) || updates.length === 0) {
+      return res.status(400).json({ success: false, error: '`updates` must be a non-empty array' });
+    }
+    for (const u of updates) {
+      if (!ROLES.includes(u.role) || !FEATURES.includes(u.feature_key) || typeof u.allowed !== 'boolean') {
+        return res.status(400).json({
+          success: false,
+          error: 'Each update needs role (student|teacher|admin|super_admin), feature_key, and a boolean allowed'
+        });
+      }
+    }
+
+    const rows = updates.map(u => ({
+      role: u.role, feature_key: u.feature_key, allowed: u.allowed,
+      updated_at: new Date(), updated_by: req.user.userId
+    }));
+    const { error } = await supabase.from('role_permissions').upsert(rows, { onConflict: 'role,feature_key' });
+    if (error) throw error;
+
+    const matrix = await getRoleDefaultsMatrix();
+    res.json({ success: true, message: 'Role permissions updated', data: { matrix } });
+  } catch (error) {
+    console.error('Update role permissions error:', error);
+    res.status(500).json({ success: false, error: 'Failed to update role permissions: ' + error.message });
+  }
+});
+
+/**
+ * GET /api/admin/users/:id/permissions
+ * PUT /api/admin/users/:id/permissions   body: { permissions: { feature_key: true|false|null } }
+ *   (null resets that feature back to its role default)
+ *
+ * Per-user overrides for the togglable web-portal features — see
+ * src/utils/permissions.js. Reachable by plain 'admin' (the router-wide
+ * isAdmin gate above already covers that), UNLESS the target account is
+ * itself an admin/super_admin, in which case only a super_admin may view or
+ * change its permissions — an admin shouldn't be able to quietly restrict
+ * (or expand) a peer admin's access.
+ *
+ * Registered before the super_admin-only `/users` gate below, so these two
+ * routes specifically stay reachable by plain admin for non-admin targets.
+ */
+router.get('/users/:id/permissions', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data: target } = await supabase.from('users').select('id, role').eq('id', id).maybeSingle();
+    if (!target) return res.status(404).json({ success: false, error: 'User not found' });
+    if (['admin', 'super_admin'].includes(target.role) && req.user.role !== 'super_admin') {
+      return res.status(403).json({ success: false, error: 'Only a super admin can view another admin\'s permissions' });
+    }
+
+    const permissions = await effectivePermissions(id, target.role);
+    res.json({ success: true, data: { permissions, role: target.role } });
+  } catch (error) {
+    console.error('Get user permissions error:', error);
+    res.status(500).json({ success: false, error: 'Failed to load permissions: ' + error.message });
+  }
+});
+
+router.put('/users/:id/permissions', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updates = req.body?.permissions;
+    if (!updates || typeof updates !== 'object' || Array.isArray(updates)) {
+      return res.status(400).json({ success: false, error: '`permissions` must be an object of { feature_key: true|false|null }' });
+    }
+    const unknown = Object.keys(updates).filter(k => !FEATURES.includes(k));
+    if (unknown.length) {
+      return res.status(400).json({ success: false, error: `Unknown feature(s): ${unknown.join(', ')}` });
+    }
+
+    const { data: target } = await supabase.from('users').select('id, role').eq('id', id).maybeSingle();
+    if (!target) return res.status(404).json({ success: false, error: 'User not found' });
+    if (['admin', 'super_admin'].includes(target.role) && req.user.role !== 'super_admin') {
+      return res.status(403).json({ success: false, error: 'Only a super admin can edit another admin\'s permissions' });
+    }
+
+    const setRows = Object.entries(updates)
+      .filter(([, v]) => v !== null)
+      .map(([feature_key, allowed]) => ({
+        user_id: id, feature_key, allowed: !!allowed, updated_at: new Date(), updated_by: req.user.userId
+      }));
+    const resetKeys = Object.entries(updates).filter(([, v]) => v === null).map(([k]) => k);
+
+    if (setRows.length) {
+      const { error } = await supabase.from('feature_permissions').upsert(setRows, { onConflict: 'user_id,feature_key' });
+      if (error) throw error;
+    }
+    if (resetKeys.length) {
+      const { error } = await supabase.from('feature_permissions').delete().eq('user_id', id).in('feature_key', resetKeys);
+      if (error) throw error;
+    }
+
+    const permissions = await effectivePermissions(id, target.role);
+    res.json({ success: true, message: 'Permissions updated', data: { permissions, role: target.role } });
+  } catch (error) {
+    console.error('Update user permissions error:', error);
+    res.status(500).json({ success: false, error: 'Failed to update permissions: ' + error.message });
+  }
+});
+
 // ============================================================================
-// Role / permission management — super_admin only. Everything above this
-// point is reachable by plain 'admin' too (the router-wide isAdmin gate);
-// deciding who else IS an admin/super_admin is the one thing this pass keeps
-// out of admin's own reach, per the permission matrix.
+// Role management — super_admin only. Everything above this point (including
+// the two /users/:id/permissions routes) is reachable by plain 'admin' too
+// (the router-wide isAdmin gate); deciding who else IS an admin/super_admin
+// is the one thing this pass keeps out of admin's own reach.
 // ============================================================================
 router.use('/users', isSuperAdmin);
 

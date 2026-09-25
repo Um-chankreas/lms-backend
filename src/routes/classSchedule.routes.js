@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const { authenticateToken, isTeacher } = require('../middleware/auth');
+const { requireFeature } = require('../utils/permissions');
 const { v4: uuidv4 } = require('uuid');
 
 // Recurring weekly schedule slots for a course's live classes (see
@@ -13,6 +14,11 @@ const { v4: uuidv4 } = require('uuid');
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+// Every route here needs the 'schedule' feature (see src/utils/permissions.js)
+// — no student-facing client reads this today, so gating the whole router is
+// safe.
+router.use(authenticateToken, requireFeature('schedule'));
 
 function validateSchedulePayload({ days_of_week, start_time, end_time, timezone }) {
   if (!Array.isArray(days_of_week) || days_of_week.length === 0) {

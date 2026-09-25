@@ -288,13 +288,13 @@ async function sweepTeacherPresence() {
 }
 
 function startTeacherPresenceSweeper() {
-  setInterval(() => sweepTeacherPresence().catch(() => {}), SWEEP_MS).unref();
+  setInterval(() => sweepTeacherPresence().catch(() => { }), SWEEP_MS).unref();
 }
 
 const LEAVE_GRACE_MS = 8000;
 
 function scheduleLeaveCheck(liveClassId, userId) {
-  setTimeout(() => markLeftIfGone(liveClassId, userId).catch(() => {}), LEAVE_GRACE_MS);
+  setTimeout(() => markLeftIfGone(liveClassId, userId).catch(() => { }), LEAVE_GRACE_MS);
 }
 
 /** If `userId` has no socket left in the class room, mark them left + clear stage. */
