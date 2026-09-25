@@ -938,22 +938,22 @@ router.get('/daily', authenticateToken, isStudent, async (req, res) => {
 
       const { data: savedAttempt, error } = emptyUnstarted
         ? await supabase
-            .from('daily_quiz_attempts')
-            .update({ question_ids: questionIds })
-            .eq('id', attempt.id)
-            .select()
-            .single()
+          .from('daily_quiz_attempts')
+          .update({ question_ids: questionIds })
+          .eq('id', attempt.id)
+          .select()
+          .single()
         : await supabase
-            .from('daily_quiz_attempts')
-            .insert({
-              id: uuidv4(),
-              student_id: studentId,
-              quiz_date: today,
-              question_ids: questionIds,
-              created_at: new Date()
-            })
-            .select()
-            .single();
+          .from('daily_quiz_attempts')
+          .insert({
+            id: uuidv4(),
+            student_id: studentId,
+            quiz_date: today,
+            question_ids: questionIds,
+            created_at: new Date()
+          })
+          .select()
+          .single();
 
       if (error) throw error;
       attempt = savedAttempt;
@@ -1504,11 +1504,6 @@ router.post('/:id/submit', optionalAuth, async (req, res) => {
       quiz.lesson_id
         ? supabase.from('lessons').select('title, order_number').eq('id', quiz.lesson_id).maybeSingle()
         : Promise.resolve({ data: null }),
-      // Set for a unit's own practice quiz, null for the chapter's
-      // end-of-lesson quiz — lets the quiz-complete screen show which unit
-      // this was, alongside the chapter, instead of a numbered "Chapter N"
-      // (order_number isn't a reliable position — some courses have every
-      // lesson sharing order_number 0, which showed as "Chapter 0").
       quiz.unit_id
         ? supabase.from('lesson_units').select('title').eq('id', quiz.unit_id).maybeSingle()
         : Promise.resolve({ data: null }),
@@ -1579,11 +1574,11 @@ router.get('/:id/results', authenticateToken, async (req, res) => {
     const answeredIds = Object.keys(submittedAnswers);
     const { data: questions } = answeredIds.length > 0
       ? await supabase
-          .from('quiz_questions')
-          .select('id, question, correct_answer, explanation, order_number, question_type')
-          .eq('quiz_id', id)
-          .in('id', answeredIds)
-          .order('order_number', { ascending: true })
+        .from('quiz_questions')
+        .select('id, question, correct_answer, explanation, order_number, question_type')
+        .eq('quiz_id', id)
+        .in('id', answeredIds)
+        .order('order_number', { ascending: true })
       : { data: [] };
 
     const review = (questions || []).map(question => {

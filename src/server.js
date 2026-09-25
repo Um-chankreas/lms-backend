@@ -48,6 +48,7 @@ app.use('/api/profile', require('./routes/profile.routes'));
 app.use('/api/admin', require('./routes/admin.routes'));
 app.use('/api/notifications', require('./routes/notifications.routes'));
 app.use('/api/daily-challenge', require('./routes/dailyChallenge.routes'));
+app.use('/api/app-version', require('./routes/appVersion.routes'));
 
 // ============ Health Check ============
 app.get('/', (req, res) => {
