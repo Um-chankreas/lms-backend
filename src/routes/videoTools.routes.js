@@ -148,4 +148,65 @@ router.post('/trim', authenticateToken, upload.single('video'), async (req, res,
   }
 });
 
+/**
+ * POST /api/video-tools/compress   multipart: video, quality?
+ *       -> the compressed video file, with X-Original-Size / X-Compressed-Size
+ *          headers so the client can show the size reduction.
+ *
+ * Re-encodes with libx264 (unlike /trim's `-c copy`, this is NOT lossless —
+ * that's the point, it's what actually shrinks the file). `quality` picks a
+ * CRF (lower = larger/better) and a resolution cap; the codec never upscales
+ * a smaller source. `-movflags +faststart` moves the moov atom to the front
+ * so the result streams/seeks immediately once served from Supabase Storage,
+ * matching how lesson/unit videos are already served.
+ */
+const QUALITY_PRESETS = {
+  high: { crf: 20, maxHeight: null },     // near-lossless, still shrinks a lot vs. a raw phone/OBS export
+  balanced: { crf: 23, maxHeight: 1080 }, // default — the standard "visually lossless" CRF
+  small: { crf: 28, maxHeight: 720 }      // smallest file, noticeable softening on fast motion
+};
+
+router.post('/compress', authenticateToken, upload.single('video'), async (req, res, next) => {
+  const inputPath = req.file?.path;
+  let outputPath;
+  try {
+    if (!inputPath) return res.status(400).json({ success: false, error: 'A video file is required' });
+
+    const preset = QUALITY_PRESETS[req.body.quality] || QUALITY_PRESETS.balanced;
+    const originalSize = req.file.size;
+
+    outputPath = path.join(os.tmpdir(), `vt-out-${uuidv4()}.mp4`);
+    const args = ['-y', '-i', inputPath];
+    if (preset.maxHeight) args.push('-vf', `scale=-2:'min(ih,${preset.maxHeight})'`);
+    args.push(
+      '-c:v', 'libx264', '-crf', String(preset.crf), '-preset', 'medium',
+      '-c:a', 'aac', '-b:a', '128k',
+      '-movflags', '+faststart',
+      outputPath
+    );
+
+    await runFfmpeg(args);
+
+    const compressedSize = fs.statSync(outputPath).size;
+    const name = path.basename(req.file.originalname, path.extname(req.file.originalname)) + '-compressed.mp4';
+
+    res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+    res.setHeader('Content-Type', 'video/mp4');
+    res.setHeader('X-Original-Size', String(originalSize));
+    res.setHeader('X-Compressed-Size', String(compressedSize));
+    await new Promise((resolve, reject) => {
+      const stream = fs.createReadStream(outputPath);
+      stream.on('error', reject);
+      res.on('finish', resolve);
+      res.on('error', reject);
+      stream.pipe(res);
+    });
+  } catch (err) {
+    if (res.headersSent) res.destroy(err);
+    else next(err);
+  } finally {
+    cleanup([inputPath, outputPath]);
+  }
+});
+
 module.exports = router;

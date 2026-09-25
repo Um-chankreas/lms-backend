@@ -22,7 +22,11 @@ app.use(cors({
   // it here, a browser's CORS preflight for those routes fails silently and
   // the request never goes out, surfacing to the client as a bare
   // "Network Error" with no indication it was a CORS problem.
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  // videoTools.routes.js's /compress reports before/after size in these —
+  // without exposing them, the browser's fetch/XHR can't read them cross-origin
+  // even though the response carries them.
+  exposedHeaders: ['X-Original-Size', 'X-Compressed-Size']
 }));
 
 // No explicit limit here defaults to Express's 100kb — too small once a

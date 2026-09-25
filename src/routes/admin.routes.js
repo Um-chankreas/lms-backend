@@ -3,7 +3,7 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const supabase = require('../config/supabase');
-const { authenticateToken, isAdmin } = require('../middleware/auth');
+const { authenticateToken, isAdmin, isSuperAdmin } = require('../middleware/auth');
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE_REGEX = /^\+?[0-9]{8,15}$/;
@@ -1010,6 +1010,248 @@ router.get('/analytics', async (req, res) => {
   } catch (error) {
     console.error('Admin analytics error:', error);
     res.status(500).json({ success: false, error: 'Failed to load analytics: ' + error.message });
+  }
+});
+
+// ============================================================================
+// Role / permission management — super_admin only. Everything above this
+// point is reachable by plain 'admin' too (the router-wide isAdmin gate);
+// deciding who else IS an admin/super_admin is the one thing this pass keeps
+// out of admin's own reach, per the permission matrix.
+// ============================================================================
+router.use('/users', isSuperAdmin);
+
+const ROLES = ['student', 'teacher', 'admin', 'super_admin'];
+const publicAccount = u => ({
+  id: u.id,
+  name: u.name,
+  email: u.email,
+  phone: u.phone,
+  role: u.role,
+  avatar_url: u.avatar_url || null,
+  is_active: u.is_active !== false,
+  created_at: u.created_at
+});
+
+/**
+ * GET /api/admin/users
+ * Search/list users across every role — the role-management screen.
+ *   ?search=   name / email / phone (partial, case-insensitive)
+ *   ?role=     filter to one role (student|teacher|admin|super_admin)
+ *   ?page=1 &limit=20
+ */
+router.get('/users', async (req, res) => {
+  try {
+    const search = (req.query.search || '').trim();
+    const roleFilter = req.query.role;
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+    const from = (page - 1) * limit;
+
+    if (roleFilter && !ROLES.includes(roleFilter)) {
+      return res.status(400).json({ success: false, error: `role must be one of: ${ROLES.join(', ')}` });
+    }
+
+    let query = supabase
+      .from('users')
+      .select('id, name, email, phone, role, avatar_url, is_active, created_at', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: true });
+
+    if (roleFilter) query = query.eq('role', roleFilter);
+    if (search) {
+      const esc = search.replace(/[^a-zA-Z0-9 @._+-]/g, '').trim();
+      if (esc) query = query.or(`name.ilike.%${esc}%,email.ilike.%${esc}%,phone.ilike.%${esc}%`);
+    }
+
+    const { data: users, count, error } = await query.range(from, from + limit - 1);
+    if (error) throw error;
+
+    res.json({
+      success: true,
+      data: {
+        users: (users || []).map(publicAccount),
+        pagination: { page, limit, total: count || 0, total_pages: Math.ceil((count || 0) / limit) }
+      }
+    });
+  } catch (error) {
+    console.error('Admin list users error:', error);
+    res.status(500).json({ success: false, error: 'Failed to list users: ' + error.message });
+  }
+});
+
+/**
+ * POST /api/admin/users
+ * Create an account directly in any role, including admin/super_admin (the
+ * public signup route only ever allows teacher/student — this is how the
+ * first, and every later, admin/super_admin account gets made).
+ * body: { name, email?, phone?, password, role }
+ */
+router.post('/users', async (req, res) => {
+  try {
+    let { name, email, phone, password, role } = req.body || {};
+    if (!ROLES.includes(role)) {
+      return res.status(400).json({ success: false, error: `role must be one of: ${ROLES.join(', ')}` });
+    }
+    if (!name || !password) {
+      return res.status(400).json({ success: false, error: 'Name and password are required' });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ success: false, error: 'Password must be at least 6 characters' });
+    }
+    if (!email && !phone) {
+      return res.status(400).json({ success: false, error: 'Email or phone number is required' });
+    }
+    if ((role === 'teacher' || role === 'admin' || role === 'super_admin') && !email) {
+      return res.status(400).json({ success: false, error: 'Email is required for this role' });
+    }
+
+    let normalizedEmail = null;
+    if (email) {
+      normalizedEmail = normalizeEmail(email);
+      if (!EMAIL_REGEX.test(normalizedEmail)) {
+        return res.status(400).json({ success: false, error: 'Invalid email address' });
+      }
+      const { data: dupe } = await supabase.from('users').select('id').eq('email', normalizedEmail).maybeSingle();
+      if (dupe) return res.status(409).json({ success: false, error: 'Email already registered' });
+    }
+
+    let normalizedPhone = null;
+    if (phone) {
+      normalizedPhone = normalizePhone(phone);
+      if (!PHONE_REGEX.test(normalizedPhone)) {
+        return res.status(400).json({ success: false, error: 'Invalid phone number' });
+      }
+      const { data: dupe } = await supabase.from('users').select('id').eq('phone', normalizedPhone).maybeSingle();
+      if (dupe) return res.status(409).json({ success: false, error: 'Phone number already registered' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const { data: created, error } = await supabase
+      .from('users')
+      .insert({
+        id: uuidv4(),
+        name,
+        email: normalizedEmail,
+        phone: normalizedPhone,
+        password: hashedPassword,
+        role,
+        created_at: new Date()
+      })
+      .select('id, name, email, phone, role, avatar_url, is_active, created_at')
+      .single();
+    if (error) throw error;
+
+    res.status(201).json({ success: true, message: 'Account created', data: { user: publicAccount(created) } });
+  } catch (error) {
+    console.error('Admin create user error:', error);
+    res.status(500).json({ success: false, error: 'Failed to create account: ' + error.message });
+  }
+});
+
+/**
+ * PATCH /api/admin/users/:id
+ * Edit any account's own fields (not role — see /:id/role for that, which
+ * carries extra safety checks). body: { name?, email?, phone?, password?, is_active? }
+ */
+router.patch('/users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, email, phone, password } = req.body || {};
+
+    const { data: target } = await supabase.from('users').select('id').eq('id', id).maybeSingle();
+    if (!target) return res.status(404).json({ success: false, error: 'User not found' });
+
+    const updates = {};
+    if (name !== undefined) updates.name = name;
+    if (typeof req.body.is_active === 'boolean') updates.is_active = req.body.is_active;
+
+    if (email !== undefined) {
+      if (email === null || email === '') {
+        updates.email = null;
+      } else {
+        const e = normalizeEmail(email);
+        if (!EMAIL_REGEX.test(e)) return res.status(400).json({ success: false, error: 'Invalid email address' });
+        const { data: dupe } = await supabase.from('users').select('id').eq('email', e).neq('id', id).maybeSingle();
+        if (dupe) return res.status(409).json({ success: false, error: 'Email already registered' });
+        updates.email = e;
+      }
+    }
+
+    if (phone !== undefined) {
+      if (phone === null || phone === '') {
+        updates.phone = null;
+      } else {
+        const p = normalizePhone(phone);
+        if (!PHONE_REGEX.test(p)) return res.status(400).json({ success: false, error: 'Invalid phone number' });
+        const { data: dupe } = await supabase.from('users').select('id').eq('phone', p).neq('id', id).maybeSingle();
+        if (dupe) return res.status(409).json({ success: false, error: 'Phone number already registered' });
+        updates.phone = p;
+      }
+    }
+
+    if (password !== undefined) {
+      if (String(password).length < 6) {
+        return res.status(400).json({ success: false, error: 'Password must be at least 6 characters' });
+      }
+      updates.password = await bcrypt.hash(password, 10);
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ success: false, error: 'No fields to update' });
+    }
+
+    const { data: updated, error } = await supabase
+      .from('users').update(updates).eq('id', id)
+      .select('id, name, email, phone, role, avatar_url, is_active, created_at').single();
+    if (error) throw error;
+
+    res.json({ success: true, message: 'Account updated', data: { user: publicAccount(updated) } });
+  } catch (error) {
+    console.error('Admin update user error:', error);
+    res.status(500).json({ success: false, error: 'Failed to update account: ' + error.message });
+  }
+});
+
+/**
+ * PATCH /api/admin/users/:id/role
+ * body: { role: 'student'|'teacher'|'admin'|'super_admin' }
+ * Split out from the general edit above because a role change needs its own
+ * safety checks: you can't change your own role (avoids a super_admin
+ * locking themselves out by mistake), and the last remaining super_admin
+ * can't be demoted (there must always be someone who can undo a mistake).
+ */
+router.patch('/users/:id/role', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { role } = req.body || {};
+    if (!ROLES.includes(role)) {
+      return res.status(400).json({ success: false, error: `role must be one of: ${ROLES.join(', ')}` });
+    }
+    if (id === req.user.userId) {
+      return res.status(400).json({ success: false, error: 'You cannot change your own role — ask another super admin' });
+    }
+
+    const { data: target } = await supabase.from('users').select('id, role').eq('id', id).maybeSingle();
+    if (!target) return res.status(404).json({ success: false, error: 'User not found' });
+
+    if (target.role === 'super_admin' && role !== 'super_admin') {
+      const { count } = await supabase
+        .from('users').select('id', { count: 'exact', head: true }).eq('role', 'super_admin');
+      if ((count || 0) <= 1) {
+        return res.status(400).json({ success: false, error: 'At least one super admin must remain' });
+      }
+    }
+
+    const { data: updated, error } = await supabase
+      .from('users').update({ role }).eq('id', id)
+      .select('id, name, email, phone, role, avatar_url, is_active, created_at').single();
+    if (error) throw error;
+
+    res.json({ success: true, message: 'Role updated', data: { user: publicAccount(updated) } });
+  } catch (error) {
+    console.error('Admin update role error:', error);
+    res.status(500).json({ success: false, error: 'Failed to update role: ' + error.message });
   }
 });
 

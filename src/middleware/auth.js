@@ -126,12 +126,39 @@ const isStudent = (req, res, next) => {
   next();
 };
 
-// Middleware to check if user is an admin (web portal only)
+// Middleware to check if user is an admin (web portal only). super_admin is
+// a strict superset of admin, so it passes this check too — anywhere that
+// needs to exclude super_admin (e.g. "manage admins") checks role directly.
 const isAdmin = (req, res, next) => {
-  if (req.user?.role !== 'admin') {
+  if (req.user?.role !== 'admin' && req.user?.role !== 'super_admin') {
     return res.status(403).json({
       success: false,
       error: 'This action requires admin privileges'
+    });
+  }
+  next();
+};
+
+// Middleware to check if user is a super admin — the tier above admin
+// (manage admin accounts, system settings/pricing, start any live class).
+const isSuperAdmin = (req, res, next) => {
+  if (req.user?.role !== 'super_admin') {
+    return res.status(403).json({
+      success: false,
+      error: 'This action requires super admin privileges'
+    });
+  }
+  next();
+};
+
+// Middleware factory: allow any of the given roles through. Use this instead
+// of stacking single-role middleware when a route is shared by more than one
+// role (e.g. teacher OR admin OR super_admin).
+const hasRole = (...roles) => (req, res, next) => {
+  if (!roles.includes(req.user?.role)) {
+    return res.status(403).json({
+      success: false,
+      error: `This action requires one of these roles: ${roles.join(', ')}`
     });
   }
   next();
@@ -142,5 +169,7 @@ module.exports = {
   optionalAuth,
   isTeacher,
   isStudent,
-  isAdmin
+  isAdmin,
+  isSuperAdmin,
+  hasRole
 };
