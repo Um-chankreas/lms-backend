@@ -4,7 +4,7 @@ const multer = require('multer');
 const tex2svg = require('node-tikzjax').default;
 const sharp = require('sharp');
 const supabase = require('../config/supabase');
-const { authenticateToken, optionalAuth, isTeacher } = require('../middleware/auth');
+const { authenticateToken, optionalAuth, hasRole } = require('../middleware/auth');
 const { guestCanAccessStep, guestFreeStepKeys, sendGuestWall } = require('../utils/guest');
 const { v4: uuidv4 } = require('uuid');
 const { hasCourseAccess, ensureEnrolled } = require('../utils/access');
@@ -70,15 +70,17 @@ async function storageObjectExists(folder, path) {
   return !!(data && data.length);
 }
 
-/** Load a unit + confirm the caller owns its course. */
-async function loadOwnedUnit(id, userId) {
+const isAdminRole = (user) => ['admin', 'super_admin'].includes(user?.role);
+
+/** Load a unit + confirm the caller owns its course, or is admin/super_admin. */
+async function loadOwnedUnit(id, user) {
   const { data: unit } = await supabase
     .from('lesson_units')
     .select('id, video_url, lessons(courses(teacher_id))')
     .eq('id', id)
     .single();
   if (!unit) return { error: { status: 404, message: 'Unit not found' } };
-  if (unit.lessons?.courses?.teacher_id !== userId) {
+  if (unit.lessons?.courses?.teacher_id !== user.userId && !isAdminRole(user)) {
     return { error: { status: 403, message: 'You can only edit your own units' } };
   }
   return { unit };
@@ -162,6 +164,8 @@ const loadChapter = async (lessonId) => {
 
 const teacherOwnsCourse = (course, user) =>
   !!course && user?.role === 'teacher' && course.teacher_id === user.userId;
+
+const canEditCourse = (course, user) => !!course && (teacherOwnsCourse(course, user) || isAdminRole(user));
 
 const nextOrderNumber = async (lessonId) => {
   const { data } = await supabase
@@ -263,7 +267,7 @@ router.get('/search', authenticateToken, async (req, res) => {
  * POST /api/units/reorder   (Teacher)
  * Body: { lesson_id, order: [unitId, unitId, ...] }
  */
-router.post('/reorder', authenticateToken, isTeacher, async (req, res) => {
+router.post('/reorder', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), async (req, res) => {
   try {
     const { lesson_id, order } = req.body;
     if (!lesson_id || !Array.isArray(order) || order.length === 0) {
@@ -272,7 +276,7 @@ router.post('/reorder', authenticateToken, isTeacher, async (req, res) => {
 
     const chapter = await loadChapter(lesson_id);
     if (!chapter) return res.status(404).json({ success: false, error: 'Chapter not found' });
-    if (!teacherOwnsCourse(chapter.courses, req.user)) {
+    if (!canEditCourse(chapter.courses, req.user)) {
       return res.status(403).json({ success: false, error: 'You can only edit your own courses' });
     }
 
@@ -308,7 +312,7 @@ router.post('/reorder', authenticateToken, isTeacher, async (req, res) => {
  * Body: { lesson_id, markdown, replace? }
  * Splits `markdown` into units on each `## ` heading.
  */
-router.post('/bulk', authenticateToken, isTeacher, async (req, res) => {
+router.post('/bulk', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), async (req, res) => {
   try {
     const { lesson_id, markdown, replace } = req.body;
     if (!lesson_id || !markdown) {
@@ -317,7 +321,7 @@ router.post('/bulk', authenticateToken, isTeacher, async (req, res) => {
 
     const chapter = await loadChapter(lesson_id);
     if (!chapter) return res.status(404).json({ success: false, error: 'Chapter not found' });
-    if (!teacherOwnsCourse(chapter.courses, req.user)) {
+    if (!canEditCourse(chapter.courses, req.user)) {
       return res.status(403).json({ success: false, error: 'You can only edit your own courses' });
     }
 
@@ -387,7 +391,7 @@ const TIKZ_PNG_MAX_WIDTH = 1200;
  * A figure that can't be rendered (unsupported package, bad syntax) should
  * fall back to the manual image-upload placeholder client-side.
  */
-router.post('/render-tikz', authenticateToken, isTeacher, async (req, res) => {
+router.post('/render-tikz', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), async (req, res) => {
   try {
     const source = String(req.body.source || '').trim();
     if (!source) return res.status(400).json({ success: false, error: 'source is required' });
@@ -420,7 +424,7 @@ router.post('/render-tikz', authenticateToken, isTeacher, async (req, res) => {
  * public URL, which the unit editor writes into the Markdown in place of a
  * `figure` placeholder. Not tied to a saved unit — works while adding one too.
  */
-router.post('/figure-image', authenticateToken, isTeacher, figureUpload.single('image'), async (req, res) => {
+router.post('/figure-image', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), figureUpload.single('image'), async (req, res) => {
   try {
     const file = req.file;
     const lessonId = req.body.lesson_id ? String(req.body.lesson_id) : null;
@@ -429,7 +433,7 @@ router.post('/figure-image', authenticateToken, isTeacher, figureUpload.single('
 
     const chapter = await loadChapter(lessonId);
     if (!chapter) return res.status(404).json({ success: false, error: 'Chapter not found' });
-    if (!teacherOwnsCourse(chapter.courses, req.user)) {
+    if (!canEditCourse(chapter.courses, req.user)) {
       return res.status(403).json({ success: false, error: 'You can only edit your own courses' });
     }
 
@@ -455,7 +459,7 @@ router.post('/figure-image', authenticateToken, isTeacher, figureUpload.single('
  * body: { content_type }  ->  { path, token, signed_url, upload_url, public_url }
  * Client uploads the file DIRECTLY to `upload_url`, then calls POST :id/video.
  */
-router.post('/:id/video/upload-url', authenticateToken, isTeacher, async (req, res) => {
+router.post('/:id/video/upload-url', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), async (req, res) => {
   try {
     const ext = VIDEO_CONTENT_TYPES[req.body?.content_type];
     if (!ext) {
@@ -465,7 +469,7 @@ router.post('/:id/video/upload-url', authenticateToken, isTeacher, async (req, r
       });
     }
 
-    const { unit, error } = await loadOwnedUnit(req.params.id, req.user.userId);
+    const { unit, error } = await loadOwnedUnit(req.params.id, req.user);
     if (error) return res.status(error.status).json({ success: false, error: error.message });
 
     const path = `unit-videos/${unit.id}-${Date.now()}.${ext}`;
@@ -494,7 +498,7 @@ router.post('/:id/video/upload-url', authenticateToken, isTeacher, async (req, r
  * body: { path, duration_seconds? }
  * Attaches (or replaces) the unit's video after the direct upload finished.
  */
-router.post('/:id/video', authenticateToken, isTeacher, async (req, res) => {
+router.post('/:id/video', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), async (req, res) => {
   try {
     const { id } = req.params;
     const { path, duration_seconds } = req.body || {};
@@ -505,7 +509,7 @@ router.post('/:id/video', authenticateToken, isTeacher, async (req, res) => {
       });
     }
 
-    const { unit, error } = await loadOwnedUnit(id, req.user.userId);
+    const { unit, error } = await loadOwnedUnit(id, req.user);
     if (error) return res.status(error.status).json({ success: false, error: error.message });
 
     if (!(await storageObjectExists('unit-videos', path))) {
@@ -545,9 +549,9 @@ router.post('/:id/video', authenticateToken, isTeacher, async (req, res) => {
 /**
  * DELETE /api/units/:id/video   (Teacher)
  */
-router.delete('/:id/video', authenticateToken, isTeacher, async (req, res) => {
+router.delete('/:id/video', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), async (req, res) => {
   try {
-    const { unit, error } = await loadOwnedUnit(req.params.id, req.user.userId);
+    const { unit, error } = await loadOwnedUnit(req.params.id, req.user);
     if (error) return res.status(error.status).json({ success: false, error: error.message });
 
     if (unit.video_url) await supabase.storage.from('course-materials').remove([unit.video_url]);
@@ -571,7 +575,7 @@ router.delete('/:id/video', authenticateToken, isTeacher, async (req, res) => {
  * POST /api/units   (Teacher)
  * Body: { lesson_id, title, content?, order_number?, is_free? }
  */
-router.post('/', authenticateToken, isTeacher, async (req, res) => {
+router.post('/', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), async (req, res) => {
   try {
     const { lesson_id, title, content, order_number, is_free } = req.body;
     if (!lesson_id || !title) {
@@ -580,7 +584,7 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
 
     const chapter = await loadChapter(lesson_id);
     if (!chapter) return res.status(404).json({ success: false, error: 'Chapter not found' });
-    if (!teacherOwnsCourse(chapter.courses, req.user)) {
+    if (!canEditCourse(chapter.courses, req.user)) {
       return res.status(403).json({ success: false, error: 'You can only add units to your own courses' });
     }
 
@@ -809,7 +813,7 @@ router.post('/:id/complete', optionalAuth, async (req, res) => {
  * PUT /api/units/:id   (Teacher)
  * Body: { title?, content?, order_number?, is_free? }
  */
-router.put('/:id', authenticateToken, isTeacher, async (req, res) => {
+router.put('/:id', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), async (req, res) => {
   try {
     const { data: unit } = await supabase
       .from('lesson_units')
@@ -818,7 +822,7 @@ router.put('/:id', authenticateToken, isTeacher, async (req, res) => {
       .single();
 
     if (!unit) return res.status(404).json({ success: false, error: 'Unit not found' });
-    if (unit.lessons?.courses?.teacher_id !== req.user.userId) {
+    if (unit.lessons?.courses?.teacher_id !== req.user.userId && !isAdminRole(req.user)) {
       return res.status(403).json({ success: false, error: 'You can only edit your own courses' });
     }
 
@@ -848,7 +852,7 @@ router.put('/:id', authenticateToken, isTeacher, async (req, res) => {
 /**
  * DELETE /api/units/:id   (Teacher)
  */
-router.delete('/:id', authenticateToken, isTeacher, async (req, res) => {
+router.delete('/:id', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), async (req, res) => {
   try {
     const { data: unit } = await supabase
       .from('lesson_units')
@@ -857,7 +861,7 @@ router.delete('/:id', authenticateToken, isTeacher, async (req, res) => {
       .single();
 
     if (!unit) return res.status(404).json({ success: false, error: 'Unit not found' });
-    if (unit.lessons?.courses?.teacher_id !== req.user.userId) {
+    if (unit.lessons?.courses?.teacher_id !== req.user.userId && !isAdminRole(req.user)) {
       return res.status(403).json({ success: false, error: 'You can only edit your own courses' });
     }
 

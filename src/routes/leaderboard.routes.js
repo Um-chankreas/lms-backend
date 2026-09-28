@@ -18,23 +18,37 @@ function weekStart(now = new Date()) {
 }
 
 /**
- * GET /api/leaderboard?scope=global|friends&period=weekly|all&limit=50
+ * GET /api/leaderboard?scope=global|friends&period=weekly|all&course_id=&limit=50
  *
  * - scope=global : all students
  * - scope=friends: students enrolled in at least one course in common with
  *   the caller (plus the caller)
  * - period=weekly: XP summed from xp_events since Monday (default)
- * - period=all   : lifetime users.xp
+ * - period=all   : lifetime XP — users.xp normally, or (when course_id is
+ *   set) the lifetime sum of that course's xp_events, since users.xp is a
+ *   global total with no per-subject breakdown of its own.
+ * - course_id    : optional — restricts both the participant set (only
+ *   students enrolled in that course) and the XP counted (only xp_events
+ *   tagged with that course_id — see sql/022_gamification.sql). Omitted =
+ *   every subject combined, the original whole-app leaderboard.
  *
  * Response: ranked `entries` (top `limit`) + a `me` card with the caller's
- * own rank and percentile.
+ * own rank and percentile, + `course` ({id, title}) when course_id was given.
  */
 router.get('/', authenticateToken, async (req, res) => {
   try {
     const me = req.user.userId;
     const scope = req.query.scope === 'friends' ? 'friends' : 'global';
     const period = req.query.period === 'all' ? 'all' : 'weekly';
+    const courseId = req.query.course_id ? String(req.query.course_id) : null;
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 100);
+
+    let courseMeta = null;
+    if (courseId) {
+      const { data } = await supabase.from('courses').select('id, title').eq('id', courseId).maybeSingle();
+      if (!data) return res.status(404).json({ success: false, error: 'Course not found' });
+      courseMeta = data;
+    }
 
     // 1. Participant set. null => every student.
     let studentIds = null;
@@ -56,6 +70,17 @@ router.get('/', authenticateToken, async (req, res) => {
       studentIds = [...set];
     }
 
+    // Subject filter narrows the participant set further: only students
+    // actually enrolled in that course count for a per-subject board.
+    if (courseId) {
+      const { data: enrolled } = await supabase
+        .from('course_enrollments')
+        .select('student_id')
+        .eq('course_id', courseId);
+      const enrolledIds = new Set((enrolled || []).map(e => e.student_id));
+      studentIds = studentIds ? studentIds.filter(id => enrolledIds.has(id)) : [...enrolledIds];
+    }
+
     // 2. Student rows in the set.
     let userQuery = supabase
       .from('users')
@@ -65,7 +90,7 @@ router.get('/', authenticateToken, async (req, res) => {
     const { data: students } = await userQuery;
     const byId = Object.fromEntries((students || []).map(u => [u.id, u]));
 
-    // 3. XP for the chosen period.
+    // 3. XP for the chosen period (+ subject, if filtering).
     const xpById = {};
     let weekStartStr = null;
     if (period === 'weekly') {
@@ -77,6 +102,19 @@ router.get('/', authenticateToken, async (req, res) => {
         .from('xp_events')
         .select('student_id, amount')
         .gte('created_at', ws.toISOString());
+      if (studentIds) eventsQuery = eventsQuery.in('student_id', studentIds);
+      if (courseId) eventsQuery = eventsQuery.eq('course_id', courseId);
+
+      const { data: events } = await eventsQuery;
+      (events || []).forEach(e => {
+        if (byId[e.student_id]) {
+          xpById[e.student_id] = (xpById[e.student_id] || 0) + (e.amount || 0);
+        }
+      });
+    } else if (courseId) {
+      // Lifetime, one subject — users.xp is a global total, so this has to
+      // be summed from the ledger instead of read off the user row.
+      let eventsQuery = supabase.from('xp_events').select('student_id, amount').eq('course_id', courseId);
       if (studentIds) eventsQuery = eventsQuery.in('student_id', studentIds);
 
       const { data: events } = await eventsQuery;
@@ -113,16 +151,32 @@ router.get('/', authenticateToken, async (req, res) => {
       badge: badges[r.id] || null
     }));
 
-    // 5. The caller's own card.
+    // 5. The caller's own card. total_xp is LIFETIME — users.xp when no
+    // subject filter, otherwise the lifetime sum of that subject's
+    // xp_events (period='all' already computed that into xpById above;
+    // period='weekly' needs its own unbounded query since xpById there is
+    // this-week-only).
     let meCard = null;
     if (byId[me]) {
       const meRow = ranked.find(r => r.id === me);
       const participants = ranked.length;
       const rank = meRow ? meRow.rank : null;
+
+      let meTotalXp = byId[me].xp || 0;
+      if (courseId) {
+        if (period === 'all') {
+          meTotalXp = xpById[me] || 0;
+        } else {
+          const { data: meEvents } = await supabase
+            .from('xp_events').select('amount').eq('student_id', me).eq('course_id', courseId);
+          meTotalXp = (meEvents || []).reduce((s, e) => s + (e.amount || 0), 0);
+        }
+      }
+
       meCard = {
         rank,
         xp: meRow ? meRow.xp : 0,
-        total_xp: byId[me].xp || 0,
+        total_xp: meTotalXp,
         participants,
         top_percent: rank && participants
           ? Math.max(1, Math.ceil((rank / participants) * 100))
@@ -141,6 +195,7 @@ router.get('/', authenticateToken, async (req, res) => {
       data: {
         scope,
         period,
+        course: courseMeta,
         week_start: weekStartStr,
         entries,
         me: meCard

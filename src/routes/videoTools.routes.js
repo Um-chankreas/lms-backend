@@ -36,7 +36,7 @@ const { requireFeature } = require('../utils/permissions');
  */
 
 const ALLOWED_VIDEO_EXT = { 'video/mp4': '.mp4', 'video/quicktime': '.mov', 'video/webm': '.webm', 'video/x-m4v': '.m4v', 'video/x-matroska': '.mkv' };
-const MAX_UPLOAD_BYTES = 3 * 1024 * 1024 * 1024; // 3GB — long class recordings
+const MAX_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024; // 8GB — long, high-bitrate class recordings (keep in sync with VideoEditorView.vue)
 const MAX_SEGMENTS = 20;
 
 const extFor = (file) => ALLOWED_VIDEO_EXT[file.mimetype] || path.extname(file.originalname).toLowerCase() || '.mp4';
@@ -208,6 +208,165 @@ router.post('/compress', authenticateToken, requireFeature('compress_video'), up
   } finally {
     cleanup([inputPath, outputPath]);
   }
+});
+
+/**
+ * Compress as a background job, so the client can show encoding progress
+ * (the plain /compress above answers only once ffmpeg is done — for an hour
+ * of video that's many silent minutes, and a long-held request is exactly
+ * what proxies time out).
+ *
+ *   POST /api/video-tools/compress-jobs          multipart: video, quality?
+ *       -> 202 { jobId }  as soon as the upload lands; encoding runs on
+ *   GET  /api/video-tools/compress-jobs/:id
+ *       -> { status: 'running'|'done'|'error', percent, error?, originalSize, compressedSize? }
+ *   GET  /api/video-tools/compress-jobs/:id/file
+ *       -> the compressed .mp4 (the job and its files are deleted once sent)
+ *
+ * Jobs live in memory on this process: a restart drops them (the client
+ * reports the failure and the user retries). Only the user who started a job
+ * can read it. Finished jobs nobody collects are swept after JOB_TTL_MS.
+ */
+const jobs = new Map();
+const JOB_TTL_MS = 2 * 60 * 60 * 1000;
+
+const dropJob = (id) => {
+  const job = jobs.get(id);
+  if (!job) return;
+  jobs.delete(id);
+  if (job.proc && job.status === 'running') job.proc.kill('SIGKILL');
+  cleanup([job.inputPath, job.outputPath]);
+};
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, job] of jobs) {
+    if (now - (job.finishedAt || job.startedAt) > JOB_TTL_MS) dropJob(id);
+  }
+}, 10 * 60 * 1000).unref();
+
+// Like runFfmpeg, but reports percent done via `-progress pipe:1`, whose
+// out_time_us (microseconds encoded so far) we divide by the source length.
+function runFfmpegWithProgress(args, durationSec, onPercent, onSpawn) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(ffmpegPath, ['-progress', 'pipe:1', '-nostats', ...args]);
+    onSpawn?.(proc);
+    let stderr = '';
+    let buf = '';
+    proc.stdout.on('data', (d) => {
+      buf += d.toString();
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        const m = line.match(/^out_time_us=(\d+)/);
+        if (m && durationSec > 0) onPercent(Math.min(99, Math.floor((Number(m[1]) / 1e6 / durationSec) * 100)));
+      }
+    });
+    proc.stderr.on('data', (d) => { stderr = (stderr + d.toString()).slice(-4000); });
+    proc.on('error', reject);
+    proc.on('close', (code, signal) => {
+      if (code === 0) resolve();
+      else reject(Object.assign(new Error(signal ? 'Cancelled' : `Video processing failed: ${stderr.slice(-1000).trim() || `ffmpeg exited with code ${code}`}`), { status: 422 }));
+    });
+  });
+}
+
+const compressArgs = (inputPath, outputPath, preset) => {
+  const args = ['-y', '-i', inputPath];
+  if (preset.maxHeight) args.push('-vf', `scale=-2:'min(ih,${preset.maxHeight})'`);
+  args.push(
+    '-c:v', 'libx264', '-crf', String(preset.crf), '-preset', 'medium',
+    '-c:a', 'aac', '-b:a', '128k',
+    '-movflags', '+faststart',
+    outputPath
+  );
+  return args;
+};
+
+const ownJob = (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job || job.userId !== req.user.userId) {
+    res.status(404).json({ success: false, error: 'That job has expired or doesn’t exist. Please try again.' });
+    return null;
+  }
+  return job;
+};
+
+router.post('/compress-jobs', authenticateToken, requireFeature('compress_video'), upload.single('video'), async (req, res, next) => {
+  const inputPath = req.file?.path;
+  try {
+    if (!inputPath) return res.status(400).json({ success: false, error: 'A video file is required' });
+
+    const preset = QUALITY_PRESETS[req.body.quality] || QUALITY_PRESETS.balanced;
+    const info = await probe(inputPath);
+    if (!info) {
+      cleanup([inputPath]);
+      return res.status(422).json({ success: false, error: 'That file couldn’t be read as a video' });
+    }
+
+    const id = uuidv4();
+    const outputPath = path.join(os.tmpdir(), `vt-out-${uuidv4()}.mp4`);
+    const job = {
+      id, userId: req.user.userId, status: 'running', percent: 0, error: null,
+      inputPath, outputPath, startedAt: Date.now(), finishedAt: null, proc: null,
+      originalSize: req.file.size, compressedSize: null,
+      name: path.basename(req.file.originalname, path.extname(req.file.originalname)) + '-compressed.mp4'
+    };
+    jobs.set(id, job);
+    res.status(202).json({ success: true, jobId: id });
+
+    runFfmpegWithProgress(compressArgs(inputPath, outputPath, preset), info.duration, (p) => { job.percent = p; }, (proc) => { job.proc = proc; })
+      .then(() => {
+        job.status = 'done';
+        job.percent = 100;
+        job.compressedSize = fs.statSync(outputPath).size;
+      })
+      .catch((err) => {
+        job.status = 'error';
+        job.error = err.message;
+        cleanup([outputPath]);
+      })
+      .finally(() => {
+        job.finishedAt = Date.now();
+        job.proc = null;
+        cleanup([inputPath]);
+      });
+  } catch (err) {
+    cleanup([inputPath]);
+    next(err);
+  }
+});
+
+router.get('/compress-jobs/:id', authenticateToken, (req, res) => {
+  const job = ownJob(req, res);
+  if (!job) return;
+  res.json({
+    success: true,
+    status: job.status,
+    percent: job.percent,
+    error: job.error,
+    originalSize: job.originalSize,
+    compressedSize: job.compressedSize
+  });
+});
+
+router.get('/compress-jobs/:id/file', authenticateToken, (req, res, next) => {
+  const job = ownJob(req, res);
+  if (!job) return;
+  if (job.status !== 'done') return res.status(409).json({ success: false, error: 'The video isn’t ready yet' });
+  res.setHeader('Content-Disposition', `attachment; filename="${job.name}"`);
+  res.setHeader('Content-Type', 'video/mp4');
+  res.setHeader('Content-Length', String(job.compressedSize));
+  const stream = fs.createReadStream(job.outputPath);
+  stream.on('error', next);
+  res.on('finish', () => dropJob(job.id));
+  stream.pipe(res);
+});
+
+router.delete('/compress-jobs/:id', authenticateToken, (req, res) => {
+  const job = ownJob(req, res);
+  if (!job) return;
+  dropJob(job.id);
+  res.json({ success: true });
 });
 
 /**

@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const supabase = require('../config/supabase');
-const { authenticateToken, optionalAuth, isTeacher } = require('../middleware/auth');
+const { authenticateToken, optionalAuth, hasRole } = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
 const { PDFDocument } = require('pdf-lib');
 const { awardXp, XP_VALUES } = require('../utils/xp');
@@ -42,6 +42,8 @@ const upload = multer({
   }
 });
 
+const isAdminRole = (user) => ['admin', 'super_admin'].includes(user?.role);
+
 /**
  * POST /api/lessons
  * Create a new lesson (Teacher only)
@@ -50,7 +52,7 @@ const upload = multer({
  * POST /api/lessons
  * Create a new lesson (Teacher only)
  */
-router.post('/', authenticateToken, isTeacher, upload.single('file'), async (req, res) => {
+router.post('/', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), upload.single('file'), async (req, res) => {
   try {
     const { course_id, title, description, order_number, start_page, end_page, is_free } = req.body;
     const file = req.file;
@@ -70,7 +72,7 @@ router.post('/', authenticateToken, isTeacher, upload.single('file'), async (req
       .eq('id', course_id)
       .single();
 
-    if (course?.teacher_id !== req.user.userId) {
+    if (course?.teacher_id !== req.user.userId && !isAdminRole(req.user)) {
       return res.status(403).json({
         success: false,
         error: 'You can only add lessons to your own courses'
@@ -570,7 +572,7 @@ router.get('/course/:courseId', authenticateToken, async (req, res) => {
  * PUT /api/lessons/:id
  * Update lesson (Teacher only)
  */
-router.put('/:id', authenticateToken, isTeacher, async (req, res) => {
+router.put('/:id', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), async (req, res) => {
   try {
     const { id } = req.params;
     const { title, description, order_number, is_free } = req.body;
@@ -582,7 +584,7 @@ router.put('/:id', authenticateToken, isTeacher, async (req, res) => {
       .eq('id', id)
       .single();
 
-    if (lesson?.courses?.teacher_id !== req.user.userId) {
+    if (lesson?.courses?.teacher_id !== req.user.userId && !isAdminRole(req.user)) {
       return res.status(403).json({
         success: false,
         error: 'You can only update your own lessons'
@@ -619,7 +621,7 @@ router.put('/:id', authenticateToken, isTeacher, async (req, res) => {
  * DELETE /api/lessons/:id
  * Delete lesson (Teacher only)
  */
-router.delete('/:id', authenticateToken, isTeacher, async (req, res) => {
+router.delete('/:id', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -630,7 +632,7 @@ router.delete('/:id', authenticateToken, isTeacher, async (req, res) => {
       .eq('id', id)
       .single();
 
-    if (lesson?.courses?.teacher_id !== req.user.userId) {
+    if (lesson?.courses?.teacher_id !== req.user.userId && !isAdminRole(req.user)) {
       return res.status(403).json({
         success: false,
         error: 'You can only delete your own lessons'
@@ -720,8 +722,8 @@ const sanitizeName = (name) =>
     .toLowerCase()
     .slice(-80);
 
-/** Load a lesson + confirm the caller owns its course. */
-async function loadOwnedLesson(lessonId, userId) {
+/** Load a lesson + confirm the caller owns its course, or is admin/super_admin. */
+async function loadOwnedLesson(lessonId, user) {
   const { data: lesson } = await supabase
     .from('lessons')
     .select('id, course_id, file_url, file_type, video_url, thumbnail_url, courses(teacher_id)')
@@ -729,7 +731,7 @@ async function loadOwnedLesson(lessonId, userId) {
     .single();
 
   if (!lesson) return { error: { status: 404, message: 'Lesson not found' } };
-  if (lesson.courses?.teacher_id !== userId) {
+  if (lesson.courses?.teacher_id !== user.userId && !isAdminRole(user)) {
     return { error: { status: 403, message: 'You can only edit your own lessons' } };
   }
   return { lesson };
@@ -751,7 +753,7 @@ async function storageObjectExists(folder, path) {
  * Client uploads to `signed_url` (HTTP PUT raw body, or supabase-js
  * `uploadToSignedUrl(path, token, file)`), then calls POST /:id/video.
  */
-router.post('/:id/video/upload-url', authenticateToken, isTeacher, async (req, res) => {
+router.post('/:id/video/upload-url', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), async (req, res) => {
   try {
     const { id } = req.params;
     const ext = VIDEO_CONTENT_TYPES[req.body?.content_type];
@@ -762,7 +764,7 @@ router.post('/:id/video/upload-url', authenticateToken, isTeacher, async (req, r
       });
     }
 
-    const { lesson, error } = await loadOwnedLesson(id, req.user.userId);
+    const { lesson, error } = await loadOwnedLesson(id, req.user);
     if (error) return res.status(error.status).json({ success: false, error: error.message });
 
     const path = `videos/${lesson.id}-${Date.now()}.${ext}`;
@@ -794,7 +796,7 @@ router.post('/:id/video/upload-url', authenticateToken, isTeacher, async (req, r
  * it here, then passes `path` as `thumbnail_path` to POST /:id/video, or to
  * POST /:id/video/thumbnail to change it later.
  */
-router.post('/:id/video/thumbnail/upload-url', authenticateToken, isTeacher, async (req, res) => {
+router.post('/:id/video/thumbnail/upload-url', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), async (req, res) => {
   try {
     const { id } = req.params;
     const ext = IMAGE_CONTENT_TYPES[req.body?.content_type];
@@ -805,7 +807,7 @@ router.post('/:id/video/thumbnail/upload-url', authenticateToken, isTeacher, asy
       });
     }
 
-    const { lesson, error } = await loadOwnedLesson(id, req.user.userId);
+    const { lesson, error } = await loadOwnedLesson(id, req.user);
     if (error) return res.status(error.status).json({ success: false, error: error.message });
 
     const path = `thumbnails/${lesson.id}-${Date.now()}.${ext}`;
@@ -834,7 +836,7 @@ router.post('/:id/video/thumbnail/upload-url', authenticateToken, isTeacher, asy
  * body: { path, duration_seconds?, thumbnail_path? }
  * Attaches (or replaces) the lesson video after the direct upload finished.
  */
-router.post('/:id/video', authenticateToken, isTeacher, async (req, res) => {
+router.post('/:id/video', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), async (req, res) => {
   try {
     const { id } = req.params;
     const { path, duration_seconds, thumbnail_path } = req.body || {};
@@ -852,7 +854,7 @@ router.post('/:id/video', authenticateToken, isTeacher, async (req, res) => {
       });
     }
 
-    const { lesson, error } = await loadOwnedLesson(id, req.user.userId);
+    const { lesson, error } = await loadOwnedLesson(id, req.user);
     if (error) return res.status(error.status).json({ success: false, error: error.message });
 
     if (!(await storageObjectExists('videos', path))) {
@@ -911,7 +913,7 @@ router.post('/:id/video', authenticateToken, isTeacher, async (req, res) => {
  * body: { path }
  * Sets / replaces just the video poster image.
  */
-router.post('/:id/video/thumbnail', authenticateToken, isTeacher, async (req, res) => {
+router.post('/:id/video/thumbnail', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), async (req, res) => {
   try {
     const { id } = req.params;
     const { path } = req.body || {};
@@ -923,7 +925,7 @@ router.post('/:id/video/thumbnail', authenticateToken, isTeacher, async (req, re
       });
     }
 
-    const { lesson, error } = await loadOwnedLesson(id, req.user.userId);
+    const { lesson, error } = await loadOwnedLesson(id, req.user);
     if (error) return res.status(error.status).json({ success: false, error: error.message });
 
     if (!(await storageObjectExists('thumbnails', path))) {
@@ -957,10 +959,10 @@ router.post('/:id/video/thumbnail', authenticateToken, isTeacher, async (req, re
 /**
  * DELETE /api/lessons/:id/video
  */
-router.delete('/:id/video', authenticateToken, isTeacher, async (req, res) => {
+router.delete('/:id/video', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), async (req, res) => {
   try {
     const { id } = req.params;
-    const { lesson, error } = await loadOwnedLesson(id, req.user.userId);
+    const { lesson, error } = await loadOwnedLesson(id, req.user);
     if (error) return res.status(error.status).json({ success: false, error: error.message });
 
     const toRemove = [lesson.video_url, lesson.thumbnail_url].filter(Boolean);
@@ -990,7 +992,7 @@ router.delete('/:id/video', authenticateToken, isTeacher, async (req, res) => {
  * Adds or replaces the lesson's reading (file_url). Videos are rejected here —
  * use the /video flow for those.
  */
-router.post('/:id/file', authenticateToken, isTeacher, upload.single('file'), async (req, res) => {
+router.post('/:id/file', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), upload.single('file'), async (req, res) => {
   try {
     const { id } = req.params;
     const file = req.file;
@@ -1005,7 +1007,7 @@ router.post('/:id/file', authenticateToken, isTeacher, upload.single('file'), as
       });
     }
 
-    const { lesson, error } = await loadOwnedLesson(id, req.user.userId);
+    const { lesson, error } = await loadOwnedLesson(id, req.user);
     if (error) return res.status(error.status).json({ success: false, error: error.message });
 
     const fileName = `${id}-${Date.now()}-${sanitizeName(file.originalname)}`;
@@ -1068,10 +1070,10 @@ router.post('/:id/file', authenticateToken, isTeacher, upload.single('file'), as
 /**
  * DELETE /api/lessons/:id/file
  */
-router.delete('/:id/file', authenticateToken, isTeacher, async (req, res) => {
+router.delete('/:id/file', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), async (req, res) => {
   try {
     const { id } = req.params;
-    const { lesson, error } = await loadOwnedLesson(id, req.user.userId);
+    const { lesson, error } = await loadOwnedLesson(id, req.user);
     if (error) return res.status(error.status).json({ success: false, error: error.message });
 
     if (lesson.file_url) {
@@ -1106,7 +1108,7 @@ router.delete('/:id/file', authenticateToken, isTeacher, async (req, res) => {
  * body: { filename, content_type }
  * -> { path, token, signed_url, public_url }
  */
-router.post('/:id/attachments/upload-url', authenticateToken, isTeacher, async (req, res) => {
+router.post('/:id/attachments/upload-url', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), async (req, res) => {
   try {
     const { id } = req.params;
     const { filename, content_type } = req.body || {};
@@ -1114,7 +1116,7 @@ router.post('/:id/attachments/upload-url', authenticateToken, isTeacher, async (
       return res.status(400).json({ success: false, error: '`filename` is required' });
     }
 
-    const { error } = await loadOwnedLesson(id, req.user.userId);
+    const { error } = await loadOwnedLesson(id, req.user);
     if (error) return res.status(error.status).json({ success: false, error: error.message });
 
     const path = `attachments/${id}/${Date.now()}-${sanitizeName(filename)}`;
@@ -1144,7 +1146,7 @@ router.post('/:id/attachments/upload-url', authenticateToken, isTeacher, async (
  * body: { path, title?, content_type?, size_bytes? }
  * Records an uploaded file as a lesson attachment.
  */
-router.post('/:id/attachments', authenticateToken, isTeacher, async (req, res) => {
+router.post('/:id/attachments', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), async (req, res) => {
   try {
     const { id } = req.params;
     const { path, title, content_type, size_bytes } = req.body || {};
@@ -1156,7 +1158,7 @@ router.post('/:id/attachments', authenticateToken, isTeacher, async (req, res) =
       });
     }
 
-    const { error } = await loadOwnedLesson(id, req.user.userId);
+    const { error } = await loadOwnedLesson(id, req.user);
     if (error) return res.status(error.status).json({ success: false, error: error.message });
 
     if (!(await storageObjectExists(`attachments/${id}`, path))) {
@@ -1205,10 +1207,10 @@ router.post('/:id/attachments', authenticateToken, isTeacher, async (req, res) =
 /**
  * DELETE /api/lessons/:id/attachments/:attachmentId
  */
-router.delete('/:id/attachments/:attachmentId', authenticateToken, isTeacher, async (req, res) => {
+router.delete('/:id/attachments/:attachmentId', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), async (req, res) => {
   try {
     const { id, attachmentId } = req.params;
-    const { error } = await loadOwnedLesson(id, req.user.userId);
+    const { error } = await loadOwnedLesson(id, req.user);
     if (error) return res.status(error.status).json({ success: false, error: error.message });
 
     const { data: attachment } = await supabase
