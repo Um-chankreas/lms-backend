@@ -446,24 +446,43 @@ router.get('/:id/path', optionalAuth, async (req, res) => {
         node: { type: 'lesson', id: lesson.id, lesson_id: lesson.id, title: lesson.title, has_quiz: !!lessonQuizId, quiz_best_score: score }
       });
     } else {
+      const isHistory = course.category?.toLowerCase() === 'history';
       units.forEach(unit => {
-        placeStep({
-          done: completedUnitSet.has(unit.id),
-          scorable: false,
-          score: null,
-          node: { type: 'unit', id: unit.id, lesson_id: id, unit_id: unit.id, order_number: unit.order_number, title: unit.title }
-        });
-
-        const quizId = canonicalQuizByUnit.get(unit.id);
-        if (quizId) {
-          const score = bestScoreByQuiz.get(quizId) ?? null;
+        if (isHistory) {
+          const quizId = canonicalQuizByUnit.get(unit.id);
+          if (quizId) {
+            const score = bestScoreByQuiz.get(quizId) ?? null;
+            placeStep({
+              done: passedQuizSet.has(quizId),
+              scorable: true,
+              score,
+              node: { type: 'unit_quiz', id: quizId, lesson_id: id, unit_id: unit.id, quiz_id: quizId, title: `${unit.title} — Practice`, quiz_best_score: score }
+            });
+          }
           placeStep({
-            done: passedQuizSet.has(quizId),
-            scorable: true,
-            score,
-            node: { type: 'unit_quiz', id: quizId, lesson_id: id, unit_id: unit.id, quiz_id: quizId, title: `${unit.title} — Practice`, quiz_best_score: score }
+            done: completedUnitSet.has(unit.id),
+            scorable: false,
+            score: null,
+            node: { type: 'unit', id: unit.id, lesson_id: id, unit_id: unit.id, order_number: unit.order_number, title: unit.title }
           });
-        }
+          } else{
+              placeStep({
+                done: completedUnitSet.has(unit.id),
+                scorable: false,
+                score: null,
+                node: { type: 'unit', id: unit.id, lesson_id: id, unit_id: unit.id, order_number: unit.order_number, title: unit.title }
+              });
+              const quizId = canonicalQuizByUnit.get(unit.id);
+              if (quizId) {
+                const score = bestScoreByQuiz.get(quizId) ?? null;
+                placeStep({
+                  done: passedQuizSet.has(quizId),
+                  scorable: true,
+                  score,
+                  node: { type: 'unit_quiz', id: quizId, lesson_id: id, unit_id: unit.id, quiz_id: quizId, title: `${unit.title} — Practice`, quiz_best_score: score }
+                });
+              }
+          }
       });
 
       // The chapter's end-of-lesson quiz: the last step before the chest.
