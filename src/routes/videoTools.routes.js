@@ -210,4 +210,112 @@ router.post('/compress', authenticateToken, requireFeature('compress_video'), up
   }
 });
 
+/**
+ * POST /api/video-tools/merge   multipart: videos (2..MAX_MERGE_FILES, in order)
+ *       -> one .mp4 with the inputs joined end to end.
+ *
+ * When every input has the same video codec, resolution and audio layout
+ * (the usual case: one recording split into parts) the parts are joined with
+ * the concat demuxer and `-c copy` — seconds, lossless. Otherwise (different
+ * cameras/phones/resolutions) they're re-encoded through the concat filter,
+ * scaled and letterboxed to the first video's size. That path uses a low CRF
+ * so the editor's optional compress step afterwards doesn't stack two lossy
+ * passes' worth of damage. Gated by trim_video — it's the same "editing"
+ * permission; there's no separate merge feature key.
+ */
+const MAX_MERGE_FILES = 10;
+
+// ffmpeg-static ships no ffprobe, so read `ffmpeg -i`'s stream summary off
+// stderr instead (it exits non-zero for "no output file", which is expected).
+function probe(file) {
+  return new Promise((resolve) => {
+    const proc = spawn(ffmpegPath, ['-hide_banner', '-i', file]);
+    let stderr = '';
+    proc.stderr.on('data', (d) => { stderr += d.toString(); });
+    proc.on('error', () => resolve(null));
+    proc.on('close', () => {
+      const video = stderr.match(/Stream #\S+.*?Video: (\w+).*?, (\d{2,5})x(\d{2,5})/);
+      const audio = stderr.match(/Stream #\S+.*?Audio: (\w+).*?, (\d+) Hz, ([\w.()]+)/);
+      const dur = stderr.match(/Duration: (\d+):(\d+):([\d.]+)/);
+      if (!video) return resolve(null);
+      resolve({
+        duration: dur ? Number(dur[1]) * 3600 + Number(dur[2]) * 60 + Number(dur[3]) : 0,
+        vcodec: video[1], width: Number(video[2]), height: Number(video[3]),
+        acodec: audio?.[1] || null, arate: audio ? Number(audio[2]) : null, alayout: audio?.[3] || null
+      });
+    });
+  });
+}
+
+router.post('/merge', authenticateToken, requireFeature('trim_video'), upload.array('videos', MAX_MERGE_FILES), async (req, res, next) => {
+  const inputPaths = (req.files || []).map((f) => f.path);
+  let outputPath;
+  let listPath;
+  try {
+    if (inputPaths.length < 2) return res.status(400).json({ success: false, error: 'Pick at least two videos to merge' });
+
+    const infos = await Promise.all(inputPaths.map(probe));
+    const bad = infos.findIndex((i) => !i);
+    if (bad !== -1) return res.status(422).json({ success: false, error: `Video ${bad + 1} (“${req.files[bad].originalname}”) couldn’t be read` });
+
+    const [first] = infos;
+    const sameShape = infos.every((i) =>
+      i.vcodec === first.vcodec && i.width === first.width && i.height === first.height
+      && i.acodec === first.acodec && i.arate === first.arate && i.alayout === first.alayout);
+    const hasAudio = infos.some((i) => i.acodec);
+
+    outputPath = path.join(os.tmpdir(), `vt-out-${uuidv4()}.mp4`);
+    let args;
+    if (sameShape && ['h264', 'hevc'].includes(first.vcodec)) {
+      listPath = path.join(os.tmpdir(), `vt-list-${uuidv4()}.txt`);
+      fs.writeFileSync(listPath, inputPaths.map((p) => `file '${p.replace(/'/g, `'\\''`)}'`).join('\n'));
+      args = ['-y', '-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', '-movflags', '+faststart', outputPath];
+    } else {
+      // Even dimensions for libx264.
+      const W = first.width - (first.width % 2);
+      const H = first.height - (first.height % 2);
+      args = ['-y'];
+      inputPaths.forEach((p) => args.push('-i', p));
+      // A silent track stands in for any input that has no audio, so the
+      // concat filter always gets one audio pad per segment.
+      if (hasAudio) args.push('-f', 'lavfi', '-t', '1', '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000');
+      const silentIdx = inputPaths.length;
+      const parts = [];
+      const pads = [];
+      infos.forEach((info, i) => {
+        parts.push(`[${i}:v:0]scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[v${i}]`);
+        if (hasAudio) {
+          if (info.acodec) parts.push(`[${i}:a:0]aformat=sample_rates=48000:channel_layouts=stereo[a${i}]`);
+          // No audio track: loop the 1s silence out to this segment's length.
+          else parts.push(`[${silentIdx}:a]aloop=loop=-1:size=48000,atrim=duration=${info.duration.toFixed(3)}[a${i}]`);
+          pads.push(`[v${i}][a${i}]`);
+        } else {
+          pads.push(`[v${i}]`);
+        }
+      });
+      parts.push(`${pads.join('')}concat=n=${inputPaths.length}:v=1:a=${hasAudio ? 1 : 0}[v]${hasAudio ? '[a]' : ''}`);
+      args.push('-filter_complex', parts.join(';'), '-map', '[v]');
+      if (hasAudio) args.push('-map', '[a]', '-c:a', 'aac', '-b:a', '160k');
+      args.push('-c:v', 'libx264', '-crf', '18', '-preset', 'veryfast', '-movflags', '+faststart', outputPath);
+    }
+
+    await runFfmpeg(args);
+
+    res.setHeader('Content-Disposition', 'attachment; filename="merged.mp4"');
+    res.setHeader('Content-Type', 'video/mp4');
+    await new Promise((resolve, reject) => {
+      const stream = fs.createReadStream(outputPath);
+      stream.on('error', reject);
+      res.on('finish', resolve);
+      res.on('error', reject);
+      stream.pipe(res);
+    });
+  } catch (err) {
+    if (res.headersSent) res.destroy(err);
+    else next(err);
+  } finally {
+    cleanup([...inputPaths, outputPath, listPath]);
+  }
+});
+
 module.exports = router;
