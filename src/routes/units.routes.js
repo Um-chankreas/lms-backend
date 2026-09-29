@@ -18,7 +18,7 @@ const { recordActivity } = require('../utils/streak');
  *
  *   GET    /api/units?lesson_id=       list a chapter's units (titles + preview)
  *   GET    /api/units/search?q=        browse/search units the student can see
- *   GET    /api/units/:id              one unit, full Markdown content
+ *   GET    /api/units/:id              one unit, full Markdown content (+ `sections` for history courses)
  *   POST   /api/units                  add a unit                         (teacher)
  *   POST   /api/units/bulk             paste a chapter's Markdown, split on `##` (teacher)
  *   POST   /api/units/reorder          { lesson_id, order: [id, ...] }    (teacher)
@@ -148,6 +148,62 @@ const parseUnitsFromMarkdown = (markdown) => {
       .trim(),
     order_number: i + 1
   }));
+};
+
+// History units are long walls of prose, so the app shows them as a stack of
+// tap-to-expand sections instead of one scroll. A heading paragraph (a lone
+// `**bold line**` or `### heading`) opens a section that collects everything
+// up to the next heading; a paragraph with no heading above it becomes its own
+// section, titled with a teaser of its opening words.
+const SECTION_TITLE_LEN = 70;
+
+const isHistoryCourse = (course) => course?.category?.toLowerCase() === 'history';
+
+// Khmer vowel signs / diacritics (and the coeng subscript marker) must stay
+// attached to the consonant before them — never cut a title between the two.
+const KHMER_COMBINING = /[឴-៓៝]/;
+
+const toSectionTitle = (paragraph) => {
+  const text = String(paragraph)
+    .replace(/\*\*|__|`/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const sentence = text.match(/^.*?[។?!]|^.*?\.(?=\s)/);
+  const first = sentence ? sentence[0] : text;
+  if (first.length <= SECTION_TITLE_LEN) return first;
+
+  let cut = text.lastIndexOf(' ', SECTION_TITLE_LEN);
+  if (cut < SECTION_TITLE_LEN / 2) {
+    cut = SECTION_TITLE_LEN;
+    while (cut > 0 && (KHMER_COMBINING.test(text[cut]) || text[cut - 1] === '្')) cut--;
+  }
+  return text.slice(0, cut).trimEnd() + '…';
+};
+
+const splitIntoSections = (content) => {
+  const paragraphs = String(content || '')
+    .replace(/\r\n/g, '\n')
+    .split(/\n{2,}/)
+    .map(p => p.trim())
+    .filter(p => p && !/^(?:---+|\*\*\*+)$/.test(p));
+
+  const sections = [];
+  let open = null; // the section a heading started, still collecting paragraphs
+  for (const para of paragraphs) {
+    const [firstLine, ...rest] = para.split('\n');
+    const heading = firstLine.match(/^#{1,4}\s+(.*\S)\s*$/) || firstLine.match(/^\*\*([^*]+)\*\*\s*$/);
+    if (heading) {
+      open = { title: heading[1].trim(), content: rest.join('\n').trim() };
+      sections.push(open);
+    } else if (open) {
+      open.content = open.content ? `${open.content}\n\n${para}` : para;
+    } else {
+      sections.push({ title: toSectionTitle(para), content: para });
+    }
+  }
+
+  // One section is no better than the plain reading.
+  return sections.length >= 2 ? sections : null;
 };
 
 // Load a chapter with its parent course. Returns null if not found.
@@ -663,6 +719,7 @@ router.get('/', optionalAuth, async (req, res) => {
             locked: !unlocked,
             preview: toPreview(u.content),
             content: unlocked ? (u.content || '') : null,
+            sections: unlocked && isHistoryCourse(chapter.courses) ? splitIntoSections(u.content) : null,
             video_url: unlocked && u.video_url ? publicUrl(u.video_url) : null,
             duration_seconds: unlocked ? u.duration_seconds : null,
             updated_at: u.updated_at
@@ -716,6 +773,7 @@ router.get('/:id', optionalAuth, async (req, res) => {
           id: unit.id,
           title: unit.title,
           content: unit.content || '',
+          sections: isHistoryCourse(course) ? splitIntoSections(unit.content) : null,
           order_number: unit.order_number,
           is_free: unit.is_free,
           video_url: unit.video_url ? publicUrl(unit.video_url) : null,
