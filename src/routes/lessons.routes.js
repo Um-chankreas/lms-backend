@@ -385,6 +385,7 @@ router.get('/:id/path', optionalAuth, async (req, res) => {
     const allQuizIds = [...canonicalQuizByUnit.values(), ...(lessonQuizId ? [lessonQuizId] : [])];
     const bestScoreByQuiz = new Map();
     const passedQuizSet = new Set();
+    const attemptedQuizSet = new Set();
     if (allQuizIds.length > 0 && studentId) {
       const { data: submissions } = await supabase
         .from('quiz_submissions').select('quiz_id, score, passed')
@@ -393,6 +394,7 @@ router.get('/:id/path', optionalAuth, async (req, res) => {
         const prev = bestScoreByQuiz.get(s.quiz_id);
         if (prev == null || s.score > prev) bestScoreByQuiz.set(s.quiz_id, s.score);
         if (s.passed) passedQuizSet.add(s.quiz_id);
+        attemptedQuizSet.add(s.quiz_id);
       });
     }
 
@@ -448,41 +450,55 @@ router.get('/:id/path', optionalAuth, async (req, res) => {
     } else {
       const isHistory = course.category?.toLowerCase() === 'history';
       units.forEach(unit => {
-        if (isHistory) {
-          const quizId = canonicalQuizByUnit.get(unit.id);
-          if (quizId) {
-            const score = bestScoreByQuiz.get(quizId) ?? null;
-            placeStep({
-              done: passedQuizSet.has(quizId),
-              scorable: true,
-              score,
-              node: { type: 'unit_quiz', id: quizId, lesson_id: id, unit_id: unit.id, quiz_id: quizId, title: `${unit.title} — Practice`, quiz_best_score: score }
-            });
-          }
+        const quizId = canonicalQuizByUnit.get(unit.id);
+        const unitNode = { type: 'unit', id: unit.id, lesson_id: id, unit_id: unit.id, order_number: unit.order_number, title: unit.title };
+        const quizNode = (extra) => {
+          const score = bestScoreByQuiz.get(quizId) ?? null;
+          return { type: 'unit_quiz', id: quizId, lesson_id: id, unit_id: unit.id, quiz_id: quizId, title: `${unit.title} — Practice`, quiz_best_score: score, ...extra };
+        };
+
+        if (isHistory && quizId) {
+          // History is test-out, one quiz -> lesson pair per unit, so the path
+          // reads quiz, lesson, quiz, lesson… The quiz comes FIRST and must be
+          // passed to move on. Pass it straight away and the student already
+          // knows this unit — its lesson is skipped. Fail it and the lesson
+          // opens for reading while the quiz stays the current step, so
+          // finishing the reading leads back to the quiz. Mirrored in
+          // utils/progress.js so a quiz pass alone completes the unit.
+          const passed = passedQuizSet.has(quizId);
+          const read = completedUnitSet.has(unit.id);
+          const score = bestScoreByQuiz.get(quizId) ?? null;
+
+          placeStep({ done: passed, scorable: true, score, node: quizNode({ test_out: true }) });
+          const quizOpen = nodes[nodes.length - 1].status !== 'locked';
           placeStep({
-            done: completedUnitSet.has(unit.id),
+            done: passed,
             scorable: false,
             score: null,
-            node: { type: 'unit', id: unit.id, lesson_id: id, unit_id: unit.id, order_number: unit.order_number, title: unit.title }
+            node: { ...unitNode, skipped: passed && !read }
           });
-          } else{
-              placeStep({
-                done: completedUnitSet.has(unit.id),
-                scorable: false,
-                score: null,
-                node: { type: 'unit', id: unit.id, lesson_id: id, unit_id: unit.id, order_number: unit.order_number, title: unit.title }
-              });
-              const quizId = canonicalQuizByUnit.get(unit.id);
-              if (quizId) {
-                const score = bestScoreByQuiz.get(quizId) ?? null;
-                placeStep({
-                  done: passedQuizSet.has(quizId),
-                  scorable: true,
-                  score,
-                  node: { type: 'unit_quiz', id: quizId, lesson_id: id, unit_id: unit.id, quiz_id: quizId, title: `${unit.title} — Practice`, quiz_best_score: score }
-                });
-              }
-          }
+          // Failed at least once: open the lesson for reading (not "current" —
+          // the quiz still is).
+          const lessonNode = nodes[nodes.length - 1];
+          if (!passed && quizOpen && attemptedQuizSet.has(quizId)) lessonNode.status = 'available';
+          return;
+        }
+
+        placeStep({
+          done: completedUnitSet.has(unit.id),
+          scorable: false,
+          score: null,
+          node: unitNode
+        });
+        if (quizId) {
+          const score = bestScoreByQuiz.get(quizId) ?? null;
+          placeStep({
+            done: passedQuizSet.has(quizId),
+            scorable: true,
+            score,
+            node: quizNode()
+          });
+        }
       });
 
       // The chapter's end-of-lesson quiz: the last step before the chest.

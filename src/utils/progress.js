@@ -12,6 +12,9 @@ const { awardXp, XP_VALUES } = require('./xp');
  * a chapter with no units yet (those still use the manual POST
  * /api/lessons/:id/mark-complete).
  *
+ * History courses are test-out (see GET /api/lessons/:id/path): a unit whose
+ * quiz is passed counts as done even if its reading was skipped.
+ *
  * Returns true if this call is what completed the chapter.
  */
 async function checkChapterAutoComplete({ lessonId, studentId }) {
@@ -36,18 +39,14 @@ async function checkChapterAutoComplete({ lessonId, studentId }) {
     supabase.from('quizzes').select('id, unit_id, created_at').in('unit_id', unitIds).eq('status', 'published').order('created_at', { ascending: true })
   ]);
 
-  const completedUnitIds = new Set((completions || []).map(c => c.unit_id));
-  if (unitIds.some(id => !completedUnitIds.has(id))) return false; // not every unit read yet
-
   // One canonical quiz per unit — the earliest published one.
-  const canonicalQuizIds = [];
-  const seenUnit = new Set();
+  const canonicalQuizByUnit = new Map();
   (quizzes || []).forEach(q => {
-    if (seenUnit.has(q.unit_id)) return;
-    seenUnit.add(q.unit_id);
-    canonicalQuizIds.push(q.id);
+    if (!canonicalQuizByUnit.has(q.unit_id)) canonicalQuizByUnit.set(q.unit_id, q.id);
   });
+  const canonicalQuizIds = [...canonicalQuizByUnit.values()];
 
+  let passedQuizIds = new Set();
   if (canonicalQuizIds.length > 0) {
     const { data: submissions } = await supabase
       .from('quiz_submissions')
@@ -55,9 +54,18 @@ async function checkChapterAutoComplete({ lessonId, studentId }) {
       .eq('student_id', studentId)
       .eq('passed', true)
       .in('quiz_id', canonicalQuizIds);
-    const passedQuizIds = new Set((submissions || []).map(s => s.quiz_id));
+    passedQuizIds = new Set((submissions || []).map(s => s.quiz_id));
     if (canonicalQuizIds.some(id => !passedQuizIds.has(id))) return false; // a unit quiz still unpassed
   }
+
+  const { data: lessonRow } = await supabase
+    .from('lessons').select('course_id, courses(category)').eq('id', lessonId).maybeSingle();
+  const testOut = lessonRow?.courses?.category?.toLowerCase() === 'history';
+
+  const completedUnitIds = new Set((completions || []).map(c => c.unit_id));
+  const unitDone = (unitId) => completedUnitIds.has(unitId)
+    || (testOut && passedQuizIds.has(canonicalQuizByUnit.get(unitId)));
+  if (unitIds.some(id => !unitDone(id))) return false; // not every unit read (or tested out of) yet
 
   // The chapter's own end-of-lesson quiz (lesson_id set, no unit_id) — the
   // final path step before the chest — must also be passed. It's optional
@@ -89,8 +97,6 @@ async function checkChapterAutoComplete({ lessonId, studentId }) {
     .insert({ id: uuidv4(), lesson_id: lessonId, student_id: studentId, completed_at: new Date() });
   if (error) return false; // lost a race with a duplicate call — harmless
 
-  const { data: lessonRow } = await supabase
-    .from('lessons').select('course_id').eq('id', lessonId).maybeSingle();
   await awardXp(studentId, XP_VALUES.LESSON_COMPLETE, 'lesson_complete', lessonRow?.course_id || null);
   await require('./streak').recordActivity(studentId).catch(() => {});
   return true;
