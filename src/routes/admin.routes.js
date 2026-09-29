@@ -3,7 +3,7 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const supabase = require('../config/supabase');
-const { authenticateToken, isAdmin, isSuperAdmin } = require('../middleware/auth');
+const { authenticateToken, isAdmin, isSuperAdmin, hasRole } = require('../middleware/auth');
 const { FEATURES, effectivePermissions, getRoleDefaultsMatrix } = require('../utils/permissions');
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -95,7 +95,12 @@ const publicTeacher = (u, courseCount) => ({
   created_at: u.created_at
 });
 
-// Every route here is admin-only.
+// The dashboard analytics are the one exception to the admin-only gate below:
+// teachers get them too, scoped to their own classes (see analyticsHandler).
+// Registered before the gate so it's matched first.
+router.get('/analytics', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), analyticsHandler);
+
+// Every other route here is admin-only.
 router.use(authenticateToken, isAdmin);
 
 /**
@@ -850,13 +855,35 @@ router.get('/live-classes', async (req, res) => {
 });
 
 /**
- * GET /api/admin/analytics
- * School-wide teacher dashboard: headline KPIs, weekly signups, and the
- * "most improved" / "at-risk" student lists. All aggregation is in JS over a
- * handful of bulk reads — fine at a single school's scale.
+ * GET /api/admin/analytics   (routed near the top, ahead of the admin gate)
+ * Dashboard: headline KPIs, weekly signups, and the "most improved" /
+ * "at-risk" student lists. Admins/super admins see the whole school; a
+ * teacher sees only students enrolled in courses they teach, and "paid" only
+ * counts subscriptions to those courses — same rule as /insights/overview.
+ * All aggregation is in JS over a handful of bulk reads — fine at a single
+ * school's scale.
  */
-router.get('/analytics', async (req, res) => {
+async function analyticsHandler(req, res) {
   try {
+    // null = whole school; otherwise the teacher's student/course ids.
+    let scopeStudentIds = null;
+    let scopeCourseIds = null;
+    if (req.user.role === 'teacher') {
+      const own = await fetchAllRows(() => supabase.from('courses').select('id').eq('teacher_id', req.user.userId));
+      scopeCourseIds = own.map(c => c.id);
+      const enr = scopeCourseIds.length
+        ? await fetchAllRows(() => supabase.from('course_enrollments').select('student_id').in('course_id', scopeCourseIds))
+        : [];
+      scopeStudentIds = [...new Set(enr.map(e => e.student_id))];
+    }
+    // `.in()` with an empty list isn't valid PostgREST, so a teacher with no
+    // students filters on an id that can't exist and gets all-zero stats.
+    const NONE = ['00000000-0000-0000-0000-000000000000'];
+    const byStudent = (q, col = 'student_id') =>
+      scopeStudentIds ? q.in(col, scopeStudentIds.length ? scopeStudentIds : NONE) : q;
+    const byCourse = (q) =>
+      scopeCourseIds ? q.in('course_id', scopeCourseIds.length ? scopeCourseIds : NONE) : q;
+
     const now = new Date();
     const ms = 86400000;
     const daysAgo = (n) => new Date(now.getTime() - n * ms);
@@ -879,12 +906,12 @@ router.get('/analytics', async (req, res) => {
       { data: enrolls },
       activeSubRows,
     ] = await Promise.all([
-      supabase.from('users').select('id, name, avatar_url, created_at, is_active').eq('role', 'student'),
-      supabase.from('quiz_submissions').select('student_id, score, submitted_at').gte('submitted_at', iso(d60)),
-      supabase.from('xp_events').select('student_id, created_at').gte('created_at', iso(d45)),
-      supabase.from('lesson_completions').select('student_id, completed_at').gte('completed_at', iso(d30)),
-      supabase.from('course_enrollments').select('student_id'),
-      fetchAllRows(() => supabase.from('student_course_subscriptions').select('student_id').gte('expiry_date', todayYmd())),
+      byStudent(supabase.from('users').select('id, name, avatar_url, created_at, is_active').eq('role', 'student'), 'id'),
+      byStudent(supabase.from('quiz_submissions').select('student_id, score, submitted_at').gte('submitted_at', iso(d60))),
+      byStudent(supabase.from('xp_events').select('student_id, created_at').gte('created_at', iso(d45))),
+      byStudent(supabase.from('lesson_completions').select('student_id, completed_at').gte('completed_at', iso(d30))),
+      byCourse(supabase.from('course_enrollments').select('student_id')),
+      fetchAllRows(() => byCourse(supabase.from('student_course_subscriptions').select('student_id').gte('expiry_date', todayYmd()))),
     ]);
 
     const S = students || [];
@@ -1012,7 +1039,7 @@ router.get('/analytics', async (req, res) => {
     console.error('Admin analytics error:', error);
     res.status(500).json({ success: false, error: 'Failed to load analytics: ' + error.message });
   }
-});
+}
 
 /**
  * GET /api/admin/role-permissions

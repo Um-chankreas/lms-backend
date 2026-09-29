@@ -1,109 +1,10 @@
 const supabase = require('../config/supabase');
-const { createNotifications, coursePeers } = require('./notifications');
-const { friendNotification } = require('./notificationTemplates');
+const { createNotifications } = require('./notifications');
 const { XP_VALUES } = require('./xp');
 const { todayYmd } = require('./access');
 
 // Best-effort wrappers — a notification failure must never break the action
 // that triggered it. Every export is safe to `await` (or fire-and-forget).
-
-async function actorName(studentId) {
-  const { data } = await supabase.from('users').select('name').eq('id', studentId).maybeSingle();
-  return data?.name || 'A classmate';
-}
-
-// recipient id -> notification_style (defaults to 'balanced')
-async function stylesFor(userIds) {
-  const map = new Map();
-  if (!userIds || userIds.length === 0) return map;
-  const { data } = await supabase
-    .from('users')
-    .select('id, notification_style')
-    .in('id', [...userIds]);
-  (data || []).forEach(u => map.set(u.id, u.notification_style || 'balanced'));
-  return map;
-}
-
-/**
- * A student submitted a quiz. Classmates only — the student themself is
- * deliberately not notified (they already see their result on the quiz-complete
- * screen).
- *  - friends: "<Name> took a quiz"  (their first attempt only)
- *  - beaten:  "<Name> beat your score"  (once per quiz per friend)
- */
-async function notifyQuizComplete(studentId, quizId, score, { firstAttempt = false } = {}) {
-  try {
-    const { data: quiz } = await supabase
-      .from('quizzes').select('id, title').eq('id', quizId).maybeSingle();
-    if (!quiz) return;
-    const name = await actorName(studentId);
-
-    const peers = new Set(await coursePeers(studentId));
-    if (peers.size === 0) return;
-    const styles = await stylesFor(peers);
-    const styleOf = (uid) => styles.get(uid) || 'balanced';
-
-    if (firstAttempt) {
-      await createNotifications([...peers].map(uid => {
-        const style = styleOf(uid);
-        const { title, body, cta } = friendNotification('friend_quiz', style, { name, quizTitle: quiz.title });
-        return {
-          user_id: uid,
-          type: 'friend_quiz',
-          title,
-          body,
-          data: { quiz_id: quiz.id, quiz_title: quiz.title, actor_id: studentId, actor_name: name, style, cta },
-        };
-      }));
-    }
-
-    // "Beat your score": peers on this quiz whose best is now below this
-    // student's best. Sent at most once per (friend, quiz, actor).
-    const { data: subs } = await supabase
-      .from('quiz_submissions').select('student_id, score').eq('quiz_id', quiz.id);
-    const bestByStudent = new Map();
-    (subs || []).forEach(s => {
-      const prev = bestByStudent.get(s.student_id);
-      if (prev == null || s.score > prev) bestByStudent.set(s.student_id, s.score);
-    });
-    const myBest = bestByStudent.get(studentId) ?? score;
-
-    const beatable = [...bestByStudent].filter(([uid, b]) => peers.has(uid) && b < myBest).map(([uid]) => uid);
-    if (beatable.length === 0) return;
-
-    const { data: already } = await supabase
-      .from('notifications')
-      .select('user_id')
-      .eq('type', 'friend_beat_score')
-      .eq('data->>quiz_id', quiz.id)
-      .eq('data->>actor_id', studentId)
-      .in('user_id', beatable);
-    const alreadySet = new Set((already || []).map(r => r.user_id));
-
-    await createNotifications(beatable.filter(uid => !alreadySet.has(uid)).map(uid => {
-      const style = styleOf(uid);
-      const { title, body, cta } = friendNotification('friend_beat_score', style, { name, score: myBest });
-      return {
-        user_id: uid,
-        type: 'friend_beat_score',
-        title,
-        body,
-        data: {
-          quiz_id: quiz.id,
-          quiz_title: quiz.title,
-          actor_id: studentId,
-          actor_name: name,
-          their_score: myBest,
-          your_score: bestByStudent.get(uid),
-          style,
-          cta,
-        },
-      };
-    }));
-  } catch (e) {
-    console.warn('notifyQuizComplete failed:', e.message);
-  }
-}
 
 /**
  * A teacher published an assignment (file or quiz-type) — draft saves never
@@ -247,7 +148,6 @@ async function notifyClassScheduleReminder(schedule) {
 }
 
 module.exports = {
-  notifyQuizComplete,
   notifyAssignmentPublished,
   notifyLiveClassStarted,
   notifyClassScheduleReminder

@@ -110,6 +110,26 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
       });
     }
 
+    // One running session per course: if this course is already live (started
+    // from another tab/device, or a double click), hand that session back
+    // instead of opening a second room students would be split across.
+    const { data: running } = await supabase
+      .from('live_classes')
+      .select('*')
+      .eq('course_id', course_id)
+      .eq('status', 'active')
+      .order('started_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (running) {
+      return res.json({
+        success: true,
+        reused: true,
+        message: 'This class is already live — rejoining the running session',
+        data: { appId, liveClass: { ...running, join_url: joinUrlFor(running.id) } }
+      });
+    }
+
     // Generate a unique Agora channel name up front — a live class always has
     // a channel to join by the time anyone requests a token, whether or not
     // it's started yet.

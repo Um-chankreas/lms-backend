@@ -8,6 +8,7 @@ const cors = require('cors');
 const app = express();
 const { initLiveClassRealtime } = require('./realtime/liveClassSocket');
 const { startClassScheduler } = require('./utils/classScheduler');
+const { startDailyDigestScheduler } = require('./utils/dailyDigestScheduler');
 
 // ============ Middleware ============
 // Dynamically allow requests from localhost, local IP addresses, or any origin in development
@@ -105,6 +106,10 @@ initLiveClassRealtime(httpServer);
 // src/utils/classScheduler.js for why this is an in-process interval
 // rather than pg_cron/Edge Functions.
 startClassScheduler();
+
+// Fires the once-a-day "today's most active" shout-out + "come learn"
+// reminders — see src/utils/dailyDigestScheduler.js.
+startDailyDigestScheduler();
 
 const server = httpServer.listen(PORT, HOST, () => {
   console.log(`
