@@ -123,6 +123,11 @@ const server = httpServer.listen(PORT, HOST, () => {
   `);
 });
 
+// Node's default requestTimeout (5 min) is the time allowed to receive a whole
+// request body — too short for multi-GB uploads to /api/video-tools on a slow
+// connection. headersTimeout still guards against clients that stall early.
+server.requestTimeout = 60 * 60 * 1000;
+
 // ============ Graceful Shutdown ============
 process.on('SIGTERM', () => {
   console.log('SIGTERM received, shutting down gracefully');
