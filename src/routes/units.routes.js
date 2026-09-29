@@ -205,7 +205,29 @@ const splitIntoSections = (content) => {
   }
 
   // One section is no better than the plain reading.
-  return sections.length >= 2 ? sections : null;
+  if (sections.length < 2) return null;
+  return sections.map(s => ({
+    ...s,
+    highlights: sectionHighlights(s),
+    read_minutes: Math.max(1, Math.round(s.content.length / READ_CHARS_PER_MIN))
+  }));
+};
+
+// A closed section card shows a few "key facts" chips as a hook to open it:
+// the names/terms the author bolded, then any years (Khmer or Arabic digits).
+const SECTION_HIGHLIGHTS = 3;
+const READ_CHARS_PER_MIN = 500;
+
+const sectionHighlights = ({ title, content }) => {
+  const bolded = [...content.matchAll(/\*\*([^*\n]+)\*\*/g)]
+    .map(m => m[1].replace(/[៖:]\s*$/, '').trim())
+    // not outline labels ("ក. មូលហេតុ") or bare counts ("៥៨")
+    .filter(h => !/^\S{1,2}[.)]\s/.test(h) && !/^[០-៩\d]{1,3}$/.test(h));
+  const years = content.match(/(?<![០-៩\d])(?:[០-៩]{4}|1[5-9]\d\d|20\d\d)(?![០-៩\d])/g) || [];
+  const seen = new Set();
+  return [...bolded, ...years]
+    .filter(h => h && h.length <= 30 && !title.includes(h) && !seen.has(h) && seen.add(h))
+    .slice(0, SECTION_HIGHLIGHTS);
 };
 
 // Load a chapter with its parent course. Returns null if not found.
