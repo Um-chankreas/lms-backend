@@ -73,6 +73,16 @@ function toSearchPattern(term) {
 // this many per attempt. Teachers still see the full bank when building it.
 const QUIZ_TAKE_SIZE = 5;
 
+// An explanation that names option letters ("B, A, C each alter the split
+// ratio") only reads correctly against the order it was written for, so those
+// questions keep their authored option order. Everything else gets shuffled.
+const NAMES_OPTION_LETTERS = /(^|[^A-Za-z])[A-D]([^A-Za-z]|$)/;
+const optionsFor = (question, options) =>
+  Array.isArray(options) && options.length > 1
+    && !(question.explanation && NAMES_OPTION_LETTERS.test(question.explanation))
+    ? pickRandom(options, options.length)
+    : options;
+
 // Shared gate for the two student-facing "play" endpoints (per-question
 // /check and final /submit): the quiz must be published and the caller must
 // have course access (or the parent lesson is a free preview). Returns
@@ -1230,13 +1240,42 @@ router.get('/:id', optionalAuth, async (req, res) => {
       .eq('quiz_id', id)
       .order('order_number', { ascending: true });
 
-    // A student takes a random draw of QUIZ_TAKE_SIZE from the bank (varies
-    // every attempt), never the correct_answer/explanation up front — those
-    // are only revealed in the submit response / results review. A teacher
-    // previewing or editing the quiz still sees the full bank with answers.
-    const forStudent = (allQuestions || []).length > QUIZ_TAKE_SIZE
-      ? pickRandom(allQuestions, QUIZ_TAKE_SIZE).sort((a, b) => (a.order_number || 0) - (b.order_number || 0))
-      : (allQuestions || []);
+    // A student takes a random draw of QUIZ_TAKE_SIZE from the bank, never the
+    // correct_answer/explanation up front — those are only revealed in the
+    // submit response / results review. A teacher previewing or editing the
+    // quiz still sees the full bank, in authored order, with answers.
+    //
+    // No two attempts should look alike, because the cheapest way past a
+    // retake is remembering shapes rather than history: "it was the second
+    // option", "question three was the long one". So the draw prefers
+    // questions this student hasn't been served yet, and what's left is
+    // shuffled rather than replayed in the authored order.
+    let forStudent = allQuestions || [];
+    if (!isTeacher) {
+      if (forStudent.length > QUIZ_TAKE_SIZE) {
+        const served = new Set();
+        if (req.user?.userId) {
+          const { data: prior } = await supabase
+            .from('quiz_submissions')
+            .select('answers')
+            .eq('quiz_id', id)
+            .eq('student_id', req.user.userId);
+          // `answers` comes back from PostgREST as a JSON *string*, same as
+          // quiz_questions.options — parse before reading its keys, or every
+          // character index lands in the set instead of the question ids.
+          (prior || []).forEach(sub => {
+            const parsed = typeof sub.answers === 'string' ? JSON.parse(sub.answers) : sub.answers;
+            Object.keys(parsed || {}).forEach(qid => served.add(qid));
+          });
+        }
+        const draw = pickRandom(forStudent.filter(q => !served.has(q.id)), QUIZ_TAKE_SIZE);
+        if (draw.length < QUIZ_TAKE_SIZE) {
+          draw.push(...pickRandom(forStudent.filter(q => served.has(q.id)), QUIZ_TAKE_SIZE - draw.length));
+        }
+        forStudent = draw;
+      }
+      forStudent = pickRandom(forStudent, forStudent.length);
+    }
 
     const questionsToSend = isTeacher ? (allQuestions || []) : forStudent;
 
@@ -1244,7 +1283,7 @@ router.get('/:id', optionalAuth, async (req, res) => {
       const options = typeof q.options === 'string' ? JSON.parse(q.options) : q.options;
       if (isTeacher) return { ...q, options };
       const { correct_answer, explanation, ...safe } = q;
-      return { ...safe, options };
+      return { ...safe, options: optionsFor(q, options) };
     });
 
     res.json({
