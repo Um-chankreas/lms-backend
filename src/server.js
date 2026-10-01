@@ -41,6 +41,8 @@ app.use('/api/auth', require('./routes/auth.routes'));
 app.use('/api/courses', require('./routes/courses.routes'));
 app.use('/api/lessons', require('./routes/lessons.routes'));
 app.use('/api/units', require('./routes/units.routes'));
+app.use('/api/books', require('./routes/books.routes'));
+app.use('/api/textbooks', require('./routes/textbooks.routes'));
 app.use('/api/video-tools', require('./routes/videoTools.routes'));
 app.use('/api/quizzes', require('./routes/quizzes.routes'));
 app.use('/api/assignments', require('./routes/assignments.routes'));
