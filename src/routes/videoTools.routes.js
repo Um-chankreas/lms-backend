@@ -235,7 +235,7 @@ const dropJob = (id) => {
   if (!job) return;
   jobs.delete(id);
   if (job.proc && job.status === 'running') job.proc.kill('SIGKILL');
-  cleanup([job.inputPath, job.outputPath, ...(job.outputPaths || [])]);
+  cleanup([job.inputPath, job.outputPath, job.zipPath, ...(job.outputPaths || [])]);
 };
 setInterval(() => {
   const now = Date.now();
@@ -438,6 +438,22 @@ router.post('/trim-jobs', authenticateToken, requireFeature('trim_video'), uploa
         );
         doneSec += len;
       }
+      // Zip up front (stored, not deflated — video is already compressed) so
+      // the download has a known size and the client can show real progress.
+      if (clips.length > 1) {
+        job.zipPath = path.join(os.tmpdir(), `vt-out-${uuidv4()}.zip`);
+        await new Promise((resolve, reject) => {
+          const out = fs.createWriteStream(job.zipPath);
+          const archive = new ZipArchive({ store: true });
+          out.on('close', resolve);
+          out.on('error', reject);
+          archive.on('error', reject);
+          archive.pipe(out);
+          clips.forEach((c) => archive.file(c.outPath, { name: c.name }));
+          archive.finalize();
+        });
+      }
+      job.resultSize = fs.statSync(job.zipPath || clips[0].outPath).size;
     })()
       .then(() => {
         job.status = 'done';
@@ -446,7 +462,7 @@ router.post('/trim-jobs', authenticateToken, requireFeature('trim_video'), uploa
       .catch((err) => {
         job.status = 'error';
         job.error = err.message;
-        cleanup(outputPaths);
+        cleanup([...outputPaths, job.zipPath]);
       })
       .finally(() => {
         job.finishedAt = Date.now();
@@ -462,7 +478,7 @@ router.post('/trim-jobs', authenticateToken, requireFeature('trim_video'), uploa
 router.get('/trim-jobs/:id', authenticateToken, (req, res) => {
   const job = ownJob(req, res);
   if (!job) return;
-  res.json({ success: true, status: job.status, percent: job.percent, error: job.error });
+  res.json({ success: true, status: job.status, percent: job.percent, error: job.error, resultSize: job.resultSize || null });
 });
 
 router.get('/trim-jobs/:id/file', authenticateToken, (req, res, next) => {
@@ -470,23 +486,18 @@ router.get('/trim-jobs/:id/file', authenticateToken, (req, res, next) => {
   if (!job) return;
   if (job.status !== 'done') return res.status(409).json({ success: false, error: 'The clips aren’t ready yet' });
   res.on('finish', () => dropJob(job.id));
+  res.setHeader('Content-Length', String(job.resultSize));
   if (job.clips.length === 1) {
     const [c] = job.clips;
     res.setHeader('Content-Disposition', `attachment; filename="${c.name}"`);
     res.setHeader('Content-Type', `video/${job.ext.slice(1)}`);
-    res.setHeader('Content-Length', String(fs.statSync(c.outPath).size));
-    const stream = fs.createReadStream(c.outPath);
-    stream.on('error', next);
-    stream.pipe(res);
   } else {
     res.setHeader('Content-Disposition', 'attachment; filename="clips.zip"');
     res.setHeader('Content-Type', 'application/zip');
-    const archive = new ZipArchive({ zlib: { level: 6 } });
-    archive.on('error', next);
-    archive.pipe(res);
-    job.clips.forEach((c) => archive.file(c.outPath, { name: c.name }));
-    archive.finalize();
   }
+  const stream = fs.createReadStream(job.zipPath || job.clips[0].outPath);
+  stream.on('error', next);
+  stream.pipe(res);
 });
 
 router.delete('/trim-jobs/:id', authenticateToken, (req, res) => {
