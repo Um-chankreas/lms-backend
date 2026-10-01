@@ -8,7 +8,6 @@ const { v4: uuidv4 } = require('uuid');
 const { awardXp, XP_VALUES, xpForQuizScore, levelInfo } = require('../utils/xp');
 const { recordActivity } = require('../utils/streak');
 const { guestCanAccessStep, sendGuestWall } = require('../utils/guest');
-const { notifyQuizComplete } = require('../utils/notifyEvents');
 const { evaluateAchievements } = require('../utils/achievements');
 const { hasCourseAccess, ensureEnrolled } = require('../utils/access');
 const { checkChapterAutoComplete } = require('../utils/progress');
@@ -1483,14 +1482,13 @@ router.post('/:id/submit', optionalAuth, async (req, res) => {
       });
     }
 
-    // Has this student ever submitted this quiz before? (drives "first
-    // attempt" notifications + the passed-before XP guard)
+    // Has this student ever passed this quiz before? Drives the XP guard
+    // below (retaking an already-passed quiz shouldn't farm infinite XP).
     const { data: priorSubs } = await supabase
       .from('quiz_submissions')
       .select('passed')
       .eq('quiz_id', id)
       .eq('student_id', req.user.userId);
-    const firstAttempt = (priorSubs || []).length === 0;
     const passedBefore = (priorSubs || []).some(s => s.passed);
 
     // Only award XP the first time this student passes this quiz, so
@@ -1523,7 +1521,6 @@ router.post('/:id/submit', optionalAuth, async (req, res) => {
       await awardXp(req.user.userId, xpAwarded, 'quiz_pass', quiz.course_id || null);
     }
     await evaluateAchievements(req.user.userId);
-    notifyQuizComplete(req.user.userId, id, score, { firstAttempt });
 
     // A passed quiz that belongs to a chapter — whether it's a unit's
     // practice quiz or the chapter's own end-of-lesson quiz — is a path step.
