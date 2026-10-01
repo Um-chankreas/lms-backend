@@ -71,7 +71,10 @@ const authenticateToken = async (req, res, next) => {
     // window): the session keeps working so the app can show a banner and let
     // the user undo it. req.account carries the state for anything that wants
     // to surface it.
-    req.user = decoded;
+    // Role comes from the database, not the token: a token keeps whatever
+    // role it was issued with for days, so a demoted user would otherwise
+    // keep their old privileges until it expired.
+    req.user = { ...decoded, role: account.role };
     req.account = account;
     req.accountState = account.deletion_scheduled_at
       ? 'pending_deletion'

@@ -1,6 +1,7 @@
 const { Server } = require('socket.io');
 const supabase = require('../config/supabase');
 const { verifyToken } = require('../utils/jwt');
+const { corsOrigin } = require('../config/cors');
 const { generateAgoraUid } = require('../utils/agoraUid');
 const { endLiveClassRecord } = require('../utils/liveClassEnd');
 const { hasCourseSubscription } = require('../utils/access');
@@ -167,20 +168,42 @@ async function getHandStatus(liveClassId, userId) {
 
 function initLiveClassRealtime(httpServer) {
   io = new Server(httpServer, {
-    cors: { origin: true, credentials: true },
+    cors: { origin: corsOrigin, credentials: true },
     path: '/socket.io'
   });
 
-  // JWT handshake — same token the REST API uses.
-  io.use((socket, next) => {
-    const token =
-      socket.handshake.auth?.token ||
-      (socket.handshake.headers?.authorization || '').replace(/^Bearer\s+/i, '');
-    const decoded = token && verifyToken(token);
-    if (!decoded) return next(new Error('unauthorized'));
-    socket.user = decoded;              // { userId, role } — for handler code
-    socket.data.user = decoded;         // survives into RemoteSocket (fetchSockets)
-    next();
+  // JWT handshake — same token the REST API uses. Like authenticateToken, the
+  // account is re-checked so a deleted / admin-suspended user can't connect,
+  // and the role is taken from the database rather than the token.
+  io.use(async (socket, next) => {
+    try {
+      const token =
+        socket.handshake.auth?.token ||
+        (socket.handshake.headers?.authorization || '').replace(/^Bearer\s+/i, '');
+      const decoded = token && verifyToken(token);
+      if (!decoded) return next(new Error('unauthorized'));
+
+      const { data: account, error } = await supabase
+        .from('users')
+        .select('id, role, is_active, deactivated_at, deletion_scheduled_at, deleted_at')
+        .eq('id', decoded.userId)
+        .maybeSingle();
+      if (error) throw error;
+      const blocked =
+        !account ||
+        account.deleted_at ||
+        (account.deletion_scheduled_at && new Date(account.deletion_scheduled_at) <= new Date()) ||
+        (account.is_active === false && !account.deactivated_at && !account.deletion_scheduled_at);
+      if (blocked) return next(new Error('unauthorized'));
+
+      const user = { ...decoded, role: account.role };
+      socket.user = user;              // { userId, role } — for handler code
+      socket.data.user = user;         // survives into RemoteSocket (fetchSockets)
+      next();
+    } catch (err) {
+      console.error('Live class socket auth error:', err);
+      next(new Error('unauthorized'));
+    }
   });
 
   io.on('connection', (socket) => {

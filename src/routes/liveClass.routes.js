@@ -20,6 +20,7 @@ const {
 } = require('../realtime/liveClassSocket');
 const { v4: uuidv4 } = require('uuid');
 const jwt = require('jsonwebtoken');
+const { JWT_SECRET, JWT_ALGORITHM } = require('../utils/jwt');
 const { endLiveClassRecord } = require('../utils/liveClassEnd');
 const { notifyLiveClassStarted } = require('../utils/notifyEvents');
 
@@ -558,8 +559,8 @@ router.post('/:id/recorder-link', authenticateToken, isTeacher, async (req, res)
 
     const key = jwt.sign(
       { purpose: 'live_recorder', liveClassId: id },
-      process.env.JWT_SECRET || 'your_jwt_secret_key_here',
-      { expiresIn: RECORDER_KEY_TTL }
+      JWT_SECRET,
+      { expiresIn: RECORDER_KEY_TTL, algorithm: JWT_ALGORITHM }
     );
     res.json({ success: true, data: { key, expires_in: RECORDER_KEY_TTL } });
   } catch (error) {
@@ -579,7 +580,7 @@ router.post('/:id/recorder-token', async (req, res) => {
     const { id } = req.params;
     let claims;
     try {
-      claims = jwt.verify(req.body?.key || '', process.env.JWT_SECRET || 'your_jwt_secret_key_here');
+      claims = jwt.verify(req.body?.key || '', JWT_SECRET, { algorithms: [JWT_ALGORITHM] });
     } catch (_) {
       return res.status(401).json({ success: false, error: 'Recorder key is invalid or expired' });
     }

@@ -6,17 +6,22 @@ const http = require('http');
 const cors = require('cors');
 
 const app = express();
+const { corsOrigin } = require('./config/cors');
 const { initLiveClassRealtime } = require('./realtime/liveClassSocket');
 const { startClassScheduler } = require('./utils/classScheduler');
 const { startDailyDigestScheduler } = require('./utils/dailyDigestScheduler');
 
+// Production sits behind one reverse proxy (Caddy). Trusting that single hop
+// makes req.ip the real client address (from X-Forwarded-For) — which the auth
+// rate limiter keys on — without letting clients spoof it with extra entries.
+// TRUST_PROXY overrides: a hop count ("1"), or an Express value like "loopback".
+const trustProxy = process.env.TRUST_PROXY ?? (process.env.NODE_ENV === 'production' ? '1' : '');
+if (trustProxy) app.set('trust proxy', /^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy);
+
 // ============ Middleware ============
-// Dynamically allow requests from localhost, local IP addresses, or any origin in development
+// Allowed origins come from CORS_ORIGIN — see src/config/cors.js.
 app.use(cors({
-  origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps, curl, Postman) or any origin on local network
-    callback(null, true);
-  },
+  origin: corsOrigin,
   credentials: true,
   allowedHeaders: ['Content-Type', 'Authorization'],
   // PATCH is used by admin.routes.js and notifications.routes.js — without
