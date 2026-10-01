@@ -235,7 +235,7 @@ const dropJob = (id) => {
   if (!job) return;
   jobs.delete(id);
   if (job.proc && job.status === 'running') job.proc.kill('SIGKILL');
-  cleanup([job.inputPath, job.outputPath]);
+  cleanup([job.inputPath, job.outputPath, ...(job.outputPaths || [])]);
 };
 setInterval(() => {
   const now = Date.now();
@@ -363,6 +363,133 @@ router.get('/compress-jobs/:id/file', authenticateToken, (req, res, next) => {
 });
 
 router.delete('/compress-jobs/:id', authenticateToken, (req, res) => {
+  const job = ownJob(req, res);
+  if (!job) return;
+  dropJob(job.id);
+  res.json({ success: true });
+});
+
+/**
+ * Trim as a background job, same shape as compress-jobs, so the client can
+ * show a percentage and time left. Segments are cut one ffmpeg run at a time
+ * (still `-c copy`) so progress is simply (finished clip seconds + the
+ * current clip's progress) / total clip seconds.
+ *
+ *   POST /api/video-tools/trim-jobs          multipart: video, segments (JSON)
+ *       -> 202 { jobId }
+ *   GET  /api/video-tools/trim-jobs/:id      -> { status, percent, error? }
+ *   GET  /api/video-tools/trim-jobs/:id/file -> the clip, or a .zip for 2+
+ *       (the job and its files are deleted once sent)
+ */
+router.post('/trim-jobs', authenticateToken, requireFeature('trim_video'), upload.single('video'), async (req, res, next) => {
+  const inputPath = req.file?.path;
+  const outputPaths = [];
+  try {
+    if (!inputPath) return res.status(400).json({ success: false, error: 'A video file is required' });
+
+    let segments;
+    try {
+      segments = JSON.parse(req.body.segments || '[]');
+    } catch {
+      cleanup([inputPath]);
+      return res.status(400).json({ success: false, error: '`segments` must be JSON: [{ start, end }, ...] in seconds' });
+    }
+    if (!Array.isArray(segments) || segments.length === 0) {
+      cleanup([inputPath]);
+      return res.status(400).json({ success: false, error: 'At least one segment is required' });
+    }
+    if (segments.length > MAX_SEGMENTS) {
+      cleanup([inputPath]);
+      return res.status(400).json({ success: false, error: `Split into at most ${MAX_SEGMENTS} clips at a time` });
+    }
+
+    const ext = path.extname(inputPath) || '.mp4';
+    const clips = segments.map((seg, i) => {
+      const start = clampNonNegative(seg.start);
+      const end = Number(seg.end);
+      if (!Number.isFinite(end) || end <= start) {
+        throw Object.assign(new Error(`Clip ${i + 1}: the end time must be after the start time`), { status: 400 });
+      }
+      const outPath = path.join(os.tmpdir(), `vt-out-${uuidv4()}${ext}`);
+      outputPaths.push(outPath);
+      return { start, end, outPath, name: `clip-${String(i + 1).padStart(2, '0')}-${fmtClock(start)}_to_${fmtClock(end)}${ext}` };
+    });
+    const totalSec = clips.reduce((n, c) => n + (c.end - c.start), 0);
+
+    const id = uuidv4();
+    const job = {
+      id, userId: req.user.userId, status: 'running', percent: 0, error: null,
+      inputPath, outputPath: null, outputPaths, clips, ext,
+      startedAt: Date.now(), finishedAt: null, proc: null
+    };
+    jobs.set(id, job);
+    res.status(202).json({ success: true, jobId: id });
+
+    (async () => {
+      let doneSec = 0;
+      for (const c of clips) {
+        const len = c.end - c.start;
+        await runFfmpegWithProgress(
+          ['-y', '-i', inputPath, '-ss', String(c.start), '-to', String(c.end), '-c', 'copy', '-avoid_negative_ts', 'make_zero', c.outPath],
+          // With output-side -ss, out_time counts from the clip's own start.
+          len,
+          (p) => { job.percent = Math.min(99, Math.floor(((doneSec + (p / 100) * len) / totalSec) * 100)); },
+          (proc) => { job.proc = proc; }
+        );
+        doneSec += len;
+      }
+    })()
+      .then(() => {
+        job.status = 'done';
+        job.percent = 100;
+      })
+      .catch((err) => {
+        job.status = 'error';
+        job.error = err.message;
+        cleanup(outputPaths);
+      })
+      .finally(() => {
+        job.finishedAt = Date.now();
+        job.proc = null;
+        cleanup([inputPath]);
+      });
+  } catch (err) {
+    cleanup([inputPath, ...outputPaths]);
+    next(err);
+  }
+});
+
+router.get('/trim-jobs/:id', authenticateToken, (req, res) => {
+  const job = ownJob(req, res);
+  if (!job) return;
+  res.json({ success: true, status: job.status, percent: job.percent, error: job.error });
+});
+
+router.get('/trim-jobs/:id/file', authenticateToken, (req, res, next) => {
+  const job = ownJob(req, res);
+  if (!job) return;
+  if (job.status !== 'done') return res.status(409).json({ success: false, error: 'The clips aren’t ready yet' });
+  res.on('finish', () => dropJob(job.id));
+  if (job.clips.length === 1) {
+    const [c] = job.clips;
+    res.setHeader('Content-Disposition', `attachment; filename="${c.name}"`);
+    res.setHeader('Content-Type', `video/${job.ext.slice(1)}`);
+    res.setHeader('Content-Length', String(fs.statSync(c.outPath).size));
+    const stream = fs.createReadStream(c.outPath);
+    stream.on('error', next);
+    stream.pipe(res);
+  } else {
+    res.setHeader('Content-Disposition', 'attachment; filename="clips.zip"');
+    res.setHeader('Content-Type', 'application/zip');
+    const archive = new ZipArchive({ zlib: { level: 6 } });
+    archive.on('error', next);
+    archive.pipe(res);
+    job.clips.forEach((c) => archive.file(c.outPath, { name: c.name }));
+    archive.finalize();
+  }
+});
+
+router.delete('/trim-jobs/:id', authenticateToken, (req, res) => {
   const job = ownJob(req, res);
   if (!job) return;
   dropJob(job.id);
