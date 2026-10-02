@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const supabase = require('../config/supabase');
 const textbookStorage = require('../config/textbookStorage');
 const { optionalAuth } = require('../middleware/auth');
 const { parseTextbookName } = require('../utils/textbookNames');
@@ -29,6 +30,35 @@ const { parseTextbookName } = require('../utils/textbookNames');
 
 const BUCKET = 'textbook-chapters';
 
+// Cover thumbnails — page one of each book, rendered and uploaded by
+// scripts/make-textbook-covers.js. They live in THIS project's public
+// course-materials bucket rather than beside the PDFs, because the textbook
+// project's credentials here are read-only and images among the PDFs would
+// show up in the shelf listing.
+const COVER_BUCKET = 'course-materials';
+const COVER_PREFIX = 'textbook-covers';
+
+const coverUrl = (id) =>
+  `${process.env.SUPABASE_URL}/storage/v1/object/public/${COVER_BUCKET}/${COVER_PREFIX}/${encodeURIComponent(id)}.jpg`;
+
+/** Ids that actually have a cover — asking avoids handing the app URLs that
+ * 404 while the render job is still working through the shelf. */
+async function coveredIds() {
+  const ids = new Set();
+  for (let offset = 0; ; offset += 100) {
+    const { data, error } = await supabase.storage
+      .from(COVER_BUCKET)
+      .list(COVER_PREFIX, { limit: 100, offset });
+    if (error) {
+      console.warn('could not list textbook covers:', error.message);
+      break;
+    }
+    for (const f of data || []) ids.add(f.name.replace(/\.jpg$/, ''));
+    if (!data || data.length < 100) break;
+  }
+  return ids;
+}
+
 // The bucket changes only when someone uploads by hand, but the app asks for
 // the shelf on every cold open. A short TTL keeps that to one storage round
 // trip a minute without making new uploads wait long to appear.
@@ -42,7 +72,7 @@ const publicUrl = (name) => textbookStorage.publicUrl(BUCKET, name);
 const isMissingBucket = (error) =>
   /NoSuchBucket/i.test(error.code || '') || /bucket not found/i.test(error.message || '');
 
-const toPublic = (entry) => {
+const toPublic = (entry, covers) => {
   const parsed = parseTextbookName(entry.name);
   if (!parsed) return null;
   return {
@@ -58,9 +88,8 @@ const toPublic = (entry) => {
     language: parsed.language,
     order_number: parsed.order_number,
     file_url: publicUrl(entry.name),
-    // No covers or page counts in this bucket — kept so the payload matches
-    // the shape the Library card already renders.
-    cover_url: null,
+    cover_url: covers && covers.has(parsed.id) ? coverUrl(parsed.id) : null,
+    // The bucket carries no page counts; the reader learns them on open.
     page_count: null,
     source: null,
     file_size: entry.size ?? null,
@@ -89,9 +118,11 @@ async function listAll() {
     throw error;
   }
 
+  const covers = await coveredIds();
+
   const books = [];
   for (const entry of entries) {
-    const book = toPublic(entry);
+    const book = toPublic(entry, covers);
     if (book) books.push(book);
   }
 

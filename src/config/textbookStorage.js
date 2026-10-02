@@ -57,6 +57,72 @@ const publicUrl = (bucket, name) => {
   return `${projectUrl}/storage/v1/object/public/${bucket}/${encodeURIComponent(name)}`;
 };
 
+// RFC 3986 — encodeURIComponent leaves these alone but SigV4 wants them
+// escaped, and a mismatch here is an opaque SignatureDoesNotMatch.
+const rfc3986 = (value) => encodeURIComponent(value)
+  .replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+
+/**
+ * A presigned GET URL for an object in a *private* bucket, valid for
+ * `expiresIn` seconds.
+ *
+ * The public buckets hand their files over as plain URLs, but a private one
+ * has no public path at all — Supabase answers its public endpoint with
+ * NoSuchBucket. Signing the URL here means the app still fetches the PDF
+ * straight from storage: the bytes never pass through this server, which for
+ * a 21 MB formula sheet is the whole point.
+ *
+ * `expiresIn` is advisory. Measured against this endpoint, Supabase does NOT
+ * honour X-Amz-Expires: a URL signed for 60 seconds still served 12 hours
+ * later, while one signed 18+ hours earlier was refused. The signature itself
+ * is checked — tampering with it gives 403 — so what this really buys is a
+ * link scoped to one object, valid for a window the storage picks (~12-18h
+ * from the signing time), not one we choose.
+ *
+ * So treat the returned URL as a bearer token for that object for most of a
+ * day, and do NOT rely on a short expiry as an access control. If these files
+ * ever need real gating, the route serving them has to require a session.
+ */
+function presignedUrl(bucket, name, expiresIn = 6 * 60 * 60) {
+  const { endpoint, region, accessKey, secretKey } = config();
+  if (!endpoint || !accessKey || !secretKey) return null;
+
+  const url = new URL(endpoint);
+  const canonicalUri = `${url.pathname}/${rfc3986(bucket)}/${rfc3986(name)}`;
+
+  const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, '');
+  const date = amzDate.slice(0, 8);
+  const scope = `${date}/${region}/${SERVICE}/aws4_request`;
+
+  // Must be sorted by name, and encoded exactly as it will appear in the URL.
+  const query = [
+    ['X-Amz-Algorithm', ALGORITHM],
+    ['X-Amz-Credential', `${accessKey}/${scope}`],
+    ['X-Amz-Date', amzDate],
+    ['X-Amz-Expires', String(expiresIn)],
+    ['X-Amz-SignedHeaders', 'host'],
+  ].map(([k, v]) => `${rfc3986(k)}=${rfc3986(v)}`).sort().join('&');
+
+  const canonicalRequest = [
+    'GET',
+    canonicalUri,
+    query,
+    `host:${url.host}\n`,
+    'host',
+    'UNSIGNED-PAYLOAD',
+  ].join('\n');
+
+  const stringToSign = [ALGORITHM, amzDate, scope, sha256Hex(canonicalRequest)].join('\n');
+
+  let key = hmac(`AWS4${secretKey}`, date);
+  key = hmac(key, region);
+  key = hmac(key, SERVICE);
+  key = hmac(key, 'aws4_request');
+  const signature = crypto.createHmac('sha256', key).update(stringToSign).digest('hex');
+
+  return `${url.origin}${canonicalUri}?${query}&X-Amz-Signature=${signature}`;
+}
+
 /** One signed GET against the S3 endpoint; returns the raw XML body. */
 async function signedGet(pathname, query) {
   const { endpoint, region, accessKey, secretKey } = config();
@@ -166,4 +232,4 @@ async function listBucket(bucket) {
   return out;
 }
 
-module.exports = { isConfigured, listBucket, publicUrl };
+module.exports = { isConfigured, listBucket, publicUrl, presignedUrl };
