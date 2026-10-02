@@ -4,32 +4,33 @@
  *
  *   node scripts/list-textbooks.js
  *
- * Reads whatever project the current .env points at. Anything under
+ * Reads the textbook storage project (TEXTBOOK_S3_* in .env) — the same
+ * source /api/textbooks serves from, not the app database project. Anything
+ * under
  * "unparsed" is a filename that doesn't match
  * <order>-grade<NN>-<subject>[-<variant>][-<language>].pdf — rename it in the
  * Supabase dashboard and re-run. Same for an "unknown subject": either fix
  * the name or add the slug to SUBJECTS in src/utils/textbookNames.js.
  */
 require('../src/config/loadEnv');
-const supabase = require('../src/config/supabase');
+const textbookStorage = require('../src/config/textbookStorage');
 const { parseTextbookName, SUBJECTS } = require('../src/utils/textbookNames');
 
 const BUCKET = 'textbook-chapters';
-const PAGE = 100;
 
 async function main() {
-  console.log(`Target: ${process.env.SUPABASE_URL}\n`);
+  if (!textbookStorage.isConfigured()) {
+    console.error('❌ TEXTBOOK_S3_* not set in .env — nothing to list.');
+    process.exit(1);
+  }
+  console.log(`Target: ${process.env.TEXTBOOK_SUPABASE_URL}\n`);
 
-  const entries = [];
-  for (let offset = 0; ; offset += PAGE) {
-    const { data, error } = await supabase.storage.from(BUCKET)
-      .list('', { limit: PAGE, offset, sortBy: { column: 'name', order: 'asc' } });
-    if (error) {
-      console.error(`❌ ${BUCKET}: ${error.message}`);
-      process.exit(1);
-    }
-    entries.push(...(data || []));
-    if (!data || data.length < PAGE) break;
+  let entries;
+  try {
+    entries = await textbookStorage.listBucket(BUCKET);
+  } catch (error) {
+    console.error(`❌ ${BUCKET}: ${error.message}`);
+    process.exit(1);
   }
 
   const books = [];

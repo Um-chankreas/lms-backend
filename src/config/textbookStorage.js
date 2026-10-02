@@ -26,6 +26,11 @@ const crypto = require('crypto');
  */
 
 const SERVICE = 's3';
+// The textbook project is a different host from everything else this server
+// talks to, so it can go unreachable on its own. `fetch` has no timeout of
+// its own: without this, one unreachable listing leaves the request hanging
+// and the Library tab spinning rather than showing an empty shelf.
+const LIST_TIMEOUT_MS = 10000;
 const ALGORITHM = 'AWS4-HMAC-SHA256';
 const EMPTY_PAYLOAD = crypto.createHash('sha256').update('').digest('hex');
 
@@ -82,15 +87,32 @@ async function signedGet(pathname, query) {
   key = hmac(key, 'aws4_request');
   const signature = crypto.createHmac('sha256', key).update(stringToSign).digest('hex');
 
-  const res = await fetch(`${url.origin}${canonicalUri}${query ? `?${query}` : ''}`, {
-    headers: {
-      Authorization: `${ALGORITHM} Credential=${accessKey}/${scope}, `
-        + 'SignedHeaders=host;x-amz-content-sha256;x-amz-date, '
-        + `Signature=${signature}`,
-      'x-amz-content-sha256': EMPTY_PAYLOAD,
-      'x-amz-date': amzDate,
-    },
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), LIST_TIMEOUT_MS);
+
+  let res;
+  try {
+    res = await fetch(`${url.origin}${canonicalUri}${query ? `?${query}` : ''}`, {
+      headers: {
+        Authorization: `${ALGORITHM} Credential=${accessKey}/${scope}, `
+          + 'SignedHeaders=host;x-amz-content-sha256;x-amz-date, '
+          + `Signature=${signature}`,
+        'x-amz-content-sha256': EMPTY_PAYLOAD,
+        'x-amz-date': amzDate,
+      },
+      signal: controller.signal,
+    });
+  } catch (e) {
+    const error = new Error(
+      e.name === 'AbortError'
+        ? `textbook storage did not respond within ${LIST_TIMEOUT_MS}ms`
+        : `textbook storage unreachable: ${e.message}`,
+    );
+    error.code = 'TEXTBOOK_STORAGE_UNREACHABLE';
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 
   const body = await res.text();
   if (!res.ok) {

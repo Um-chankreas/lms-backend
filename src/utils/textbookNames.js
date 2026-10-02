@@ -40,6 +40,8 @@ const SUBJECTS = {
   physics:    { km: 'រូបវិទ្យា',        en: 'Physics' },
   earth:      { km: 'ផែនដីវិទ្យា',      en: 'Earth Science' },
   moral:      { km: 'សីលធម៌-ពលរដ្ឋ',  en: 'Moral & Civics' },
+  civics:     { km: 'ពលរដ្ឋវិជ្ជា',      en: 'Civics' },
+  tech:       { km: 'បច្ចេកវិទ្យា',      en: 'Technology' },
   ict:        { km: 'ព័ត៌មានវិទ្យា',     en: 'ICT' },
 };
 
