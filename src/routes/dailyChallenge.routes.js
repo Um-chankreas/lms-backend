@@ -104,7 +104,15 @@ async function createTodayChallenge(studentId, today) {
     })
     .select()
     .single();
-  if (error) throw error;
+  if (error) {
+    // Two concurrent requests both saw no challenge and raced to insert; the
+    // unique (student_id, challenge_date) index let one win. Use that row.
+    if (error.code === '23505') {
+      const existing = await loadTodayChallenge(studentId, today);
+      if (existing) return existing;
+    }
+    throw error;
+  }
   return data;
 }
 
