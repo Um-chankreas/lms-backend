@@ -35,7 +35,9 @@ const coverProblem = (file) => {
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_PDF_BYTES, files: 1 },
+  // 2 = the PDF plus its optional cover on /upload. maxCount on each field
+  // (and upload.single on the cover route) still caps every field at one.
+  limits: { fileSize: MAX_PDF_BYTES, files: 2 },
 });
 
 const BUCKETS = { textbook: 'textbook-chapters', 'past-paper': 'past-papers' };
