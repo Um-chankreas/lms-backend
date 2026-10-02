@@ -31,6 +31,8 @@ const SERVICE = 's3';
 // its own: without this, one unreachable listing leaves the request hanging
 // and the Library tab spinning rather than showing an empty shelf.
 const LIST_TIMEOUT_MS = 10000;
+// Uploads carry a whole scanned PDF, so they get far longer than a listing.
+const PUT_TIMEOUT_MS = 120000;
 const ALGORITHM = 'AWS4-HMAC-SHA256';
 const EMPTY_PAYLOAD = crypto.createHash('sha256').update('').digest('hex');
 
@@ -57,8 +59,11 @@ const publicUrl = (bucket, name) => {
   return `${projectUrl}/storage/v1/object/public/${bucket}/${encodeURIComponent(name)}`;
 };
 
-/** One signed GET against the S3 endpoint; returns the raw XML body. */
-async function signedGet(pathname, query) {
+/**
+ * One signed request against the S3 endpoint; returns the raw response body.
+ * `body` is a Buffer for a PUT, omitted for a GET.
+ */
+async function signedRequest(method, pathname, query, body, contentType) {
   const { endpoint, region, accessKey, secretKey } = config();
   const url = new URL(endpoint + pathname);
   const host = url.host;
@@ -70,13 +75,15 @@ async function signedGet(pathname, query) {
   const date = amzDate.slice(0, 8);
   const scope = `${date}/${region}/${SERVICE}/aws4_request`;
 
+  const payloadHash = body ? crypto.createHash('sha256').update(body).digest('hex') : EMPTY_PAYLOAD;
+
   const canonicalRequest = [
-    'GET',
+    method,
     canonicalUri,
     query,
-    `host:${host}\nx-amz-content-sha256:${EMPTY_PAYLOAD}\nx-amz-date:${amzDate}\n`,
+    `host:${host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${amzDate}\n`,
     'host;x-amz-content-sha256;x-amz-date',
-    EMPTY_PAYLOAD,
+    payloadHash,
   ].join('\n');
 
   const stringToSign = [ALGORITHM, amzDate, scope, sha256Hex(canonicalRequest)].join('\n');
@@ -88,16 +95,20 @@ async function signedGet(pathname, query) {
   const signature = crypto.createHmac('sha256', key).update(stringToSign).digest('hex');
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), LIST_TIMEOUT_MS);
+  const timeoutMs = body ? PUT_TIMEOUT_MS : LIST_TIMEOUT_MS;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   let res;
   try {
     res = await fetch(`${url.origin}${canonicalUri}${query ? `?${query}` : ''}`, {
+      method,
+      body,
       headers: {
+        ...(contentType ? { 'Content-Type': contentType } : {}),
         Authorization: `${ALGORITHM} Credential=${accessKey}/${scope}, `
           + 'SignedHeaders=host;x-amz-content-sha256;x-amz-date, '
           + `Signature=${signature}`,
-        'x-amz-content-sha256': EMPTY_PAYLOAD,
+        'x-amz-content-sha256': payloadHash,
         'x-amz-date': amzDate,
       },
       signal: controller.signal,
@@ -105,7 +116,7 @@ async function signedGet(pathname, query) {
   } catch (e) {
     const error = new Error(
       e.name === 'AbortError'
-        ? `textbook storage did not respond within ${LIST_TIMEOUT_MS}ms`
+        ? `textbook storage did not respond within ${timeoutMs}ms`
         : `textbook storage unreachable: ${e.message}`,
     );
     error.code = 'TEXTBOOK_STORAGE_UNREACHABLE';
@@ -114,14 +125,14 @@ async function signedGet(pathname, query) {
     clearTimeout(timer);
   }
 
-  const body = await res.text();
+  const text = await res.text();
   if (!res.ok) {
-    const code = (body.match(/<Code>([^<]+)<\/Code>/) || [])[1] || res.status;
-    const error = new Error(`textbook storage list failed (${code})`);
+    const code = (text.match(/<Code>([^<]+)<\/Code>/) || [])[1] || res.status;
+    const error = new Error(`textbook storage ${method === 'GET' ? 'list' : 'write'} failed (${code})`);
     error.code = String(code);
     throw error;
   }
-  return body;
+  return text;
 }
 
 // S3 XML escapes these in <Key>; filenames are ASCII today but a renamed
@@ -149,7 +160,7 @@ async function listBucket(bucket) {
       token ? `continuation-token=${encodeURIComponent(token)}` : null,
     ].filter(Boolean).join('&');
 
-    const xml = await signedGet(`/${bucket}`, query);
+    const xml = await signedRequest('GET', `/${bucket}`, query);
 
     for (const match of xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
       const entry = match[1];
@@ -166,4 +177,42 @@ async function listBucket(bucket) {
   return out;
 }
 
-module.exports = { isConfigured, listBucket, publicUrl };
+/**
+ * Upload one object. Overwrites silently (that's S3), so callers that care
+ * about collisions check listBucket first. Returns its public URL.
+ */
+async function putObject(bucket, name, buffer, contentType) {
+  await signedRequest('PUT', `/${bucket}/${encodeURIComponent(name)}`, '', buffer, contentType);
+  return publicUrl(bucket, name);
+}
+
+/** Remove one object. Deleting a missing key is a no-op in S3. */
+async function deleteObject(bucket, name) {
+  await signedRequest('DELETE', `/${bucket}/${encodeURIComponent(name)}`, '');
+}
+
+/** Download a public object's bytes (used to move a file to a new name). */
+async function getPublicObject(bucket, name) {
+  const res = await fetch(publicUrl(bucket, name));
+  if (!res.ok) throw new Error(`could not read ${name} (${res.status})`);
+  return Buffer.from(await res.arrayBuffer());
+}
+
+/** name -> size for every cover image (<stem>.jpg) in a listing. */
+const coverIndex = (entries) =>
+  new Map(entries.filter(e => /\.jpg$/i.test(e.name)).map(e => [e.name, e.size]));
+
+/**
+ * Public URL of a book's cover, or null when it has none. The size is
+ * appended so replacing a cover (same filename) busts browser/app caches.
+ */
+const coverUrl = (bucket, stem, covers) => {
+  const name = `${stem}.jpg`;
+  if (!covers || !covers.has(name)) return null;
+  return `${publicUrl(bucket, name)}?v=${covers.get(name) ?? 0}`;
+};
+
+module.exports = {
+  isConfigured, listBucket, publicUrl, putObject, deleteObject, getPublicObject,
+  coverIndex, coverUrl,
+};

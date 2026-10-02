@@ -38,7 +38,7 @@ let cache = { at: 0, papers: null };
 const isMissingBucket = (error) =>
   /NoSuchBucket/i.test(error.code || '') || /bucket not found/i.test(error.message || '');
 
-const toPublic = (entry) => {
+const toPublic = (entry, covers) => {
   const parsed = parsePastPaperName(entry.name);
   if (!parsed) return null;
   return {
@@ -58,7 +58,7 @@ const toPublic = (entry) => {
     // Filled in by linkPairs() below.
     answer_paper_id: null,
     answers_for_id: null,
-    cover_url: null,
+    cover_url: textbookStorage.coverUrl(BUCKET, parsed.id, covers),
     page_count: null,
     source: null,
     file_size: entry.size ?? null,
@@ -109,9 +109,10 @@ async function listAll() {
     throw error;
   }
 
+  const covers = textbookStorage.coverIndex(entries);
   const papers = [];
   for (const entry of entries) {
-    const paper = toPublic(entry);
+    const paper = toPublic(entry, covers);
     if (paper) papers.push(paper);
   }
 
@@ -171,5 +172,8 @@ router.get('/:id', optionalAuth, async (req, res) => {
     res.status(500).json({ success: false, error: 'Failed to fetch past paper: ' + error.message });
   }
 });
+
+// See textbooks.routes.js — dropped after an upload so it shows immediately.
+router.clearCache = () => { cache = { at: 0, papers: null }; };
 
 module.exports = router;

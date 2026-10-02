@@ -121,4 +121,4 @@ function parseTextbookName(filename) {
   };
 }
 
-module.exports = { parseTextbookName, toKhmerNumber, SUBJECTS };
+module.exports = { parseTextbookName, toKhmerNumber, SUBJECTS, VARIANTS, LANGUAGES };

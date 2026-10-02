@@ -36,13 +36,14 @@ const TTL_MS = 60 * 1000;
 let cache = { at: 0, books: null };
 
 const publicUrl = (name) => textbookStorage.publicUrl(BUCKET, name);
+const coverUrl = textbookStorage.coverUrl;
 
 // A machine without the textbook credentials, or a project where the bucket
 // hasn't been created, should serve an empty shelf rather than a 500.
 const isMissingBucket = (error) =>
   /NoSuchBucket/i.test(error.code || '') || /bucket not found/i.test(error.message || '');
 
-const toPublic = (entry) => {
+const toPublic = (entry, covers) => {
   const parsed = parseTextbookName(entry.name);
   if (!parsed) return null;
   return {
@@ -54,13 +55,15 @@ const toPublic = (entry) => {
     // Stable slug for filtering — the Khmer name is for reading, not matching.
     subject_slug: parsed.subject_slug,
     subject_en: parsed.subject_en,
+    variant_slug: parsed.variant_slug,
     grade: parsed.grade,
     language: parsed.language,
     order_number: parsed.order_number,
     file_url: publicUrl(entry.name),
-    // No covers or page counts in this bucket — kept so the payload matches
-    // the shape the Library card already renders.
-    cover_url: null,
+    // A cover is an optional <id>.jpg uploaded next to the PDF from the web
+    // portal; page counts aren't tracked. Kept so the payload matches the
+    // shape the Library card already renders.
+    cover_url: coverUrl(BUCKET, parsed.id, covers),
     page_count: null,
     source: null,
     file_size: entry.size ?? null,
@@ -89,9 +92,10 @@ async function listAll() {
     throw error;
   }
 
+  const covers = textbookStorage.coverIndex(entries);
   const books = [];
   for (const entry of entries) {
-    const book = toPublic(entry);
+    const book = toPublic(entry, covers);
     if (book) books.push(book);
   }
 
@@ -148,5 +152,9 @@ router.get('/:id', optionalAuth, async (req, res) => {
     res.status(500).json({ success: false, error: 'Failed to fetch textbook: ' + error.message });
   }
 });
+
+// Called by library.routes.js after an upload so the new book shows at once
+// instead of after the TTL.
+router.clearCache = () => { cache = { at: 0, books: null }; };
 
 module.exports = router;
