@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const supabase = require('../config/supabase');
 const textbookStorage = require('../config/textbookStorage');
 const { optionalAuth } = require('../middleware/auth');
 const { parsePastPaperName } = require('../utils/pastPaperNames');
@@ -38,7 +39,33 @@ let cache = { at: 0, papers: null };
 const isMissingBucket = (error) =>
   /NoSuchBucket/i.test(error.code || '') || /bucket not found/i.test(error.message || '');
 
-const toPublic = (entry) => {
+// Cover thumbnails — page one of each paper, rendered and uploaded by
+// scripts/make-covers.js into THIS project's public course-materials bucket,
+// the same arrangement the other two shelves use.
+const COVER_BUCKET = 'course-materials';
+const COVER_PREFIX = 'past-paper-covers';
+
+const coverUrl = (id) =>
+  `${process.env.SUPABASE_URL}/storage/v1/object/public/${COVER_BUCKET}/${COVER_PREFIX}/${encodeURIComponent(id)}.jpg`;
+
+/** Ids that actually have a cover, so the app is never handed a 404. */
+async function coveredIds() {
+  const ids = new Set();
+  for (let offset = 0; ; offset += 100) {
+    const { data, error } = await supabase.storage
+      .from(COVER_BUCKET)
+      .list(COVER_PREFIX, { limit: 100, offset });
+    if (error) {
+      console.warn('could not list past-paper covers:', error.message);
+      break;
+    }
+    for (const f of data || []) ids.add(f.name.replace(/\.jpg$/, ''));
+    if (!data || data.length < 100) break;
+  }
+  return ids;
+}
+
+const toPublic = (entry, covers) => {
   const parsed = parsePastPaperName(entry.name);
   if (!parsed) return null;
   return {
@@ -58,7 +85,7 @@ const toPublic = (entry) => {
     // Filled in by linkPairs() below.
     answer_paper_id: null,
     answers_for_id: null,
-    cover_url: null,
+    cover_url: covers && covers.has(parsed.id) ? coverUrl(parsed.id) : null,
     page_count: null,
     source: null,
     file_size: entry.size ?? null,
@@ -109,9 +136,11 @@ async function listAll() {
     throw error;
   }
 
+  const covers = await coveredIds();
+
   const papers = [];
   for (const entry of entries) {
-    const paper = toPublic(entry);
+    const paper = toPublic(entry, covers);
     if (paper) papers.push(paper);
   }
 

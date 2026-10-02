@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const supabase = require('../config/supabase');
 const textbookStorage = require('../config/textbookStorage');
 const { optionalAuth } = require('../middleware/auth');
 const { parseFormulaName } = require('../utils/formulaNames');
@@ -84,8 +85,35 @@ async function listAll() {
   return sheets;
 }
 
+// Cover thumbnails — page one of each sheet, rendered and uploaded by
+// scripts/make-covers.js. They sit in THIS project's public course-materials
+// bucket: the Formula bucket is private, so a cover stored beside the PDF
+// would itself need signing on every request.
+const COVER_BUCKET = 'course-materials';
+const COVER_PREFIX = 'formula-covers';
+
+const coverUrl = (id) =>
+  `${process.env.SUPABASE_URL}/storage/v1/object/public/${COVER_BUCKET}/${COVER_PREFIX}/${encodeURIComponent(id)}.jpg`;
+
+/** Ids that actually have a cover, so the app is never handed a 404. */
+async function coveredIds() {
+  const ids = new Set();
+  for (let offset = 0; ; offset += 100) {
+    const { data, error } = await supabase.storage
+      .from(COVER_BUCKET)
+      .list(COVER_PREFIX, { limit: 100, offset });
+    if (error) {
+      console.warn('could not list formula covers:', error.message);
+      break;
+    }
+    for (const f of data || []) ids.add(f.name.replace(/\.jpg$/, ''));
+    if (!data || data.length < 100) break;
+  }
+  return ids;
+}
+
 /** Add a freshly signed URL. Signing is local crypto — no round trip. */
-function toPublic({ parsed, size }) {
+function toPublic({ parsed, size }, covers) {
   const expiresAt = new Date(Date.now() + URL_TTL_SECONDS * 1000).toISOString();
   return {
     id: parsed.id,
@@ -103,7 +131,7 @@ function toPublic({ parsed, size }) {
     // Presigned: private bucket, so this is the only way in — and it lapses.
     file_url: textbookStorage.presignedUrl(BUCKET, parsed.filename, URL_TTL_SECONDS),
     file_url_expires_at: expiresAt,
-    cover_url: null,
+    cover_url: covers && covers.has(parsed.id) ? coverUrl(parsed.id) : null,
     page_count: null,
     file_size: size,
   };
@@ -132,7 +160,8 @@ router.get('/', optionalAuth, async (req, res) => {
         grade >= s.parsed.grade_from && grade <= s.parsed.grade_to);
     }
 
-    res.json({ success: true, data: { formulas: sheets.map(toPublic) } });
+    const covers = await coveredIds();
+    res.json({ success: true, data: { formulas: sheets.map(s => toPublic(s, covers)) } });
   } catch (error) {
     console.error('Formula list error:', error);
     res.status(500).json({ success: false, error: 'Failed to fetch formulas: ' + error.message });
@@ -149,7 +178,7 @@ router.get('/:id', optionalAuth, async (req, res) => {
     if (!sheet) {
       return res.status(404).json({ success: false, error: 'Formula sheet not found' });
     }
-    res.json({ success: true, data: { formula: toPublic(sheet) } });
+    res.json({ success: true, data: { formula: toPublic(sheet, await coveredIds()) } });
   } catch (error) {
     console.error('Formula fetch error:', error);
     res.status(500).json({ success: false, error: 'Failed to fetch formula: ' + error.message });

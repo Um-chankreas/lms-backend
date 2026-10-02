@@ -1,10 +1,10 @@
 /**
- * Render a cover thumbnail for every textbook and upload it.
+ * Render a cover thumbnail for every PDF on a shelf and upload it.
  *
- *   node scripts/make-textbook-covers.js [--limit N] [--force]
+ *   node scripts/make-covers.js [textbooks|formulas|past-papers] [--limit N] [--force]
  *
- * The textbooks are scans with no embedded thumbnail, so the only way to get a
- * cover is to rasterize page one. That needs the whole PDF — a page's objects
+ * These are scans with no embedded thumbnail, so the only way to get a cover
+ * is to rasterize page one. That needs the whole PDF — a page's objects
  * are reachable only through the trailer at the end of the file — so each book
  * is downloaded, rendered, uploaded and deleted one at a time rather than
  * pulling 3.6 GB onto disk at once.
@@ -31,11 +31,23 @@ const sharp = require('sharp');
 const supabase = require('../src/config/supabase');
 
 const BUCKET = 'course-materials';
-const PREFIX = 'textbook-covers';
-const API = `http://localhost:${process.env.PORT || 5002}/api/textbooks`;
 const COVER_WIDTH = 420;
 
+// Each shelf has its own endpoint, its own response key and its own cover
+// folder. The Formula bucket is private, so its file_url arrives presigned —
+// which is exactly why covers are fetched through the API rather than built
+// from a storage path.
+const SHELVES = {
+  textbooks: { path: '/api/textbooks', key: 'textbooks', prefix: 'textbook-covers' },
+  formulas: { path: '/api/formulas', key: 'formulas', prefix: 'formula-covers' },
+  'past-papers': { path: '/api/past-papers', key: 'past_papers', prefix: 'past-paper-covers' },
+};
+
 const args = process.argv.slice(2);
+const shelfName = args.find(a => !a.startsWith('--') && SHELVES[a]) || 'textbooks';
+const shelf = SHELVES[shelfName];
+const API = `http://localhost:${process.env.PORT || 5002}${shelf.path}`;
+const PREFIX = shelf.prefix;
 const force = args.includes('--force');
 const limitArg = args.indexOf('--limit');
 const limit = limitArg >= 0 ? parseInt(args[limitArg + 1], 10) : Infinity;
@@ -48,13 +60,14 @@ async function existingCovers() {
 async function main() {
   const res = await fetch(API);
   const body = await res.json();
-  if (!body.success) throw new Error('could not list textbooks — is the server running?');
-  const books = body.data.textbooks;
+  if (!body.success) throw new Error(`could not list ${shelfName} — is the server running?`);
+  const books = body.data[shelf.key];
+  if (!books) throw new Error(`unexpected response shape for ${shelfName}`);
 
   const have = force ? new Set() : await existingCovers();
   const todo = books.filter(b => !have.has(b.id)).slice(0, limit);
 
-  console.log(`${books.length} textbooks, ${have.size} already have covers, ${todo.length} to do\n`);
+  console.log(`${books.length} ${shelfName}, ${have.size} already have covers, ${todo.length} to do\n`);
 
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'covers-'));
   let done = 0;
