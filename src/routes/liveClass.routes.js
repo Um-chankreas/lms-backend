@@ -690,7 +690,7 @@ router.put('/:id/start', authenticateToken, isTeacher, async (req, res) => {
 
     const { data: liveClass } = await supabase
       .from('live_classes')
-      .select('teacher_id, status')
+      .select('teacher_id, status, agora_account')
       .eq('id', id)
       .single();
 
@@ -703,7 +703,8 @@ router.put('/:id/start', authenticateToken, isTeacher, async (req, res) => {
 
     // Pin the class to whichever Agora account is active right now (only on
     // the real start — a repeat call must not move a running class).
-    const pin = liveClass.status !== 'active' ? { agora_account: await getActiveKey() } : {};
+    // A token request before start may already have pinned it — never move that.
+    const pin = liveClass.status !== 'active' && !liveClass.agora_account ? { agora_account: await getActiveKey() } : {};
 
     const { data: updatedClass, error } = await supabase
       .from('live_classes')
