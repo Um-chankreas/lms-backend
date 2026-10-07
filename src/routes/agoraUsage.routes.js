@@ -75,7 +75,7 @@ router.get('/', authenticateToken, isAdmin, async (req, res) => {
     res.json({
       success: true,
       data: {
-        account: { id: account.key, label: account.label, app_id: account.appId || null },
+        account: { id: account.key, label: account.label, app_id: account.appId || null, email: account.email || null },
         month: `${year}-${String(month + 1).padStart(2, '0')}`,
         is_current_month: isCurrent,
         free_minutes: FREE_MINUTES,

@@ -9,6 +9,7 @@ const { getUsage } = require('../utils/agoraUsage');
 // Agora App IDs and App Certificates are 32-character hex strings.
 const HEX32 = /^[0-9a-f]{32}$/i;
 const clean = (v) => String(v ?? '').trim();
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const monthRange = () => {
   const n = new Date();
@@ -24,6 +25,7 @@ const shape = async (accounts) => {
       id: a.key,
       label: a.label,
       app_id: a.appId || null,
+      email: a.email || null,
       source: a.source,
       is_active: !!a.isActive,
       free_minutes: a.freeMinutes,
@@ -48,15 +50,17 @@ router.get('/', authenticateToken, isAdmin, async (req, res) => {
 
 // Credentials are secrets, so changing them is super-admin only.
 
-/** POST /api/admin/agora-accounts  { label, app_id, app_certificate, free_minutes? } */
+/** POST /api/admin/agora-accounts  { label, email, app_id, app_certificate, free_minutes? } */
 router.post('/', authenticateToken, isSuperAdmin, async (req, res) => {
   try {
     const label = clean(req.body.label);
+    const email = clean(req.body.email).toLowerCase();
     const appId = clean(req.body.app_id);
     const cert = clean(req.body.app_certificate);
     const free = req.body.free_minutes == null || req.body.free_minutes === '' ? 10000 : parseInt(req.body.free_minutes, 10);
 
     if (!label) return res.status(400).json({ success: false, error: 'Give the account a name' });
+    if (!EMAIL.test(email)) return res.status(400).json({ success: false, error: 'Enter the email this Agora account signs in with' });
     if (!HEX32.test(appId)) return res.status(400).json({ success: false, error: 'App ID must be 32 letters/numbers (copy it from the Agora console)' });
     if (!HEX32.test(cert)) return res.status(400).json({ success: false, error: 'App Certificate must be 32 letters/numbers (copy it from the Agora console)' });
     if (!Number.isInteger(free) || free < 1) return res.status(400).json({ success: false, error: 'Free minutes must be a positive number' });
@@ -68,7 +72,7 @@ router.post('/', authenticateToken, isSuperAdmin, async (req, res) => {
     if (dupe) return res.status(409).json({ success: false, error: 'This App ID has already been added' });
 
     const { error } = await supabase.from('agora_accounts').insert({
-      id: uuidv4(), label, app_id: appId, app_certificate_enc: encrypt(cert), free_minutes: free, is_active: false,
+      id: uuidv4(), label, email, app_id: appId, app_certificate_enc: encrypt(cert), free_minutes: free, is_active: false,
     });
     if (error) throw error;
 
@@ -79,7 +83,7 @@ router.post('/', authenticateToken, isSuperAdmin, async (req, res) => {
   }
 });
 
-/** PUT /api/admin/agora-accounts/:id  { label?, free_minutes?, app_certificate? } */
+/** PUT /api/admin/agora-accounts/:id  { label?, email?, free_minutes?, app_certificate? } */
 router.put('/:id', authenticateToken, isSuperAdmin, async (req, res) => {
   try {
     if (req.params.id === 'env') return res.status(400).json({ success: false, error: 'The default account is set in the server .env' });
@@ -87,6 +91,11 @@ router.put('/:id', authenticateToken, isSuperAdmin, async (req, res) => {
     if (req.body.label !== undefined) {
       patch.label = clean(req.body.label);
       if (!patch.label) return res.status(400).json({ success: false, error: 'Name cannot be empty' });
+    }
+    if (req.body.email !== undefined) {
+      const em = clean(req.body.email).toLowerCase();
+      if (!EMAIL.test(em)) return res.status(400).json({ success: false, error: 'Enter a valid email' });
+      patch.email = em;
     }
     if (req.body.free_minutes !== undefined) {
       const f = parseInt(req.body.free_minutes, 10);

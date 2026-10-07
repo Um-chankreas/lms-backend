@@ -32,6 +32,7 @@ const envAccount = () => ({
   label: 'Default (.env)',
   appId: process.env.AGORA_APP_ID,
   appCertificate: process.env.AGORA_APP_CERTIFICATE,
+  email: process.env.AGORA_ACCOUNT_EMAIL || null,
   freeMinutes: ENV_FREE_MINUTES,
   source: 'env',
 });
@@ -42,6 +43,7 @@ const fromRow = (r) => ({
   appId: r.app_id,
   appCertificate: null, // decrypted on demand, see credentialsFor()
   certEnc: r.app_certificate_enc,
+  email: r.email || null,
   freeMinutes: r.free_minutes,
   isActive: r.is_active,
   createdAt: r.created_at,
