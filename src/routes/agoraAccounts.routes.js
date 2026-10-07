@@ -4,7 +4,7 @@ const { v4: uuidv4 } = require('uuid');
 const supabase = require('../config/supabase');
 const { authenticateToken, isAdmin, isSuperAdmin } = require('../middleware/auth');
 const { listAccounts, encrypt } = require('../utils/agoraAccounts');
-const { getUsage } = require('../utils/agoraUsage');
+const { getUsage, getAdjustment } = require('../utils/agoraUsage');
 
 // Agora App IDs and App Certificates are 32-character hex strings.
 const HEX32 = /^[0-9a-f]{32}$/i;
@@ -15,12 +15,15 @@ const monthRange = () => {
   const n = new Date();
   return [Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), 1), Date.UTC(n.getUTCFullYear(), n.getUTCMonth() + 1, 1)];
 };
+const currentMonth = () => new Date().toISOString().slice(0, 7);
 
 // Public shape: never includes the certificate (only whether one is stored).
 const shape = async (accounts) => {
   const [from, to] = monthRange();
   return Promise.all(accounts.map(async (a) => {
-    const { total } = await getUsage(from, to, a.key);
+    const tracked = (await getUsage(from, to, a.key)).total;
+    const adjustment = await getAdjustment(a.key, currentMonth());
+    const total = Math.max(0, tracked + adjustment);
     return {
       id: a.key,
       label: a.label,
@@ -30,6 +33,7 @@ const shape = async (accounts) => {
       is_active: !!a.isActive,
       free_minutes: a.freeMinutes,
       used_minutes: total,
+      adjustment_minutes: adjustment,
       remaining_minutes: Math.max(0, a.freeMinutes - total),
       percent_used: Math.round((total / a.freeMinutes) * 1000) / 10,
       has_certificate: a.source === 'env' ? !!a.appCertificate : true,
@@ -159,6 +163,36 @@ router.post('/:id/activate', authenticateToken, isSuperAdmin, async (req, res) =
   } catch (e) {
     console.error('Activate Agora account error:', e);
     res.status(500).json({ success: false, error: 'Failed to switch Agora account' });
+  }
+});
+
+/**
+ * POST /api/admin/agora-accounts/:id/usage   { used_minutes }   (id 'env' allowed)
+ * "Sync with the Agora console": the admin types the minutes the console shows
+ * as used this month; we store the gap between that and what we tracked, so
+ * the usage pages match from now on and keep counting on top.
+ */
+router.post('/:id/usage', authenticateToken, isSuperAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const used = Number(req.body.used_minutes);
+    if (!Number.isFinite(used) || used < 0 || used > 10000000) {
+      return res.status(400).json({ success: false, error: 'Enter the minutes used, as a number (0 or more)' });
+    }
+    if (id !== 'env') {
+      const { data: row } = await supabase.from('agora_accounts').select('id').eq('id', id).maybeSingle();
+      if (!row) return res.status(404).json({ success: false, error: 'Account not found' });
+    }
+    const [from, to] = monthRange();
+    const tracked = (await getUsage(from, to, id)).total;
+    const { error } = await supabase.from('agora_usage_adjustments').upsert({
+      agora_account: id, month: currentMonth(), minutes: Math.round(used) - tracked, updated_at: new Date(),
+    });
+    if (error) throw error;
+    res.json({ success: true, data: { accounts: await shape(await listAccounts()) } });
+  } catch (e) {
+    console.error('Sync Agora usage error:', e);
+    res.status(500).json({ success: false, error: 'Failed to update usage' });
   }
 });
 

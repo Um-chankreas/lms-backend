@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const { authenticateToken, isAdmin } = require('../middleware/auth');
-const { MINUTES_MULTIPLIER, DAY_MS, getUsage, ymd } = require('../utils/agoraUsage');
+const { MINUTES_MULTIPLIER, DAY_MS, getUsage, getAdjustment, ymd } = require('../utils/agoraUsage');
 const { listAccounts, getActiveKey } = require('../utils/agoraAccounts');
 
 /**
@@ -31,7 +31,12 @@ router.get('/', authenticateToken, isAdmin, async (req, res) => {
     const account = accounts.find((a) => a.key === wanted) || accounts[0];
     const FREE_MINUTES = account.freeMinutes;
 
-    const { daily, byClass, byKind, total, activeNow } = await getUsage(fromMs, toMs, account.key);
+    const usage = await getUsage(fromMs, toMs, account.key);
+    const { daily, byClass, byKind, activeNow } = usage;
+    const tracked = usage.total;
+    const monthKey = `${year}-${String(month + 1).padStart(2, '0')}`;
+    const adjustment = await getAdjustment(account.key, monthKey);
+    const total = Math.max(0, tracked + adjustment);
 
     const days = [];
     for (let i = 0; i < daysInMonth; i += 1) {
@@ -70,7 +75,8 @@ router.get('/', authenticateToken, isAdmin, async (req, res) => {
       .slice(0, 50);
 
     const elapsedDays = isCurrent ? Math.max(1, now.getUTCDate() - 1 + now.getUTCHours() / 24) : daysInMonth;
-    const projected = isCurrent ? Math.round((total / elapsedDays) * daysInMonth) : total;
+    // Pace comes from tracked minutes only; the manual adjustment is already spent.
+    const projected = isCurrent ? Math.round(adjustment + (tracked / elapsedDays) * daysInMonth) : total;
 
     res.json({
       success: true,
@@ -81,6 +87,7 @@ router.get('/', authenticateToken, isAdmin, async (req, res) => {
         free_minutes: FREE_MINUTES,
         minutes_multiplier: MINUTES_MULTIPLIER,
         used_minutes: total,
+        adjustment_minutes: adjustment,
         remaining_minutes: Math.max(0, FREE_MINUTES - total),
         overage_minutes: Math.max(0, total - FREE_MINUTES),
         percent_used: Math.round((total / FREE_MINUTES) * 1000) / 10,

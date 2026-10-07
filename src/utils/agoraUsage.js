@@ -145,7 +145,20 @@ async function getUsage(fromMs, toMs, account = null) {
   return { rows, daily, byClass, byKind, total, activeNow };
 }
 
+// Manual "sync with the Agora console" adjustment for an account's month (0 if none).
+async function getAdjustment(account, month) {
+  try {
+    const { data } = await supabase.from('agora_usage_adjustments')
+      .select('minutes').eq('agora_account', account).eq('month', month).maybeSingle();
+    return data?.minutes || 0;
+  } catch (err) {
+    console.error('Agora usage adjustment read failed:', err.message);
+    return 0;
+  }
+}
+
 module.exports = {
+  getAdjustment,
   FREE_MINUTES, MINUTES_MULTIPLIER, DAY_MS,
   openSession, closeUserSessions, closeClassSessions, startUsageSweeper, getUsage, ymd,
 };
