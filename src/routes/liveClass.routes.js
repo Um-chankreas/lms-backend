@@ -19,6 +19,7 @@ const {
   emitForceMute
 } = require('../realtime/liveClassSocket');
 const { v4: uuidv4 } = require('uuid');
+const { openSession, closeUserSessions } = require('../utils/agoraUsage');
 const jwt = require('jsonwebtoken');
 const { JWT_SECRET, JWT_ALGORITHM } = require('../utils/jwt');
 const { endLiveClassRecord } = require('../utils/liveClassEnd');
@@ -460,6 +461,10 @@ router.post('/:id/token', authenticateToken, async (req, res) => {
       rtcRole === 'student' ? 'student' : 'teacher'
     );
 
+    // Agora bills per minute in the channel — meter this stay (a renewal while
+    // already in the call keeps its existing open stay).
+    await openSession({ liveClassId: id, userId: req.user.userId, kind: rtcRole === 'student' ? 'student' : rtcRole });
+
     // Record the participant, reusing an existing open row so repeated
     // "join" calls (reconnects, app relaunch) don't pile up duplicates.
     const { data: openRow } = await supabase
@@ -600,6 +605,7 @@ router.post('/:id/recorder-token', async (req, res) => {
 
     const uid = recorderUidFor(id);
     const token = generateAgoraToken(liveClass.channel_name, uid, 'student');
+    await openSession({ liveClassId: id, kind: 'recorder' });
 
     res.json({
       success: true,
@@ -776,6 +782,7 @@ router.post('/:id/leave', authenticateToken, async (req, res) => {
       .is('left_at', null);
 
     if (error) throw error;
+    await closeUserSessions(id, req.user.userId);
 
     // Drop any stage state so a student who leaves stops showing as a speaker
     // / hand-raiser in the web portal.

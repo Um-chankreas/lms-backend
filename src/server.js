@@ -61,6 +61,7 @@ app.use('/api/permissions', require('./routes/permissions.routes'));
 app.use('/api/dashboard', require('./routes/dashboard.routes'));
 app.use('/api/leaderboard', require('./routes/leaderboard.routes'));
 app.use('/api/profile', require('./routes/profile.routes'));
+app.use('/api/admin/agora-usage', require('./routes/agoraUsage.routes'));
 app.use('/api/admin', require('./routes/admin.routes'));
 app.use('/api/insights', require('./routes/studentInsights.routes'));
 app.use('/api/notifications', require('./routes/notifications.routes'));
@@ -120,6 +121,9 @@ startClassScheduler();
 // Fires the once-a-day "today's most active" shout-out + "come learn"
 // reminders — see src/utils/dailyDigestScheduler.js.
 startDailyDigestScheduler();
+
+// Closes Agora usage stays that never got a leave event (see utils/agoraUsage.js).
+require('./utils/agoraUsage').startUsageSweeper();
 
 const server = httpServer.listen(PORT, HOST, () => {
   console.log(`

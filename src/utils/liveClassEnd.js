@@ -1,4 +1,5 @@
 const supabase = require('../config/supabase');
+const { closeClassSessions } = require('./agoraUsage');
 
 /**
  * Database side of ending a live class: mark it completed, mark everyone as
@@ -23,6 +24,8 @@ async function endLiveClassRecord(id) {
     .update({ left_at: now })
     .eq('live_class_id', id)
     .is('left_at', null);
+
+  await closeClassSessions(id, now);
 
   await supabase
     .from('live_class_hand_raises')

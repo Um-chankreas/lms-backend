@@ -4,6 +4,7 @@ const { verifyToken } = require('../utils/jwt');
 const { corsOrigin } = require('../config/cors');
 const { generateAgoraUid } = require('../utils/agoraUid');
 const { endLiveClassRecord } = require('../utils/liveClassEnd');
+const { closeUserSessions } = require('../utils/agoraUsage');
 const { hasCourseSubscription } = require('../utils/access');
 
 /**
@@ -342,6 +343,8 @@ async function markLeftIfGone(liveClassId, userId) {
     .eq('live_class_id', liveClassId)
     .eq('user_id', userId)
     .is('left_at', null);
+
+  await closeUserSessions(liveClassId, userId);
 
   await supabase
     .from('live_class_hand_raises')
