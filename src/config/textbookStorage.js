@@ -264,6 +264,18 @@ async function getPublicObject(bucket, name) {
   return Buffer.from(await res.arrayBuffer());
 }
 
+/**
+ * Download an object's bytes from a *private* bucket, via a presigned URL
+ * (the public path doesn't exist for those). Used to move a formula sheet.
+ */
+async function getObject(bucket, name) {
+  const url = presignedUrl(bucket, name, 300);
+  if (!url) throw new Error('textbook storage is not configured');
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`could not read ${name} (${res.status})`);
+  return Buffer.from(await res.arrayBuffer());
+}
+
 /** name -> size for every cover image (<stem>.jpg) in a listing. */
 const coverIndex = (entries) =>
   new Map(entries.filter(e => /\.jpg$/i.test(e.name)).map(e => [e.name, e.size]));
@@ -279,6 +291,6 @@ const coverUrl = (bucket, stem, covers) => {
 };
 
 module.exports = {
-  isConfigured, listBucket, publicUrl, putObject, deleteObject, getPublicObject,
+  isConfigured, listBucket, publicUrl, putObject, deleteObject, getPublicObject, getObject,
   coverIndex, coverUrl, presignedUrl,
 };

@@ -2,9 +2,12 @@ const express = require('express');
 const multer = require('multer');
 const router = express.Router();
 const textbookStorage = require('../config/textbookStorage');
+const supabase = require('../config/supabase');
+const libraryTitles = require('../utils/libraryTitles');
 const { authenticateToken, isAdmin } = require('../middleware/auth');
 const { SUBJECTS, VARIANTS, LANGUAGES } = require('../utils/textbookNames');
 const { TOPICS } = require('../utils/pastPaperNames');
+const { QUALIFIERS, SOURCES } = require('../utils/formulaNames');
 
 /**
  * Uploading to the Library from the web portal.
@@ -40,7 +43,44 @@ const upload = multer({
   limits: { fileSize: MAX_PDF_BYTES, files: 2 },
 });
 
-const BUCKETS = { textbook: 'textbook-chapters', 'past-paper': 'past-papers' };
+const BUCKETS = { textbook: 'textbook-chapters', 'past-paper': 'past-papers', formula: 'Formula' };
+
+// Formula covers live in this project's public bucket, not beside the PDF: the
+// Formula bucket is private (see formulas.routes.js).
+const FORMULA_COVER_BUCKET = 'course-materials';
+const FORMULA_COVER_PREFIX = 'formula-covers';
+const formulaCoverPath = (stem) => `${FORMULA_COVER_PREFIX}/${stem}.jpg`;
+
+/** Where a kind's cover images live, behind one interface. */
+const covers = {
+  async put(kind, bucket, stem, buffer) {
+    if (kind === 'formula') {
+      const { error } = await supabase.storage.from(FORMULA_COVER_BUCKET)
+        .upload(formulaCoverPath(stem), buffer, { contentType: 'image/jpeg', upsert: true });
+      if (error) throw new Error(`cover upload failed: ${error.message}`);
+      return;
+    }
+    await textbookStorage.putObject(bucket, `${stem}.jpg`, buffer, 'image/jpeg');
+  },
+  async remove(kind, bucket, stem) {
+    if (kind === 'formula') {
+      await supabase.storage.from(FORMULA_COVER_BUCKET).remove([formulaCoverPath(stem)]);
+      return;
+    }
+    await textbookStorage.deleteObject(bucket, `${stem}.jpg`);
+  },
+  /** Move a cover to follow its PDF's rename. A missing cover is fine. */
+  async move(kind, bucket, existing, oldStem, newStem) {
+    if (kind === 'formula') {
+      await supabase.storage.from(FORMULA_COVER_BUCKET).move(formulaCoverPath(oldStem), formulaCoverPath(newStem));
+      return;
+    }
+    if (!existing.some(o => o.name === `${oldStem}.jpg`)) return;
+    const bytes = await textbookStorage.getPublicObject(bucket, `${oldStem}.jpg`);
+    await textbookStorage.putObject(bucket, `${newStem}.jpg`, bytes, 'image/jpeg');
+    await textbookStorage.deleteObject(bucket, `${oldStem}.jpg`);
+  },
+};
 const PAPER_SUFFIX = { questions: '-key-questions', answers: '-answers', paper: '' };
 
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -48,8 +88,54 @@ const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 class FormError extends Error {}
 
+/**
+ * <8-digit id>-<subject>-formulas[-qualifier]-gNN[-gNN][-source][-language][-vN].pdf
+ * (the shape utils/formulaNames.js parses). The id is an upload id, not an
+ * order: it is generated, never typed.
+ */
+function buildFormulaName(f, uploadId) {
+  const subject = String(f.subject || '').toLowerCase();
+  if (!SUBJECTS[subject]) throw new FormError('Unknown subject');
+
+  const from = parseInt(f.grade_from, 10);
+  if (!Number.isInteger(from) || from < 1 || from > 12) throw new FormError('grade must be 1-12');
+  const toRaw = f.grade_to === '' || f.grade_to == null ? from : parseInt(f.grade_to, 10);
+  if (!Number.isInteger(toRaw) || toRaw < from || toRaw > 12) {
+    throw new FormError('"to" grade must be between the first grade and 12');
+  }
+
+  const qualifier = String(f.qualifier || '').toLowerCase();
+  if (qualifier && !QUALIFIERS[qualifier]) throw new FormError('Unknown sheet type');
+  const source = String(f.source || '').toLowerCase();
+  if (source && !SOURCES[source]) throw new FormError('Unknown source');
+  const language = String(f.language || '').toLowerCase();
+  if (language && !LANGUAGES.has(language)) throw new FormError('Unknown language');
+  const version = f.version === '' || f.version == null ? 1 : parseInt(f.version, 10);
+  if (!Number.isInteger(version) || version < 1 || version > 99) throw new FormError('version must be 1-99');
+
+  const parts = [uploadId, subject, 'formulas'];
+  if (qualifier) parts.push(qualifier);
+  parts.push(`g${pad2(from)}`);
+  if (toRaw !== from) parts.push(`g${pad2(toRaw)}`);
+  if (source) parts.push(source);
+  if (language) parts.push(language);
+  if (version > 1) parts.push(`v${version}`);
+  return `${parts.join('-')}.pdf`;
+}
+
+/** Next free 8-digit upload id for the Formula bucket. */
+const nextFormulaId = (existing) => {
+  const max = existing.reduce((m, o) => {
+    const n = /^(\d{6,})-/.exec(o.name);
+    return n ? Math.max(m, parseInt(n[1], 10)) : m;
+  }, 0);
+  return String(max + 1).padStart(8, '0');
+};
+
 /** Build the bucket filename for the submitted fields, or throw FormError. */
-function buildName(kind, f) {
+function buildName(kind, f, uploadId) {
+  if (kind === 'formula') return buildFormulaName(f, uploadId);
+
   const order = parseInt(f.order, 10);
   if (!Number.isInteger(order) || order < 0 || order > 99) {
     throw new FormError('order must be a number from 0 to 99');
@@ -97,6 +183,8 @@ router.get('/options', authenticateToken, isAdmin, (req, res) => {
       variants: pick(VARIANTS),
       languages: [...LANGUAGES],
       topics: Object.entries(TOPICS).map(([slug, v]) => ({ slug, km: v.km, en: v.en })),
+      formula_qualifiers: Object.entries(QUALIFIERS).map(([slug, v]) => ({ slug, km: v.km, en: v.en })),
+      formula_sources: Object.entries(SOURCES).map(([slug, v]) => ({ slug, km: v.km, en: v.en })),
     },
   });
 });
@@ -128,7 +216,7 @@ router.post('/upload', authenticateToken, isAdmin, (req, res) => {
 
       const kind = req.body.kind;
       if (!BUCKETS[kind]) {
-        return res.status(400).json({ success: false, error: 'kind must be textbook or past-paper' });
+        return res.status(400).json({ success: false, error: 'kind must be textbook, past-paper or formula' });
       }
 
       if (cover) {
@@ -136,17 +224,18 @@ router.post('/upload', authenticateToken, isAdmin, (req, res) => {
         if (problem) return res.status(400).json({ success: false, error: problem });
       }
 
+      const bucket = BUCKETS[kind];
+      const existing = await textbookStorage.listBucket(bucket);
+
       let name;
       try {
-        name = buildName(kind, req.body);
+        name = buildName(kind, req.body, kind === 'formula' ? nextFormulaId(existing) : undefined);
       } catch (e) {
         if (e instanceof FormError) return res.status(400).json({ success: false, error: e.message });
         throw e;
       }
 
       // S3 PUT overwrites silently; refuse unless the uploader asked to replace.
-      const bucket = BUCKETS[kind];
-      const existing = await textbookStorage.listBucket(bucket);
       if (existing.some(o => o.name === name) && req.body.overwrite !== 'true') {
         return res.status(409).json({
           success: false,
@@ -156,9 +245,9 @@ router.post('/upload', authenticateToken, isAdmin, (req, res) => {
       }
 
       const fileUrl = await textbookStorage.putObject(bucket, name, file.buffer, 'application/pdf');
-      if (cover) {
-        await textbookStorage.putObject(bucket, `${name.replace(/\.pdf$/, '')}.jpg`, cover.buffer, 'image/jpeg');
-      }
+      if (cover) await covers.put(kind, bucket, name.replace(/\.pdf$/, ''), cover.buffer);
+      // Optional hand-written title; without one the filename-derived title is used.
+      if (req.body.title) await libraryTitles.save(kind, name.replace(/\.pdf$/, ''), req.body.title, req.body.subtitle);
 
       clearShelfCache(kind);
 
@@ -170,8 +259,8 @@ router.post('/upload', authenticateToken, isAdmin, (req, res) => {
   });
 });
 
-const clearShelfCache = (kind) =>
-  require(kind === 'textbook' ? './textbooks.routes' : './pastPapers.routes').clearCache();
+const SHELF_ROUTES = { textbook: './textbooks.routes', 'past-paper': './pastPapers.routes', formula: './formulas.routes' };
+const clearShelfCache = (kind) => require(SHELF_ROUTES[kind]).clearCache();
 
 /** Shared guard: configured storage, valid kind, and the file really exists. */
 async function findExisting(req, res) {
@@ -181,7 +270,7 @@ async function findExisting(req, res) {
   }
   const { kind, id } = req.params;
   if (!BUCKETS[kind]) {
-    res.status(400).json({ success: false, error: 'kind must be textbook or past-paper' });
+    res.status(400).json({ success: false, error: 'kind must be textbook, past-paper or formula' });
     return null;
   }
   const name = `${id}.pdf`;
@@ -205,30 +294,42 @@ router.put('/:kind/:id', authenticateToken, isAdmin, express.json(), async (req,
 
     let newName;
     try {
-      newName = buildName(req.params.kind, req.body);
+      // A formula keeps its upload id across edits; a file that never had one
+      // (a mis-named upload) is given the next free id.
+      const keptId = /^(\d{6,})-/.exec(found.name)?.[1];
+      newName = buildName(req.params.kind, req.body,
+        req.params.kind === 'formula' ? (keptId || nextFormulaId(found.existing)) : undefined);
     } catch (e) {
       if (e instanceof FormError) return res.status(400).json({ success: false, error: e.message });
       throw e;
     }
+    const oldStem = req.params.id;
+    const newStem = newName.replace(/\.pdf$/, '');
+    // The title override is keyed by file id, so it follows a rename; a `title`
+    // in the body sets it (empty clears it back to the filename-derived one).
+    const applyTitle = async () => {
+      await libraryTitles.move(req.params.kind, oldStem, newStem);
+      if ('title' in req.body) await libraryTitles.save(req.params.kind, newStem, req.body.title, req.body.subtitle);
+      clearShelfCache(req.params.kind);
+    };
     if (newName === found.name) {
+      await applyTitle();
       return res.json({ success: true, data: { name: newName, unchanged: true } });
     }
     if (found.existing.some(o => o.name === newName)) {
       return res.status(409).json({ success: false, error: `${newName} already exists. Pick a different order number.` });
     }
 
-    const bytes = await textbookStorage.getPublicObject(found.bucket, found.name);
+    // The Formula bucket is private, so its bytes come through a signed URL.
+    const bytes = req.params.kind === 'formula'
+      ? await textbookStorage.getObject(found.bucket, found.name)
+      : await textbookStorage.getPublicObject(found.bucket, found.name);
     const fileUrl = await textbookStorage.putObject(found.bucket, newName, bytes, 'application/pdf');
     await textbookStorage.deleteObject(found.bucket, found.name);
 
     // A cover is named after its PDF, so it has to follow the rename.
-    const oldCover = `${req.params.id}.jpg`;
-    if (found.existing.some(o => o.name === oldCover)) {
-      const coverBytes = await textbookStorage.getPublicObject(found.bucket, oldCover);
-      await textbookStorage.putObject(found.bucket, `${newName.replace(/\.pdf$/, '')}.jpg`, coverBytes, 'image/jpeg');
-      await textbookStorage.deleteObject(found.bucket, oldCover);
-    }
-    clearShelfCache(req.params.kind);
+    await covers.move(req.params.kind, found.bucket, found.existing, req.params.id, newStem);
+    await applyTitle();
 
     res.json({ success: true, data: { name: newName, file_url: fileUrl } });
   } catch (error) {
@@ -243,8 +344,10 @@ router.delete('/:kind/:id', authenticateToken, isAdmin, async (req, res) => {
     const found = await findExisting(req, res);
     if (!found) return;
     await textbookStorage.deleteObject(found.bucket, found.name);
-    const cover = `${req.params.id}.jpg`;
-    if (found.existing.some(o => o.name === cover)) await textbookStorage.deleteObject(found.bucket, cover);
+    if (req.params.kind === 'formula' || found.existing.some(o => o.name === `${req.params.id}.jpg`)) {
+      await covers.remove(req.params.kind, found.bucket, req.params.id);
+    }
+    await libraryTitles.remove(req.params.kind, req.params.id);
     clearShelfCache(req.params.kind);
     res.json({ success: true, data: { name: found.name } });
   } catch (error) {
@@ -264,10 +367,9 @@ router.put('/:kind/:id/cover', authenticateToken, isAdmin, (req, res) => {
       const problem = coverProblem(req.file);
       if (problem) return res.status(400).json({ success: false, error: problem });
 
-      const name = `${req.params.id}.jpg`;
-      await textbookStorage.putObject(found.bucket, name, req.file.buffer, 'image/jpeg');
+      await covers.put(req.params.kind, found.bucket, req.params.id, req.file.buffer);
       clearShelfCache(req.params.kind);
-      res.json({ success: true, data: { name } });
+      res.json({ success: true, data: { name: `${req.params.id}.jpg` } });
     } catch (error) {
       console.error('Library cover error:', error);
       res.status(500).json({ success: false, error: 'Cover upload failed: ' + error.message });
@@ -280,7 +382,7 @@ router.delete('/:kind/:id/cover', authenticateToken, isAdmin, async (req, res) =
   try {
     const found = await findExisting(req, res);
     if (!found) return;
-    await textbookStorage.deleteObject(found.bucket, `${req.params.id}.jpg`);
+    await covers.remove(req.params.kind, found.bucket, req.params.id);
     clearShelfCache(req.params.kind);
     res.json({ success: true });
   } catch (error) {

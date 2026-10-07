@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const textbookStorage = require('../config/textbookStorage');
+const libraryTitles = require('../utils/libraryTitles');
 const { optionalAuth } = require('../middleware/auth');
 const { parseTextbookName } = require('../utils/textbookNames');
 
@@ -138,6 +139,8 @@ async function listAll() {
     (a.grade ?? 99) - (b.grade ?? 99) ||
     a.order_number - b.order_number ||
     a.id.localeCompare(b.id));
+
+  libraryTitles.apply(books, await libraryTitles.load('textbook'));
 
   cache = { at: Date.now(), books };
   return books;

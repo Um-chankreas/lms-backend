@@ -4,6 +4,7 @@ const supabase = require('../config/supabase');
 const textbookStorage = require('../config/textbookStorage');
 const { optionalAuth } = require('../middleware/auth');
 const { parseFormulaName } = require('../utils/formulaNames');
+const libraryTitles = require('../utils/libraryTitles');
 
 /**
  * Formula sheets — the `Formula` bucket's revision summaries.
@@ -81,6 +82,9 @@ async function listAll() {
     (a.parsed.grade_from ?? 99) - (b.parsed.grade_from ?? 99) ||
     a.parsed.id.localeCompare(b.parsed.id));
 
+  // Hand-written titles override the filename-derived ones.
+  libraryTitles.apply(sheets.map(s => s.parsed), await libraryTitles.load('formula'));
+
   cache = { at: Date.now(), sheets };
   return sheets;
 }
@@ -92,12 +96,15 @@ async function listAll() {
 const COVER_BUCKET = 'course-materials';
 const COVER_PREFIX = 'formula-covers';
 
-const coverUrl = (id) =>
-  `${process.env.SUPABASE_URL}/storage/v1/object/public/${COVER_BUCKET}/${COVER_PREFIX}/${encodeURIComponent(id)}.jpg`;
+const coverUrl = (id, version) =>
+  `${process.env.SUPABASE_URL}/storage/v1/object/public/${COVER_BUCKET}/${COVER_PREFIX}/${encodeURIComponent(id)}.jpg?v=${version || 0}`;
 
-/** Ids that actually have a cover, so the app is never handed a 404. */
+/**
+ * Ids that actually have a cover (id -> last-modified ms), so the app is never
+ * handed a 404 and a replaced cover (same filename) busts caches via ?v=.
+ */
 async function coveredIds() {
-  const ids = new Set();
+  const ids = new Map();
   for (let offset = 0; ; offset += 100) {
     const { data, error } = await supabase.storage
       .from(COVER_BUCKET)
@@ -106,7 +113,7 @@ async function coveredIds() {
       console.warn('could not list formula covers:', error.message);
       break;
     }
-    for (const f of data || []) ids.add(f.name.replace(/\.jpg$/, ''));
+    for (const f of data || []) ids.set(f.name.replace(/\.jpg$/, ''), Date.parse(f.updated_at || f.created_at || '') || 0);
     if (!data || data.length < 100) break;
   }
   return ids;
@@ -125,13 +132,15 @@ function toPublic({ parsed, size }, covers) {
     grade_from: parsed.grade_from,
     grade_to: parsed.grade_to,
     qualifier_slug: parsed.qualifier_slug,
+    source_slug: parsed.source_slug,
     source: parsed.source_en,
     language: parsed.language,
     version: parsed.version,
+    title_custom: !!parsed.title_custom,
     // Presigned: private bucket, so this is the only way in — and it lapses.
     file_url: textbookStorage.presignedUrl(BUCKET, parsed.filename, URL_TTL_SECONDS),
     file_url_expires_at: expiresAt,
-    cover_url: covers && covers.has(parsed.id) ? coverUrl(parsed.id) : null,
+    cover_url: covers && covers.has(parsed.id) ? coverUrl(parsed.id, covers.get(parsed.id)) : null,
     page_count: null,
     file_size: size,
   };
@@ -184,5 +193,7 @@ router.get('/:id', optionalAuth, async (req, res) => {
     res.status(500).json({ success: false, error: 'Failed to fetch formula: ' + error.message });
   }
 });
+
+router.clearCache = () => { cache = { at: 0, sheets: null }; };
 
 module.exports = router;

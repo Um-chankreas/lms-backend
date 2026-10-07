@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const textbookStorage = require('../config/textbookStorage');
+const libraryTitles = require('../utils/libraryTitles');
 const { optionalAuth } = require('../middleware/auth');
 const { parsePastPaperName } = require('../utils/pastPaperNames');
 
@@ -150,6 +151,8 @@ async function listAll() {
   // The number the uploader put at the front is the intended reading order.
   papers.sort((a, b) => a.order_number - b.order_number || a.id.localeCompare(b.id));
   linkPairs(papers);
+
+  libraryTitles.apply(papers, await libraryTitles.load('past-paper'));
 
   cache = { at: Date.now(), papers };
   return papers;
