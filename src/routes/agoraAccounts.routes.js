@@ -83,7 +83,7 @@ router.post('/', authenticateToken, isSuperAdmin, async (req, res) => {
   }
 });
 
-/** PUT /api/admin/agora-accounts/:id  { label?, email?, free_minutes?, app_certificate? } */
+/** PUT /api/admin/agora-accounts/:id  { label?, email?, app_id?, free_minutes?, app_certificate? } */
 router.put('/:id', authenticateToken, isSuperAdmin, async (req, res) => {
   try {
     if (req.params.id === 'env') return res.status(400).json({ success: false, error: 'The default account is set in the server .env' });
@@ -101,6 +101,23 @@ router.put('/:id', authenticateToken, isSuperAdmin, async (req, res) => {
       const f = parseInt(req.body.free_minutes, 10);
       if (!Number.isInteger(f) || f < 1) return res.status(400).json({ success: false, error: 'Free minutes must be a positive number' });
       patch.free_minutes = f;
+    }
+    if (req.body.app_id !== undefined) {
+      const appId = clean(req.body.app_id);
+      if (!HEX32.test(appId)) return res.status(400).json({ success: false, error: 'App ID must be 32 letters/numbers' });
+      const { data: cur } = await supabase.from('agora_accounts').select('app_id').eq('id', req.params.id).maybeSingle();
+      if (cur && cur.app_id.toLowerCase() !== appId.toLowerCase()) {
+        // Changing the App ID under a class that is mid-flight would strand the
+        // people already in it (and tokens would no longer match).
+        const { count } = await supabase.from('live_classes').select('id', { count: 'exact', head: true })
+          .eq('agora_account', req.params.id).in('status', ['active', 'scheduled']);
+        if (count) return res.status(409).json({ success: false, error: 'A live class is using this account — change the App ID after it ends' });
+        const { data: dupe } = await supabase.from('agora_accounts').select('id').eq('app_id', appId).neq('id', req.params.id).maybeSingle();
+        if (dupe || appId.toLowerCase() === String(process.env.AGORA_APP_ID || '').toLowerCase()) {
+          return res.status(409).json({ success: false, error: 'This App ID is already added' });
+        }
+        patch.app_id = appId;
+      }
     }
     if (req.body.app_certificate) {
       const cert = clean(req.body.app_certificate);
