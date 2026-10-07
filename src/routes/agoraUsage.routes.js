@@ -2,7 +2,8 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const { authenticateToken, isAdmin } = require('../middleware/auth');
-const { FREE_MINUTES, MINUTES_MULTIPLIER, DAY_MS, getUsage, ymd } = require('../utils/agoraUsage');
+const { MINUTES_MULTIPLIER, DAY_MS, getUsage, ymd } = require('../utils/agoraUsage');
+const { listAccounts, getActiveKey } = require('../utils/agoraAccounts');
 
 /**
  * GET /api/admin/agora-usage?month=YYYY-MM   (default: this month, UTC)
@@ -24,7 +25,13 @@ router.get('/', authenticateToken, isAdmin, async (req, res) => {
     const isCurrent = now.getTime() >= fromMs && now.getTime() < toMs;
     const daysInMonth = Math.round((toMs - fromMs) / DAY_MS);
 
-    const { daily, byClass, byKind, total, activeNow } = await getUsage(fromMs, toMs);
+    // ?account=<id|env> picks an Agora account; default is the active one.
+    const accounts = await listAccounts();
+    const wanted = String(req.query.account || '') || await getActiveKey();
+    const account = accounts.find((a) => a.key === wanted) || accounts[0];
+    const FREE_MINUTES = account.freeMinutes;
+
+    const { daily, byClass, byKind, total, activeNow } = await getUsage(fromMs, toMs, account.key);
 
     const days = [];
     for (let i = 0; i < daysInMonth; i += 1) {
@@ -68,6 +75,7 @@ router.get('/', authenticateToken, isAdmin, async (req, res) => {
     res.json({
       success: true,
       data: {
+        account: { id: account.key, label: account.label, app_id: account.appId || null },
         month: `${year}-${String(month + 1).padStart(2, '0')}`,
         is_current_month: isCurrent,
         free_minutes: FREE_MINUTES,

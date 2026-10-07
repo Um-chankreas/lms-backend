@@ -6,7 +6,8 @@ const { authenticateToken, isTeacher } = require('../middleware/auth');
 const { hasCourseSubscription, subscribedCourseIds } = require('../utils/access');
 const { awardXp, XP_VALUES } = require('../utils/xp');
 const { evaluateAchievements } = require('../utils/achievements');
-const { generateAgoraToken, appId } = require('../utils/agoraToken');
+const { generateAgoraToken } = require('../utils/agoraToken');
+const { credentialsFor, accountKeyForClass, getActiveKey } = require('../utils/agoraAccounts');
 const { generateAgoraUid } = require('../utils/agoraUid');
 const {
   getStage,
@@ -128,7 +129,7 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
         success: true,
         reused: true,
         message: 'This class is already live — rejoining the running session',
-        data: { appId, liveClass: { ...running, join_url: joinUrlFor(running.id) } }
+        data: { appId: (await credentialsFor(running.agora_account)).appId, liveClass: { ...running, join_url: joinUrlFor(running.id) } }
       });
     }
 
@@ -160,7 +161,9 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
       success: true,
       message: 'Live class created successfully',
       data: {
-        appId,
+        // Informational: the account is pinned when the class starts, and the
+        // token response carries the App ID clients must actually join with.
+        appId: (await credentialsFor(await getActiveKey())).appId,
         liveClass: { ...newClass, join_url: joinUrlFor(newClass.id) }
       }
     });
@@ -455,15 +458,21 @@ router.post('/:id/token', authenticateToken, async (req, res) => {
     }
 
     const numericUid = generateAgoraUid(req.user.userId);
+    // Every participant of a class must use the same Agora App ID, so the
+    // account is pinned per class (see sql/048_agora_accounts.sql).
+    const accountKey = await accountKeyForClass(liveClass);
+    const creds = await credentialsFor(accountKey);
     const token = generateAgoraToken(
       liveClass.channel_name,
       numericUid,
-      rtcRole === 'student' ? 'student' : 'teacher'
+      rtcRole === 'student' ? 'student' : 'teacher',
+      undefined,
+      creds
     );
 
     // Agora bills per minute in the channel — meter this stay (a renewal while
     // already in the call keeps its existing open stay).
-    await openSession({ liveClassId: id, userId: req.user.userId, kind: rtcRole === 'student' ? 'student' : rtcRole });
+    await openSession({ liveClassId: id, userId: req.user.userId, kind: rtcRole === 'student' ? 'student' : rtcRole, account: accountKey });
 
     // Record the participant, reusing an existing open row so repeated
     // "join" calls (reconnects, app relaunch) don't pile up duplicates.
@@ -514,7 +523,7 @@ router.post('/:id/token', authenticateToken, async (req, res) => {
       success: true,
       data: {
         token,
-        appId,
+        appId: creds.appId,
         channel: liveClass.channel_name,
         uid: numericUid,
         role: rtcRole, // 'teacher' | 'student' | 'co_host'
@@ -595,7 +604,7 @@ router.post('/:id/recorder-token', async (req, res) => {
 
     const { data: liveClass } = await supabase
       .from('live_classes')
-      .select('id, title, status, channel_name')
+      .select('id, title, status, channel_name, agora_account')
       .eq('id', id)
       .maybeSingle();
     if (!liveClass) return res.status(404).json({ success: false, error: 'Live class not found' });
@@ -604,14 +613,16 @@ router.post('/:id/recorder-token', async (req, res) => {
     }
 
     const uid = recorderUidFor(id);
-    const token = generateAgoraToken(liveClass.channel_name, uid, 'student');
-    await openSession({ liveClassId: id, kind: 'recorder' });
+    const accountKey = await accountKeyForClass(liveClass);
+    const creds = await credentialsFor(accountKey);
+    const token = generateAgoraToken(liveClass.channel_name, uid, 'student', undefined, creds);
+    await openSession({ liveClassId: id, kind: 'recorder', account: accountKey });
 
     res.json({
       success: true,
       data: {
         token,
-        appId,
+        appId: creds.appId,
         channel: liveClass.channel_name,
         uid,
         liveClass: { id: liveClass.id, title: liveClass.title, status: liveClass.status }
@@ -690,11 +701,16 @@ router.put('/:id/start', authenticateToken, isTeacher, async (req, res) => {
       });
     }
 
+    // Pin the class to whichever Agora account is active right now (only on
+    // the real start — a repeat call must not move a running class).
+    const pin = liveClass.status !== 'active' ? { agora_account: await getActiveKey() } : {};
+
     const { data: updatedClass, error } = await supabase
       .from('live_classes')
       .update({
         status: 'active',
-        started_at: new Date()
+        started_at: new Date(),
+        ...pin
       })
       .eq('id', id)
       .select()

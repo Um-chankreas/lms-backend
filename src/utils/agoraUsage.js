@@ -16,7 +16,7 @@ const DAY_MS = 24 * 3600 * 1000;
 // Metering must never break joining a class, so every write swallows errors.
 
 /** Start a metered stay unless this user already has an open one (token renewals re-hit /token). */
-async function openSession({ liveClassId, userId = null, kind }) {
+async function openSession({ liveClassId, userId = null, kind, account = 'env' }) {
   try {
     let q = supabase.from('agora_usage_sessions').select('id')
       .eq('live_class_id', liveClassId).eq('kind', kind).is('ended_at', null);
@@ -24,7 +24,7 @@ async function openSession({ liveClassId, userId = null, kind }) {
     const { data: open } = await q.limit(1).maybeSingle();
     if (open) return;
     await supabase.from('agora_usage_sessions').insert({
-      id: uuidv4(), live_class_id: liveClassId, user_id: userId, kind, started_at: new Date(),
+      id: uuidv4(), live_class_id: liveClassId, user_id: userId, kind, agora_account: account, started_at: new Date(),
     });
   } catch (err) {
     console.error('Agora usage openSession failed:', err.message);
@@ -98,15 +98,16 @@ const ymd = (ms) => new Date(ms).toISOString().slice(0, 10);
  * day's slice rounded up to a whole minute, like per-minute billing. Open
  * stays count up to now.
  */
-async function getUsage(fromMs, toMs) {
+async function getUsage(fromMs, toMs, account = null) {
   const now = Date.now();
   const rows = [];
   for (let from = 0; ; from += 1000) {
-    const { data, error } = await supabase.from('agora_usage_sessions')
+    let q = supabase.from('agora_usage_sessions')
       .select('live_class_id, user_id, kind, started_at, ended_at')
       .lt('started_at', new Date(toMs).toISOString())
-      .or(`ended_at.is.null,ended_at.gte.${new Date(fromMs).toISOString()}`)
-      .order('started_at').range(from, from + 999);
+      .or(`ended_at.is.null,ended_at.gte.${new Date(fromMs).toISOString()}`);
+    if (account) q = q.eq('agora_account', account);
+    const { data, error } = await q.order('started_at').range(from, from + 999);
     if (error) throw error;
     rows.push(...(data || []));
     if (!data || data.length < 1000) break;

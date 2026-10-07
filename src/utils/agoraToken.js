@@ -26,9 +26,13 @@ const DEFAULT_TTL_SECONDS = parseInt(process.env.AGORA_TOKEN_TTL_SECONDS, 10) ||
  * passed `now + ttl`, i.e. a ~56-year lifetime, and left privilegeExpire at 0,
  * so the intended 1-hour expiry was never actually encoded in the token.)
  */
-const generateAgoraToken = (channel, uid, role, expirationTimeInSeconds = DEFAULT_TTL_SECONDS) => {
+// `creds` ({ appId, appCertificate }) picks the Agora account; omitted = the
+// .env one. See utils/agoraAccounts.js.
+const generateAgoraToken = (channel, uid, role, expirationTimeInSeconds = DEFAULT_TTL_SECONDS, creds = null) => {
   try {
-    if (!appId || !appCertificate) {
+    const useAppId = creds?.appId || appId;
+    const useCert = creds?.appCertificate || appCertificate;
+    if (!useAppId || !useCert) {
       throw new Error('Agora credentials not configured in .env file');
     }
 
@@ -42,8 +46,8 @@ const generateAgoraToken = (channel, uid, role, expirationTimeInSeconds = DEFAUL
     const agoraRole = role === 'teacher' ? RtcRole.PUBLISHER : RtcRole.SUBSCRIBER;
 
     const token = RtcTokenBuilder.buildTokenWithUid(
-      appId,
-      appCertificate,
+      useAppId,
+      useCert,
       channel,
       uid,
       agoraRole,
