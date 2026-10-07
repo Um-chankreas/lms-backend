@@ -3,7 +3,7 @@ const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const supabase = require('../config/supabase');
 const { authenticateToken, isAdmin, isSuperAdmin } = require('../middleware/auth');
-const { listAccounts, encrypt } = require('../utils/agoraAccounts');
+const { listAccounts, encrypt, importedEnvId, envAccount } = require('../utils/agoraAccounts');
 const { getUsage, getAdjustment } = require('../utils/agoraUsage');
 
 // Agora App IDs and App Certificates are 32-character hex strings.
@@ -84,6 +84,43 @@ router.post('/', authenticateToken, isSuperAdmin, async (req, res) => {
   } catch (e) {
     console.error('Add Agora account error:', e);
     res.status(500).json({ success: false, error: 'Failed to add Agora account' });
+  }
+});
+
+/**
+ * POST /api/admin/agora-accounts/env/import
+ * "Make editable": copies the .env account into the database (certificate
+ * encrypted) so it can be edited and deleted like any other. Everything keyed
+ * 'env' (pinned classes, usage, synced minutes, active state) moves to the new
+ * row, and the .env card is hidden from then on.
+ */
+router.post('/env/import', authenticateToken, isSuperAdmin, async (req, res) => {
+  try {
+    const env = envAccount();
+    if (!env.appId || !env.appCertificate) {
+      return res.status(400).json({ success: false, error: 'AGORA_APP_ID / AGORA_APP_CERTIFICATE are not set in the server .env' });
+    }
+    if (await importedEnvId()) {
+      return res.status(409).json({ success: false, error: 'The default account is already editable' });
+    }
+    const { data: anyActive } = await supabase.from('agora_accounts').select('id').eq('is_active', true).maybeSingle();
+
+    const id = uuidv4();
+    const { error } = await supabase.from('agora_accounts').insert({
+      id, label: 'Default', email: env.email, app_id: env.appId, app_certificate_enc: encrypt(env.appCertificate),
+      free_minutes: env.freeMinutes, is_active: !anyActive,   // .env was active when no stored account was
+    });
+    if (error) throw error;
+
+    // Re-point everything that referred to the .env account.
+    await supabase.from('live_classes').update({ agora_account: id }).eq('agora_account', 'env');
+    await supabase.from('agora_usage_sessions').update({ agora_account: id }).eq('agora_account', 'env');
+    await supabase.from('agora_usage_adjustments').update({ agora_account: id }).eq('agora_account', 'env');
+
+    res.status(201).json({ success: true, data: { accounts: await shape(await listAccounts()) } });
+  } catch (e) {
+    console.error('Import .env Agora account error:', e);
+    res.status(500).json({ success: false, error: 'Failed to make the default account editable' });
   }
 });
 

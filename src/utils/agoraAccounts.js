@@ -56,17 +56,30 @@ async function listDbRows() {
   return data || [];
 }
 
-/** All accounts (the .env one first), without certificates. */
+/**
+ * id of the stored account that was made from the .env one ("Make editable"),
+ * recognised by its App ID — or null. Once it exists the .env card is hidden
+ * and 'env' keys resolve to it.
+ */
+async function importedEnvId() {
+  const appId = process.env.AGORA_APP_ID;
+  if (!appId) return null;
+  const { data } = await supabase.from('agora_accounts').select('id').eq('app_id', appId).maybeSingle();
+  return data?.id || null;
+}
+
+/** All accounts (the .env one first unless it has been made editable), without certificates. */
 async function listAccounts() {
   const rows = await listDbRows();
+  const imported = rows.some((r) => r.app_id === process.env.AGORA_APP_ID);
   const anyActive = rows.some((r) => r.is_active);
-  return [{ ...envAccount(), isActive: !anyActive }, ...rows.map(fromRow)];
+  return [...(imported ? [] : [{ ...envAccount(), isActive: !anyActive }]), ...rows.map(fromRow)];
 }
 
 /** Key of the account new classes should use: 'env' or an agora_accounts.id. */
 async function getActiveKey() {
   const { data } = await supabase.from('agora_accounts').select('id').eq('is_active', true).maybeSingle();
-  return data?.id || 'env';
+  return data?.id || (await importedEnvId()) || 'env';
 }
 
 /** { appId, appCertificate } for an account key; unknown/deleted falls back to .env. */
@@ -85,11 +98,11 @@ async function credentialsFor(key) {
 async function accountKeyForClass(liveClass) {
   if (liveClass.agora_account) return liveClass.agora_account;
   // Already running with nothing pinned = started before accounts existed.
-  const key = liveClass.status === 'active' ? 'env' : await getActiveKey();
+  const key = liveClass.status === 'active' ? ((await importedEnvId()) || 'env') : await getActiveKey();
   await supabase.from('live_classes').update({ agora_account: key }).eq('id', liveClass.id);
   return key;
 }
 
 module.exports = {
-  ENV_FREE_MINUTES, encrypt, decrypt, envAccount, listAccounts, getActiveKey, credentialsFor, accountKeyForClass,
+  ENV_FREE_MINUTES, importedEnvId, encrypt, decrypt, envAccount, listAccounts, getActiveKey, credentialsFor, accountKeyForClass,
 };
