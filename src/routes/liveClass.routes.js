@@ -462,6 +462,8 @@ router.post('/:id/token', authenticateToken, async (req, res) => {
     // account is pinned per class (see sql/048_agora_accounts.sql).
     const accountKey = await accountKeyForClass(liveClass);
     const creds = await credentialsFor(accountKey);
+    // Both sides of a class must log the same account/appId, or they'd never see each other.
+    console.log(`🔑 Agora join: class=${id} user=${req.user.userId} as=${rtcRole} account=${accountKey} appId=…${String(creds.appId).slice(-4)}`);
     const token = generateAgoraToken(
       liveClass.channel_name,
       numericUid,
