@@ -125,13 +125,14 @@ function assignmentStats(published, subByAssignment, now) {
 // re-read (not the days-old token), so a role change applies immediately.
 const isStaff = (req, res, next) => {
   const role = req.account?.role || req.user?.role;
-  if (role !== 'admin' && role !== 'teacher') {
+  if (role !== 'admin' && role !== 'super_admin' && role !== 'teacher') {
     return res.status(403).json({
       success: false,
       error: 'This action requires admin or teacher privileges'
     });
   }
-  req.staffRole = role;
+  // A super admin sees the whole school, exactly like an admin.
+  req.staffRole = role === 'super_admin' ? 'admin' : role;
   next();
 };
 
