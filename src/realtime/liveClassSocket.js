@@ -271,7 +271,7 @@ function initLiveClassRealtime(httpServer) {
 // there for TEACHER_GRACE_MS we end the class. The grace covers page refreshes
 // and network blips. Timestamps live in memory, so after a server restart the
 // clock simply starts again from the first sweep.
-const TEACHER_GRACE_MS = (parseInt(process.env.LIVE_CLASS_TEACHER_GRACE_MIN, 10) || 3) * 60 * 1000;
+const TEACHER_GRACE_MS = (parseInt(process.env.LIVE_CLASS_TEACHER_GRACE_MIN, 10) || 10) * 60 * 1000;
 const SWEEP_MS = 30 * 1000;
 const teacherLastSeen = new Map(); // liveClassId -> ms
 
@@ -291,7 +291,7 @@ async function sweepTeacherPresence() {
 
   for (const id of activeIds) {
     const sockets = await io.in(roomAll(id)).fetchSockets();
-    if (sockets.some(s => s.data?.user?.role === 'teacher')) {
+    if (sockets.some(s => ['teacher', 'admin'].includes(s.data?.user?.role))) {
       teacherLastSeen.set(id, now);
       continue;
     }
