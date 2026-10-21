@@ -5,6 +5,7 @@ const textbookStorage = require('../config/textbookStorage');
 const libraryTitles = require('../utils/libraryTitles');
 const { optionalAuth } = require('../middleware/auth');
 const { parseTextbookName } = require('../utils/textbookNames');
+const libraryToc = require('../utils/libraryToc');
 
 /**
  * The national textbook shelf — every scanned MoEYS chapter in the
@@ -170,6 +171,19 @@ router.get('/', optionalAuth, async (req, res) => {
   } catch (error) {
     console.error('Textbook list error:', error);
     res.status(500).json({ success: false, error: 'Failed to fetch textbooks: ' + error.message });
+  }
+});
+
+/**
+ * GET /api/textbooks/:id/toc  — the book's table of contents (written in the portal), or
+ * { items: [], page_offset: 0 } when it has none. pdf page = printed page + page_offset.
+ */
+router.get('/:id/toc', optionalAuth, async (req, res) => {
+  try {
+    res.json({ success: true, data: (await libraryToc.load('textbook', req.params.id)) || { items: [], page_offset: 0 } });
+  } catch (error) {
+    console.error('Textbook toc error:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch the table of contents: ' + error.message });
   }
 });
 

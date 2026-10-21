@@ -4,6 +4,8 @@ const router = express.Router();
 const textbookStorage = require('../config/textbookStorage');
 const supabase = require('../config/supabase');
 const libraryTitles = require('../utils/libraryTitles');
+const libraryToc = require('../utils/libraryToc');
+const { extractToc, TocConfigError } = require('../utils/tocExtract');
 const { authenticateToken, isAdmin } = require('../middleware/auth');
 const { SUBJECTS, VARIANTS, LANGUAGES } = require('../utils/textbookNames');
 const { TOPICS } = require('../utils/pastPaperNames');
@@ -309,6 +311,7 @@ router.put('/:kind/:id', authenticateToken, isAdmin, express.json(), async (req,
     // in the body sets it (empty clears it back to the filename-derived one).
     const applyTitle = async () => {
       await libraryTitles.move(req.params.kind, oldStem, newStem);
+      await libraryToc.move(req.params.kind, oldStem, newStem);
       if ('title' in req.body) await libraryTitles.save(req.params.kind, newStem, req.body.title, req.body.subtitle);
       clearShelfCache(req.params.kind);
     };
@@ -348,6 +351,7 @@ router.delete('/:kind/:id', authenticateToken, isAdmin, async (req, res) => {
       await covers.remove(req.params.kind, found.bucket, req.params.id);
     }
     await libraryTitles.remove(req.params.kind, req.params.id);
+    await libraryToc.remove(req.params.kind, req.params.id);
     clearShelfCache(req.params.kind);
     res.json({ success: true, data: { name: found.name } });
   } catch (error) {
@@ -388,6 +392,60 @@ router.delete('/:kind/:id/cover', authenticateToken, isAdmin, async (req, res) =
   } catch (error) {
     console.error('Library cover delete error:', error);
     res.status(500).json({ success: false, error: 'Cover delete failed: ' + error.message });
+  }
+});
+
+// ── Table of contents ───────────────────────────────────────────────────
+// The admin photographs the book's contents page, the server reads it into a DRAFT,
+// the admin corrects it, then saves. Only the saved version is ever shown to students.
+
+const imageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024, files: 4 },
+});
+const IMAGE_TYPES = { 'image/jpeg': 'image/jpeg', 'image/png': 'image/png', 'image/webp': 'image/webp' };
+
+/** POST /api/library/:kind/:id/toc/extract — multipart `images` (1–4 photos). Returns a draft; saves nothing. */
+router.post('/:kind/:id/toc/extract', authenticateToken, isAdmin, (req, res) => {
+  imageUpload.array('images', 4)(req, res, async (err) => {
+    if (err) return res.status(400).json({ success: false, error: err.message });
+    try {
+      const found = await findExisting(req, res);
+      if (!found) return;
+      const files = (req.files || []).filter(f => IMAGE_TYPES[f.mimetype]);
+      if (!files.length) return res.status(400).json({ success: false, error: 'Choose a photo of the contents page (JPEG, PNG or WebP).' });
+      const items = await extractToc(files.map(f => ({ buffer: f.buffer, mime: IMAGE_TYPES[f.mimetype] })));
+      res.json({ success: true, data: { items } });
+    } catch (error) {
+      if (error instanceof TocConfigError) return res.status(503).json({ success: false, error: error.message });
+      console.error('Library toc extract error:', error);
+      res.status(502).json({ success: false, error: error.message });
+    }
+  });
+});
+
+/** GET /api/library/:kind/:id/toc — the saved table of contents (admin editor). */
+router.get('/:kind/:id/toc', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const found = await findExisting(req, res);
+    if (!found) return;
+    res.json({ success: true, data: (await libraryToc.load(req.params.kind, req.params.id)) || { items: [], page_offset: 0 } });
+  } catch (error) {
+    console.error('Library toc load error:', error);
+    res.status(500).json({ success: false, error: 'Could not load the table of contents: ' + error.message });
+  }
+});
+
+/** PUT /api/library/:kind/:id/toc — body { items, page_offset }. An empty list removes it. */
+router.put('/:kind/:id/toc', authenticateToken, isAdmin, express.json({ limit: '1mb' }), async (req, res) => {
+  try {
+    const found = await findExisting(req, res);
+    if (!found) return;
+    const items = await libraryToc.save(req.params.kind, req.params.id, req.body?.items, req.body?.page_offset);
+    res.json({ success: true, data: { items: items || [] } });
+  } catch (error) {
+    console.error('Library toc save error:', error);
+    res.status(500).json({ success: false, error: 'Could not save the table of contents: ' + error.message });
   }
 });
 
