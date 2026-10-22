@@ -179,10 +179,11 @@ router.put('/:id', authenticateToken, isSuperAdmin, async (req, res) => {
 
 /**
  * POST /api/admin/agora-accounts/:id/activate   (id 'env' = back to the .env account)
+ * Any admin may switch; adding or changing credentials stays super-admin only.
  * Classes that start from now on use this account. A class already running
  * keeps the account it started on — everyone in it must share one App ID.
  */
-router.post('/:id/activate', authenticateToken, isSuperAdmin, async (req, res) => {
+router.post('/:id/activate', authenticateToken, isAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     if (id !== 'env') {
