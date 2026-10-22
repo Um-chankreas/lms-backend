@@ -1,8 +1,9 @@
 const { Server } = require('socket.io');
 const supabase = require('../config/supabase');
 const { verifyToken } = require('../utils/jwt');
+const { corsOrigin } = require('../config/cors');
 const { generateAgoraUid } = require('../utils/agoraUid');
-const { endLiveClassRecord } = require('../utils/liveClassEnd');
+const { closeUserSessions } = require('../utils/agoraUsage');
 const { hasCourseSubscription } = require('../utils/access');
 
 /**
@@ -167,20 +168,42 @@ async function getHandStatus(liveClassId, userId) {
 
 function initLiveClassRealtime(httpServer) {
   io = new Server(httpServer, {
-    cors: { origin: true, credentials: true },
+    cors: { origin: corsOrigin, credentials: true },
     path: '/socket.io'
   });
 
-  // JWT handshake — same token the REST API uses.
-  io.use((socket, next) => {
-    const token =
-      socket.handshake.auth?.token ||
-      (socket.handshake.headers?.authorization || '').replace(/^Bearer\s+/i, '');
-    const decoded = token && verifyToken(token);
-    if (!decoded) return next(new Error('unauthorized'));
-    socket.user = decoded;              // { userId, role } — for handler code
-    socket.data.user = decoded;         // survives into RemoteSocket (fetchSockets)
-    next();
+  // JWT handshake — same token the REST API uses. Like authenticateToken, the
+  // account is re-checked so a deleted / admin-suspended user can't connect,
+  // and the role is taken from the database rather than the token.
+  io.use(async (socket, next) => {
+    try {
+      const token =
+        socket.handshake.auth?.token ||
+        (socket.handshake.headers?.authorization || '').replace(/^Bearer\s+/i, '');
+      const decoded = token && verifyToken(token);
+      if (!decoded) return next(new Error('unauthorized'));
+
+      const { data: account, error } = await supabase
+        .from('users')
+        .select('id, role, is_active, deactivated_at, deletion_scheduled_at, deleted_at')
+        .eq('id', decoded.userId)
+        .maybeSingle();
+      if (error) throw error;
+      const blocked =
+        !account ||
+        account.deleted_at ||
+        (account.deletion_scheduled_at && new Date(account.deletion_scheduled_at) <= new Date()) ||
+        (account.is_active === false && !account.deactivated_at && !account.deletion_scheduled_at);
+      if (blocked) return next(new Error('unauthorized'));
+
+      const user = { ...decoded, role: account.role };
+      socket.user = user;              // { userId, role } — for handler code
+      socket.data.user = user;         // survives into RemoteSocket (fetchSockets)
+      next();
+    } catch (err) {
+      console.error('Live class socket auth error:', err);
+      next(new Error('unauthorized'));
+    }
   });
 
   io.on('connection', (socket) => {
@@ -235,66 +258,14 @@ function initLiveClassRealtime(httpServer) {
     });
   });
 
-  startTeacherPresenceSweeper();
   return io;
 }
 
 
-// ---- auto-end when the teacher vanishes ----------------------------------
-// A teacher who closes the tab (or loses power) never calls PUT /:id/end, so
-// the class would stay "active" forever. Every SWEEP_MS we look at each active
-// class: if a teacher socket is in its room we note the time; if none has been
-// there for TEACHER_GRACE_MS we end the class. The grace covers page refreshes
-// and network blips. Timestamps live in memory, so after a server restart the
-// clock simply starts again from the first sweep.
-const TEACHER_GRACE_MS = (parseInt(process.env.LIVE_CLASS_TEACHER_GRACE_MIN, 10) || 3) * 60 * 1000;
-const SWEEP_MS = 30 * 1000;
-const teacherLastSeen = new Map(); // liveClassId -> ms
-
-async function sweepTeacherPresence() {
-  if (!io) return;
-  const { data: active, error } = await supabase
-    .from('live_classes')
-    .select('id')
-    .eq('status', 'active');
-  if (error) return console.error('Teacher sweep error:', error.message);
-
-  const now = Date.now();
-  const activeIds = new Set((active || []).map(c => c.id));
-  for (const id of teacherLastSeen.keys()) {
-    if (!activeIds.has(id)) teacherLastSeen.delete(id);
-  }
-
-  for (const id of activeIds) {
-    const sockets = await io.in(roomAll(id)).fetchSockets();
-    if (sockets.some(s => s.data?.user?.role === 'teacher')) {
-      teacherLastSeen.set(id, now);
-      continue;
-    }
-    if (!teacherLastSeen.has(id)) { teacherLastSeen.set(id, now); continue; }
-    if (now - teacherLastSeen.get(id) < TEACHER_GRACE_MS) continue;
-
-    try {
-      await endLiveClassRecord(id);
-      teacherLastSeen.delete(id);
-      emitClassStatus(id, 'completed');
-      await emitStageChanged(id);
-      await emitParticipantsChanged(id);
-      console.log(`Live class ${id} auto-ended: teacher gone for ${Math.round(TEACHER_GRACE_MS / 60000)} min`);
-    } catch (err) {
-      console.error(`Auto-end failed for live class ${id}:`, err.message);
-    }
-  }
-}
-
-function startTeacherPresenceSweeper() {
-  setInterval(() => sweepTeacherPresence().catch(() => {}), SWEEP_MS).unref();
-}
-
 const LEAVE_GRACE_MS = 8000;
 
 function scheduleLeaveCheck(liveClassId, userId) {
-  setTimeout(() => markLeftIfGone(liveClassId, userId).catch(() => {}), LEAVE_GRACE_MS);
+  setTimeout(() => markLeftIfGone(liveClassId, userId).catch(() => { }), LEAVE_GRACE_MS);
 }
 
 /** If `userId` has no socket left in the class room, mark them left + clear stage. */
@@ -319,6 +290,8 @@ async function markLeftIfGone(liveClassId, userId) {
     .eq('live_class_id', liveClassId)
     .eq('user_id', userId)
     .is('left_at', null);
+
+  await closeUserSessions(liveClassId, userId);
 
   await supabase
     .from('live_class_hand_raises')

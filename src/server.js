@@ -6,22 +6,33 @@ const http = require('http');
 const cors = require('cors');
 
 const app = express();
+const { corsOrigin } = require('./config/cors');
 const { initLiveClassRealtime } = require('./realtime/liveClassSocket');
+const { startClassScheduler } = require('./utils/classScheduler');
+const { startDailyDigestScheduler } = require('./utils/dailyDigestScheduler');
+
+// Production sits behind one reverse proxy (Caddy). Trusting that single hop
+// makes req.ip the real client address (from X-Forwarded-For) — which the auth
+// rate limiter keys on — without letting clients spoof it with extra entries.
+// TRUST_PROXY overrides: a hop count ("1"), or an Express value like "loopback".
+const trustProxy = process.env.TRUST_PROXY ?? (process.env.NODE_ENV === 'production' ? '1' : '');
+if (trustProxy) app.set('trust proxy', /^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy);
 
 // ============ Middleware ============
-// Dynamically allow requests from localhost, local IP addresses, or any origin in development
+// Allowed origins come from CORS_ORIGIN — see src/config/cors.js.
 app.use(cors({
-  origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps, curl, Postman) or any origin on local network
-    callback(null, true);
-  },
+  origin: corsOrigin,
   credentials: true,
   allowedHeaders: ['Content-Type', 'Authorization'],
   // PATCH is used by admin.routes.js and notifications.routes.js — without
   // it here, a browser's CORS preflight for those routes fails silently and
   // the request never goes out, surfacing to the client as a bare
   // "Network Error" with no indication it was a CORS problem.
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  // videoTools.routes.js's /compress reports before/after size in these —
+  // without exposing them, the browser's fetch/XHR can't read them cross-origin
+  // even though the response carries them.
+  exposedHeaders: ['X-Original-Size', 'X-Compressed-Size']
 }));
 
 // No explicit limit here defaults to Express's 100kb — too small once a
@@ -36,15 +47,28 @@ app.use('/api/auth', require('./routes/auth.routes'));
 app.use('/api/courses', require('./routes/courses.routes'));
 app.use('/api/lessons', require('./routes/lessons.routes'));
 app.use('/api/units', require('./routes/units.routes'));
+app.use('/api/books', require('./routes/books.routes'));
+app.use('/api/textbooks', require('./routes/textbooks.routes'));
+app.use('/api/past-papers', require('./routes/pastPapers.routes'));
+app.use('/api/library', require('./routes/library.routes'));
+app.use('/api/formulas', require('./routes/formulas.routes'));
+app.use('/api/video-tools', require('./routes/videoTools.routes'));
 app.use('/api/quizzes', require('./routes/quizzes.routes'));
 app.use('/api/assignments', require('./routes/assignments.routes'));
 app.use('/api/live-classes', require('./routes/liveClass.routes'));
+app.use('/api/class-schedules', require('./routes/classSchedule.routes'));
+app.use('/api/permissions', require('./routes/permissions.routes'));
 app.use('/api/dashboard', require('./routes/dashboard.routes'));
 app.use('/api/leaderboard', require('./routes/leaderboard.routes'));
 app.use('/api/profile', require('./routes/profile.routes'));
+app.use('/api/admin/agora-accounts', require('./routes/agoraAccounts.routes'));
+app.use('/api/admin/agora-usage', require('./routes/agoraUsage.routes'));
 app.use('/api/admin', require('./routes/admin.routes'));
+app.use('/api/insights', require('./routes/studentInsights.routes'));
 app.use('/api/notifications', require('./routes/notifications.routes'));
 app.use('/api/daily-challenge', require('./routes/dailyChallenge.routes'));
+app.use('/api/app-version', require('./routes/appVersion.routes'));
+app.use('/api/bacii', require('./routes/bacii.routes'));
 
 // ============ Health Check ============
 app.get('/', (req, res) => {
@@ -91,6 +115,18 @@ const httpServer = http.createServer(app);
 // Attach the live-class realtime (Socket.IO) layer to the same HTTP server.
 initLiveClassRealtime(httpServer);
 
+// Polls class_schedules and fires "starting soon" reminders — see
+// src/utils/classScheduler.js for why this is an in-process interval
+// rather than pg_cron/Edge Functions.
+startClassScheduler();
+
+// Fires the once-a-day "today's most active" shout-out + "come learn"
+// reminders — see src/utils/dailyDigestScheduler.js.
+startDailyDigestScheduler();
+
+// Closes Agora usage stays that never got a leave event (see utils/agoraUsage.js).
+require('./utils/agoraUsage').startUsageSweeper();
+
 const server = httpServer.listen(PORT, HOST, () => {
   console.log(`
 ╔════════════════════════════════════════╗
@@ -107,6 +143,11 @@ const server = httpServer.listen(PORT, HOST, () => {
 ✅ Press Ctrl+C to stop the server
   `);
 });
+
+// Node's default requestTimeout (5 min) is the time allowed to receive a whole
+// request body — too short for multi-GB uploads to /api/video-tools on a slow
+// connection. headersTimeout still guards against clients that stall early.
+server.requestTimeout = 60 * 60 * 1000;
 
 // ============ Graceful Shutdown ============
 process.on('SIGTERM', () => {

@@ -7,6 +7,27 @@ const { authenticateToken } = require('../middleware/auth');
 const { normalizePhone, isValidPhone } = require('../utils/phone');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
+const { rateLimit } = require('express-rate-limit');
+
+// Brute-force protection, per client IP. Limits are generous because a whole
+// classroom can share one IP: login/restore only count FAILED attempts, so
+// students signing in successfully never use up the budget.
+const rateLimitResponse = (message) => ({ success: false, code: 'RATE_LIMITED', error: message });
+const credentialLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  skipSuccessfulRequests: true,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: rateLimitResponse('Too many failed attempts. Please wait 15 minutes and try again.')
+});
+const signupLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 30,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: rateLimitResponse('Too many accounts created from this network. Please try again later.')
+});
 
 const AVATAR_ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const avatarUpload = multer({
@@ -87,7 +108,7 @@ const reactivateIfSelfDeactivated = async (user) => {
  * Register a new user (teacher or student).
  * Students must provide a phone number so they can later log in with it.
  */
-router.post('/signup', async (req, res) => {
+router.post('/signup', signupLimiter, async (req, res) => {
   try {
     let { name, email, phone, password, role } = req.body;
     role = role || 'student';
@@ -227,7 +248,7 @@ router.post('/signup', async (req, res) => {
  * Login with { identifier, password } where identifier is an email or phone number.
  * Also accepts { email, password } for backward compatibility.
  */
-router.post('/login', async (req, res) => {
+router.post('/login', credentialLimiter, async (req, res) => {
   try {
     const { identifier, email, phone, password } = req.body;
     const rawIdentifier = String(identifier || email || phone || '').trim();
@@ -611,7 +632,7 @@ router.delete('/account', authenticateToken, async (req, res) => {
  * user can't log in while the account is disabled.
  * Body: { identifier | email | phone, password }
  */
-router.post('/account/restore', async (req, res) => {
+router.post('/account/restore', credentialLimiter, async (req, res) => {
   try {
     const { identifier, email, phone, password } = req.body;
     const rawIdentifier = String(identifier || email || phone || '').trim();

@@ -2,8 +2,8 @@
 const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
-const { authenticateToken, optionalAuth, isTeacher, isStudent } = require('../middleware/auth');
-const { hasCourseAccess, ensureEnrolled } = require('../utils/access');
+const { authenticateToken, optionalAuth, isStudent, hasRole } = require('../middleware/auth');
+const { hasCourseAccess, ensureEnrolled, isSubscriptionActive } = require('../utils/access');
 const { awardXp, XP_VALUES } = require('../utils/xp');
 const { starsForScore } = require('../utils/progress');
 const { GUEST_FREE_STEPS } = require('../utils/guest');
@@ -11,9 +11,11 @@ const { v4: uuidv4 } = require('uuid');
 
 /**
  * POST /api/courses
- * Create a new course (Teacher only)
+ * Create a new course. A teacher owns whatever they create; an admin/super
+ * admin creates ON BEHALF OF a teacher, so they must name one via
+ * `teacher_id` — there's no "ownerless" course.
  */
-router.post('/', authenticateToken, isTeacher, async (req, res) => {
+router.post('/', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), async (req, res) => {
   try {
     const { title, description, category, color, icon, cover_image, is_free } = req.body;
 
@@ -25,6 +27,19 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
       });
     }
 
+    let teacherId = req.user.userId;
+    if (req.user.role !== 'teacher') {
+      teacherId = req.body.teacher_id;
+      if (!teacherId) {
+        return res.status(400).json({ success: false, error: '`teacher_id` is required' });
+      }
+      const { data: teacher } = await supabase
+        .from('users').select('id, role').eq('id', teacherId).maybeSingle();
+      if (!teacher || teacher.role !== 'teacher') {
+        return res.status(400).json({ success: false, error: '`teacher_id` must be an existing teacher' });
+      }
+    }
+
     const classCode = Math.random().toString(36).substring(2, 8).toUpperCase();
 
     // Create course
@@ -33,7 +48,7 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
       .from('courses')
       .insert({
         id: courseId,
-        teacher_id: req.user.userId,
+        teacher_id: teacherId,
         title,
         description: description || '',
         category: category || 'General',
@@ -269,12 +284,13 @@ router.get('/:id', optionalAuth, async (req, res) => {
  * PUT /api/courses/:id
  * Update course (Teacher only)
  */
-router.put('/:id', authenticateToken, isTeacher, async (req, res) => {
+router.put('/:id', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, description, category, color, icon, cover_image, code, is_free } = req.body;
+    const { title, description, category, color, icon, cover_image, code, is_free, teacher_id } = req.body;
 
-    // Verify ownership
+    // Verify ownership — a teacher only touches their own; admin/super_admin
+    // can edit any course.
     const { data: course } = await supabase
       .from('courses')
       .select('teacher_id')
@@ -288,7 +304,9 @@ router.put('/:id', authenticateToken, isTeacher, async (req, res) => {
       });
     }
 
-    if (course.teacher_id !== req.user.userId) {
+    const isOwnerTeacher = req.user.role === 'teacher' && course.teacher_id === req.user.userId;
+    const isAdminRole = req.user.role === 'admin' || req.user.role === 'super_admin';
+    if (!isOwnerTeacher && !isAdminRole) {
       return res.status(403).json({
         success: false,
         error: 'You can only update your own courses'
@@ -306,6 +324,8 @@ router.put('/:id', authenticateToken, isTeacher, async (req, res) => {
     if (cover_image !== undefined) updatePayload.cover_image = cover_image;
     if (code !== undefined) updatePayload.code = code;
     if (typeof is_free === 'boolean') updatePayload.is_free = is_free;
+    // Reassigning the owning teacher is an admin-only capability.
+    if (isAdminRole && teacher_id !== undefined) updatePayload.teacher_id = teacher_id;
 
     if (Object.keys(updatePayload).length === 0) {
       return res.status(400).json({
@@ -342,7 +362,7 @@ router.put('/:id', authenticateToken, isTeacher, async (req, res) => {
  * DELETE /api/courses/:id
  * Delete course (Teacher only)
  */
-router.delete('/:id', authenticateToken, isTeacher, async (req, res) => {
+router.delete('/:id', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -360,7 +380,9 @@ router.delete('/:id', authenticateToken, isTeacher, async (req, res) => {
       });
     }
 
-    if (course.teacher_id !== req.user.userId) {
+    const isOwnerTeacher = req.user.role === 'teacher' && course.teacher_id === req.user.userId;
+    const isAdminRole = req.user.role === 'admin' || req.user.role === 'super_admin';
+    if (!isOwnerTeacher && !isAdminRole) {
       return res.status(403).json({
         success: false,
         error: 'You can only delete your own courses'
@@ -452,6 +474,60 @@ router.delete('/:id', authenticateToken, isTeacher, async (req, res) => {
       success: false,
       error: 'Failed to delete course: ' + error.message
     });
+  }
+});
+
+/**
+ * GET /api/courses/:id/roster
+ * Enrolled students + their live-class payment status for this course
+ * (student_course_subscriptions — see sql/038). Owning teacher, or
+ * admin/super_admin; a teacher can only see their own class's roster.
+ */
+router.get('/:id/roster', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data: course } = await supabase
+      .from('courses').select('id, teacher_id').eq('id', id).maybeSingle();
+    if (!course) return res.status(404).json({ success: false, error: 'Course not found' });
+
+    const isOwnerTeacher = req.user.role === 'teacher' && course.teacher_id === req.user.userId;
+    const isAdminRole = req.user.role === 'admin' || req.user.role === 'super_admin';
+    if (!isOwnerTeacher && !isAdminRole) {
+      return res.status(403).json({ success: false, error: 'You can only view your own course roster' });
+    }
+
+    const [{ data: enrollments }, { data: subs }] = await Promise.all([
+      supabase
+        .from('course_enrollments')
+        .select('enrolled_at, users:student_id (id, name, email, avatar_url)')
+        .eq('course_id', id)
+        .order('enrolled_at', { ascending: true }),
+      supabase
+        .from('student_course_subscriptions')
+        .select('student_id, expiry_date, last_paid_at')
+        .eq('course_id', id)
+    ]);
+
+    const subByStudent = Object.fromEntries((subs || []).map(s => [s.student_id, s]));
+
+    const roster = (enrollments || []).filter(e => e.users).map(e => {
+      const sub = subByStudent[e.users.id];
+      return {
+        id: e.users.id,
+        name: e.users.name,
+        email: e.users.email,
+        avatar_url: e.users.avatar_url,
+        enrolled_at: e.enrolled_at,
+        paid: isSubscriptionActive(sub?.expiry_date),
+        expiry_date: sub?.expiry_date || null,
+        last_paid_at: sub?.last_paid_at || null
+      };
+    });
+
+    res.json({ success: true, data: { roster } });
+  } catch (error) {
+    console.error('Course roster error:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch roster: ' + error.message });
   }
 });
 

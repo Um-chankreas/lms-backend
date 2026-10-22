@@ -1,0 +1,1250 @@
+{
+  "subjects": {
+    "Science": [
+      {
+        "name": "Math",
+        "kh": "គណិតវិទ្យា",
+        "points": 125,
+        "live": true,
+        "key": "math-sci"
+      },
+      {
+        "name": "Physics",
+        "kh": "រូបវិទ្យា",
+        "points": 75,
+        "live": false,
+        "key": null
+      },
+      {
+        "name": "Chemistry",
+        "kh": "គីមីវិទ្យា",
+        "points": 75,
+        "live": false,
+        "key": null
+      },
+      {
+        "name": "Biology",
+        "kh": "ជីវវិទ្យា",
+        "points": 75,
+        "live": false,
+        "key": null
+      },
+      {
+        "name": "Khmer Literature",
+        "kh": "អក្សរសាស្ត្រខ្មែរ",
+        "points": 75,
+        "live": false,
+        "key": null
+      },
+      {
+        "name": "History",
+        "kh": "ប្រវត្តិវិទ្យា",
+        "points": 50,
+        "live": true,
+        "key": "hist"
+      },
+      {
+        "name": "Foreign Language",
+        "kh": "ភាសាបរទេស",
+        "points": 0,
+        "live": false,
+        "key": null
+      }
+    ],
+    "Social": [
+      {
+        "name": "Khmer Literature",
+        "kh": "អក្សរសាស្ត្រខ្មែរ",
+        "points": 125,
+        "live": false,
+        "key": null
+      },
+      {
+        "name": "Math",
+        "kh": "គណិតវិទ្យា",
+        "points": 75,
+        "live": true,
+        "key": "math-soc"
+      },
+      {
+        "name": "History",
+        "kh": "ប្រវត្តិវិទ្យា",
+        "points": 75,
+        "live": true,
+        "key": "hist"
+      },
+      {
+        "name": "Geography",
+        "kh": "ភូមិវិទ្យា",
+        "points": 75,
+        "live": false,
+        "key": null
+      },
+      {
+        "name": "Morality and Civics",
+        "kh": "សីលធម៌-ពលរដ្ឋវិជ្ជា",
+        "points": 75,
+        "live": false,
+        "key": null
+      },
+      {
+        "name": "Earth and Environmental Science",
+        "kh": "ផែនដី និងបរិស្ថានវិទ្យា",
+        "points": 50,
+        "live": false,
+        "key": null
+      },
+      {
+        "name": "Foreign Language",
+        "kh": "ភាសាបរទេស",
+        "points": 0,
+        "live": false,
+        "key": null
+      }
+    ]
+  },
+  "chapters": {
+    "math-sci": [
+      {
+        "title": "Limits of sequences",
+        "kh": "លីមីតនៃស្វ៊ីត",
+        "bank": "seq"
+      },
+      {
+        "title": "Derivatives",
+        "kh": "ដេរីវេនៃអនុគមន៍",
+        "bank": "der"
+      },
+      {
+        "title": "Variation and graphs",
+        "kh": "អថេរភាព និងក្រាបនៃអនុគមន៍",
+        "bank": "var"
+      },
+      {
+        "title": "Definite integrals",
+        "kh": "អាំងតេក្រាលកំណត់",
+        "bank": "int"
+      },
+      {
+        "title": "Differential equations",
+        "kh": "សមីការឌីផេរ៉ង់ស្យែល",
+        "bank": "de"
+      },
+      {
+        "title": "Probability distributions",
+        "kh": "បំណែងចែកប្រូបាប",
+        "bank": "prob"
+      },
+      {
+        "title": "Vectors in space",
+        "kh": "វ៉ិចទ័រក្នុងលំហ",
+        "bank": "vec"
+      },
+      {
+        "title": "Divisibility and Euclid",
+        "kh": "ភាពចែកដាច់ និងវិធីចែកអឺគ្លីត",
+        "bank": "div"
+      },
+      {
+        "title": "Parametric and polar",
+        "kh": "សមីការប៉ារ៉ាម៉ែត និងកូអរដោនេប៉ូលែ",
+        "bank": "par"
+      }
+    ],
+    "math-soc": [
+      {
+        "title": "Limits",
+        "kh": "លីមីត",
+        "bank": "lim"
+      },
+      {
+        "title": "Derivatives",
+        "kh": "ដេរីវេនៃអនុគមន៍",
+        "bank": "der"
+      },
+      {
+        "title": "Variation and graphs",
+        "kh": "សិក្សាអថេរភាព និងសង់ក្រាប",
+        "bank": "var"
+      },
+      {
+        "title": "Integrals",
+        "kh": "អាំងតេក្រាល",
+        "bank": "int"
+      },
+      {
+        "title": "Two-variable statistics",
+        "kh": "ស្ថិតិពីរអថេរ",
+        "bank": "stat"
+      },
+      {
+        "title": "Conic sections",
+        "kh": "កោនិច",
+        "bank": "con"
+      }
+    ],
+    "hist": [
+      {
+        "title": "French Protectorate (1863-1953)",
+        "kh": "សម័យអាណាព្យាបាលបារាំង",
+        "bank": "h1"
+      },
+      {
+        "title": "Independence and Sangkum Reastr Niyum (1953-1970)",
+        "kh": "ឯករាជ្យ និងសង្គមរាស្ត្រនិយម",
+        "bank": "h2"
+      },
+      {
+        "title": "Khmer Republic (1970-1975)",
+        "kh": "សាធារណរដ្ឋខ្មែរ",
+        "bank": "h3"
+      },
+      {
+        "title": "Democratic Kampuchea (1975-1979)",
+        "kh": "កម្ពុជាប្រជាធិបតេយ្យ",
+        "bank": "h4"
+      },
+      {
+        "title": "1979 to the Paris Peace Agreements",
+        "kh": "ពីឆ្នាំ១៩៧៩ ដល់កិច្ចព្រមព្រៀងសន្តិភាពទីក្រុងប៉ារីស",
+        "bank": "h5"
+      },
+      {
+        "title": "Kingdom of Cambodia since 1993",
+        "kh": "ព្រះរាជាណាចក្រកម្ពុជា ចាប់ពីឆ្នាំ១៩៩៣",
+        "bank": "h6"
+      }
+    ]
+  },
+  "goals": [
+    {
+      "letter": "A",
+      "label": "ល្អប្រសើរ · Excellent",
+      "needStep": 5
+    },
+    {
+      "letter": "B",
+      "label": "ល្អណាស់ · Very good",
+      "needStep": 4
+    },
+    {
+      "letter": "C",
+      "label": "ល្អ · Good",
+      "needStep": 3
+    },
+    {
+      "letter": "D",
+      "label": "ល្អបង្គួរ · Fairly good",
+      "needStep": 2
+    },
+    {
+      "letter": "E",
+      "label": "មធ្យម · Average",
+      "needStep": 1
+    }
+  ],
+  "commits": [
+    {
+      "minutes": 15,
+      "label": "15 minutes a day",
+      "tag": "Light",
+      "note": "One practice set a day",
+      "plan": "1 practice set a day, recordings when you can"
+    },
+    {
+      "minutes": 30,
+      "label": "30 minutes a day",
+      "tag": "Steady",
+      "note": "Half a recording or a practice set a day",
+      "plan": "Recordings in two halves + 1 practice set a day"
+    },
+    {
+      "minutes": 60,
+      "label": "1 hour a day",
+      "tag": "Serious",
+      "note": "One tutoring session a day, live or recorded",
+      "plan": "1 tutoring session a day, live or recorded"
+    },
+    {
+      "minutes": 120,
+      "label": "2 hours or more a day",
+      "tag": "Intense",
+      "note": "A tutoring session plus practice every day",
+      "plan": "1 tutoring session + 2 practice sets a day"
+    }
+  ],
+  "bank": {
+    "seq": [
+      {
+        "step": 1,
+        "prompt": "Find the limit as n → ∞",
+        "question": "uₙ = 3 + 1/n",
+        "options": [
+          "0",
+          "1",
+          "3",
+          "∞"
+        ],
+        "answer": "3",
+        "topic": "Basic limits"
+      },
+      {
+        "step": 2,
+        "prompt": "Find the limit as n → ∞",
+        "question": "uₙ = (1/2)ⁿ",
+        "options": [
+          "0",
+          "1/2",
+          "1",
+          "∞"
+        ],
+        "answer": "0",
+        "topic": "Geometric sequences"
+      },
+      {
+        "step": 3,
+        "prompt": "Find the limit as n → ∞",
+        "question": "uₙ = (2n + 1) / (n + 5)",
+        "options": [
+          "0",
+          "1/5",
+          "2",
+          "∞"
+        ],
+        "answer": "2",
+        "topic": "Rational sequences"
+      },
+      {
+        "step": 4,
+        "prompt": "uₙ₊₁ = (uₙ + 6) / 2 converges. Its limit is",
+        "question": "L = ?",
+        "options": [
+          "3",
+          "6",
+          "12",
+          "No limit"
+        ],
+        "answer": "6",
+        "topic": "Recursive sequences"
+      }
+    ],
+    "lim": [
+      {
+        "step": 1,
+        "prompt": "Find the limit",
+        "question": "lim (x → 2) of (3x + 1)",
+        "options": [
+          "5",
+          "6",
+          "7",
+          "9"
+        ],
+        "answer": "7",
+        "topic": "Direct substitution"
+      },
+      {
+        "step": 2,
+        "prompt": "Find the limit",
+        "question": "lim (x → 3) of (x² − 9) / (x − 3)",
+        "options": [
+          "0",
+          "3",
+          "6",
+          "No limit"
+        ],
+        "answer": "6",
+        "topic": "Factoring"
+      },
+      {
+        "step": 3,
+        "prompt": "Find the limit",
+        "question": "lim (x → ∞) of (2x² + 1) / (x² − 5)",
+        "options": [
+          "0",
+          "1",
+          "2",
+          "∞"
+        ],
+        "answer": "2",
+        "topic": "Limits at infinity"
+      },
+      {
+        "step": 4,
+        "prompt": "f(x) = (x² − 1)/(x − 1) for x ≠ 1, and f(1) = 5. Find",
+        "question": "lim (x → 1) f(x)",
+        "options": [
+          "0",
+          "2",
+          "5",
+          "No limit"
+        ],
+        "answer": "2",
+        "topic": "What a limit means"
+      }
+    ],
+    "der": [
+      {
+        "step": 1,
+        "prompt": "f(x) = 5x² − 3x. Find",
+        "question": "f′(x)",
+        "options": [
+          "10x − 3",
+          "5x − 3",
+          "10x",
+          "10x² − 3"
+        ],
+        "answer": "10x − 3",
+        "topic": "Basic rules"
+      },
+      {
+        "step": 2,
+        "prompt": "f(x) = x³. Find",
+        "question": "f′(2)",
+        "options": [
+          "6",
+          "8",
+          "12",
+          "24"
+        ],
+        "answer": "12",
+        "topic": "Power rule"
+      },
+      {
+        "step": 3,
+        "prompt": "f(x) = e²ˣ. Find",
+        "question": "f′(0)",
+        "options": [
+          "0",
+          "1",
+          "2",
+          "e²"
+        ],
+        "answer": "2",
+        "topic": "Chain rule"
+      },
+      {
+        "step": 4,
+        "prompt": "f(x) = ln(x² + 1). Find",
+        "question": "f′(1)",
+        "options": [
+          "0",
+          "1/2",
+          "1",
+          "2"
+        ],
+        "answer": "1",
+        "topic": "Chain rule with ln"
+      }
+    ],
+    "var": [
+      {
+        "step": 1,
+        "prompt": "If f′(x) > 0 for every x in (a, b), then on (a, b) f is",
+        "question": "f′ > 0 means…",
+        "options": [
+          "Increasing",
+          "Decreasing",
+          "Constant",
+          "Zero"
+        ],
+        "answer": "Increasing",
+        "topic": "Sign of the derivative"
+      },
+      {
+        "step": 2,
+        "prompt": "Where is the minimum of",
+        "question": "f(x) = x² − 4x",
+        "options": [
+          "x = −2",
+          "x = 0",
+          "x = 2",
+          "x = 4"
+        ],
+        "answer": "x = 2",
+        "topic": "Finding extrema"
+      },
+      {
+        "step": 3,
+        "prompt": "Where is the local maximum of",
+        "question": "f(x) = x³ − 3x",
+        "options": [
+          "x = −1",
+          "x = 0",
+          "x = 1",
+          "x = 3"
+        ],
+        "answer": "x = −1",
+        "topic": "Local max and min"
+      },
+      {
+        "step": 4,
+        "prompt": "Horizontal asymptote of",
+        "question": "y = (2x + 1) / (x − 3)",
+        "options": [
+          "y = 2",
+          "y = 3",
+          "x = 3",
+          "y = −1/3"
+        ],
+        "answer": "y = 2",
+        "topic": "Asymptotes"
+      }
+    ],
+    "int": [
+      {
+        "step": 1,
+        "prompt": "Evaluate",
+        "question": "∫ from 0 to 2 of 3 dx",
+        "options": [
+          "3",
+          "5",
+          "6",
+          "9"
+        ],
+        "answer": "6",
+        "topic": "Constant integrals"
+      },
+      {
+        "step": 2,
+        "prompt": "Evaluate",
+        "question": "∫ from 0 to 1 of 2x dx",
+        "options": [
+          "0",
+          "1/2",
+          "1",
+          "2"
+        ],
+        "answer": "1",
+        "topic": "Power rule"
+      },
+      {
+        "step": 3,
+        "prompt": "Evaluate",
+        "question": "∫ from 0 to 3 of x² dx",
+        "options": [
+          "3",
+          "6",
+          "9",
+          "27"
+        ],
+        "answer": "9",
+        "topic": "Antiderivatives"
+      },
+      {
+        "step": 4,
+        "prompt": "∫ from 0 to 2 of f(x) dx = 5. Find",
+        "question": "∫ from 0 to 2 of (2f(x) + 1) dx",
+        "options": [
+          "7",
+          "10",
+          "11",
+          "12"
+        ],
+        "answer": "12",
+        "topic": "Properties of integrals"
+      }
+    ],
+    "de": [
+      {
+        "step": 1,
+        "prompt": "Which function solves",
+        "question": "y′ = 2",
+        "options": [
+          "y = 2x + C",
+          "y = x²",
+          "y = 2",
+          "y = e²ˣ"
+        ],
+        "answer": "y = 2x + C",
+        "topic": "Basic equations"
+      },
+      {
+        "step": 2,
+        "prompt": "General solution of",
+        "question": "y′ = 3y",
+        "options": [
+          "y = 3x + C",
+          "y = Ce³ˣ",
+          "y = Ceˣ/³",
+          "y = x³ + C"
+        ],
+        "answer": "y = Ce³ˣ",
+        "topic": "y′ = ay"
+      },
+      {
+        "step": 3,
+        "prompt": "y′ = −2y and y(0) = 5. Find",
+        "question": "y(1)",
+        "options": [
+          "5e²",
+          "5e⁻²",
+          "−10",
+          "3"
+        ],
+        "answer": "5e⁻²",
+        "topic": "Initial conditions"
+      },
+      {
+        "step": 4,
+        "prompt": "General solution of",
+        "question": "y″ + 9y = 0",
+        "options": [
+          "A cos 3x + B sin 3x",
+          "Ae³ˣ + Be⁻³ˣ",
+          "A cos 9x + B sin 9x",
+          "(A + Bx)e³ˣ"
+        ],
+        "answer": "A cos 3x + B sin 3x",
+        "topic": "Second-order equations"
+      }
+    ],
+    "prob": [
+      {
+        "step": 1,
+        "prompt": "Roll a fair die. Find",
+        "question": "P(5)",
+        "options": [
+          "1/5",
+          "1/6",
+          "1/3",
+          "5/6"
+        ],
+        "answer": "1/6",
+        "topic": "Basic probability"
+      },
+      {
+        "step": 2,
+        "prompt": "X = 0, 1, 2 with P = 0.2, 0.5, 0.3. Find",
+        "question": "E(X)",
+        "options": [
+          "0.9",
+          "1",
+          "1.1",
+          "1.5"
+        ],
+        "answer": "1.1",
+        "topic": "Expected value"
+      },
+      {
+        "step": 3,
+        "prompt": "X follows B(10, 0.3). Find",
+        "question": "E(X)",
+        "options": [
+          "0.3",
+          "2.1",
+          "3",
+          "7"
+        ],
+        "answer": "3",
+        "topic": "Binomial mean"
+      },
+      {
+        "step": 4,
+        "prompt": "Flip a fair coin 3 times. Find",
+        "question": "P(exactly 2 heads)",
+        "options": [
+          "1/8",
+          "3/8",
+          "1/2",
+          "2/3"
+        ],
+        "answer": "3/8",
+        "topic": "Binomial probability"
+      }
+    ],
+    "vec": [
+      {
+        "step": 1,
+        "prompt": "u = (1, 2, 3), v = (2, 0, 1). Find",
+        "question": "u + v",
+        "options": [
+          "(3, 2, 4)",
+          "(2, 0, 3)",
+          "(1, −2, −2)",
+          "(3, 2, 3)"
+        ],
+        "answer": "(3, 2, 4)",
+        "topic": "Adding vectors"
+      },
+      {
+        "step": 2,
+        "prompt": "u = (1, 2, 3), v = (2, 0, 1). Find",
+        "question": "u · v",
+        "options": [
+          "5",
+          "6",
+          "7",
+          "(2, 0, 3)"
+        ],
+        "answer": "5",
+        "topic": "Dot product"
+      },
+      {
+        "step": 3,
+        "prompt": "Find the length",
+        "question": "|(2, 3, 6)|",
+        "options": [
+          "7",
+          "11",
+          "49",
+          "√11"
+        ],
+        "answer": "7",
+        "topic": "Length of a vector"
+      },
+      {
+        "step": 4,
+        "prompt": "(1, 2, 3) is perpendicular to (2, −1, k). Find",
+        "question": "k",
+        "options": [
+          "−1",
+          "0",
+          "1",
+          "2/3"
+        ],
+        "answer": "0",
+        "topic": "Perpendicular vectors"
+      }
+    ],
+    "div": [
+      {
+        "step": 1,
+        "prompt": "Remainder when 47 is divided by 5",
+        "question": "47 ÷ 5",
+        "options": [
+          "1",
+          "2",
+          "3",
+          "4"
+        ],
+        "answer": "2",
+        "topic": "Division with remainder"
+      },
+      {
+        "step": 2,
+        "prompt": "Find",
+        "question": "gcd(84, 36)",
+        "options": [
+          "4",
+          "6",
+          "12",
+          "18"
+        ],
+        "answer": "12",
+        "topic": "Greatest common divisor"
+      },
+      {
+        "step": 3,
+        "prompt": "a ≡ 3 (mod 7). Find",
+        "question": "2a mod 7",
+        "options": [
+          "1",
+          "3",
+          "5",
+          "6"
+        ],
+        "answer": "6",
+        "topic": "Congruences"
+      },
+      {
+        "step": 4,
+        "prompt": "Last digit of",
+        "question": "7¹⁰⁰",
+        "options": [
+          "1",
+          "3",
+          "7",
+          "9"
+        ],
+        "answer": "1",
+        "topic": "Cycles of remainders"
+      }
+    ],
+    "par": [
+      {
+        "step": 1,
+        "prompt": "x = t, y = 2t. The point at t = 3",
+        "question": "(x, y) = ?",
+        "options": [
+          "(3, 6)",
+          "(6, 3)",
+          "(3, 3)",
+          "(2, 3)"
+        ],
+        "answer": "(3, 6)",
+        "topic": "Parametric points"
+      },
+      {
+        "step": 2,
+        "prompt": "Polar point r = 2, θ = π/2 in x, y",
+        "question": "(x, y) = ?",
+        "options": [
+          "(2, 0)",
+          "(0, 2)",
+          "(1, 1)",
+          "(0, −2)"
+        ],
+        "answer": "(0, 2)",
+        "topic": "Polar to Cartesian"
+      },
+      {
+        "step": 3,
+        "prompt": "x = cos t, y = sin t traces",
+        "question": "Which curve?",
+        "options": [
+          "A line",
+          "A unit circle",
+          "A parabola",
+          "A spiral"
+        ],
+        "answer": "A unit circle",
+        "topic": "Recognising curves"
+      },
+      {
+        "step": 4,
+        "prompt": "x = t², y = t³. At t = 1 find",
+        "question": "dy/dx",
+        "options": [
+          "2/3",
+          "1",
+          "3/2",
+          "3"
+        ],
+        "answer": "3/2",
+        "topic": "Parametric derivatives"
+      }
+    ],
+    "stat": [
+      {
+        "step": 1,
+        "prompt": "Points (1, 2), (2, 4), (3, 6). Mean of y",
+        "question": "ȳ = ?",
+        "options": [
+          "2",
+          "3",
+          "4",
+          "6"
+        ],
+        "answer": "4",
+        "topic": "Means"
+      },
+      {
+        "step": 2,
+        "prompt": "A correlation of r = −0.95 means",
+        "question": "r = −0.95",
+        "options": [
+          "Strong negative",
+          "Weak negative",
+          "No link",
+          "Strong positive"
+        ],
+        "answer": "Strong negative",
+        "topic": "Correlation"
+      },
+      {
+        "step": 3,
+        "prompt": "Regression line y = 2x + 1. Predict y at",
+        "question": "x = 4",
+        "options": [
+          "7",
+          "8",
+          "9",
+          "10"
+        ],
+        "answer": "9",
+        "topic": "Using the regression line"
+      },
+      {
+        "step": 4,
+        "prompt": "The least-squares line always passes through",
+        "question": "Which point?",
+        "options": [
+          "(0, 0)",
+          "(x̄, ȳ)",
+          "(0, ȳ)",
+          "(x̄, 0)"
+        ],
+        "answer": "(x̄, ȳ)",
+        "topic": "Regression concepts"
+      }
+    ],
+    "con": [
+      {
+        "step": 1,
+        "prompt": "Radius of",
+        "question": "x² + y² = 25",
+        "options": [
+          "5",
+          "25",
+          "√5",
+          "12.5"
+        ],
+        "answer": "5",
+        "topic": "Circles"
+      },
+      {
+        "step": 2,
+        "prompt": "Focus of",
+        "question": "y² = 8x",
+        "options": [
+          "(2, 0)",
+          "(8, 0)",
+          "(0, 2)",
+          "(4, 0)"
+        ],
+        "answer": "(2, 0)",
+        "topic": "Parabolas"
+      },
+      {
+        "step": 3,
+        "prompt": "Foci of",
+        "question": "x²/25 + y²/9 = 1",
+        "options": [
+          "(±3, 0)",
+          "(±4, 0)",
+          "(±5, 0)",
+          "(0, ±4)"
+        ],
+        "answer": "(±4, 0)",
+        "topic": "Ellipses"
+      },
+      {
+        "step": 4,
+        "prompt": "Asymptotes of",
+        "question": "x²/9 − y²/16 = 1",
+        "options": [
+          "y = ±3x/4",
+          "y = ±4x/3",
+          "y = ±16x/9",
+          "y = ±9x/16"
+        ],
+        "answer": "y = ±4x/3",
+        "topic": "Hyperbolas"
+      }
+    ],
+    "h1": [
+      {
+        "step": 1,
+        "prompt": "Cambodia became a French protectorate in",
+        "question": "Which year?",
+        "options": [
+          "1863",
+          "1887",
+          "1907",
+          "1953"
+        ],
+        "answer": "1863",
+        "topic": "Key dates"
+      },
+      {
+        "step": 2,
+        "prompt": "The 1863 protectorate treaty with France was signed by",
+        "question": "Which king?",
+        "options": [
+          "King Norodom",
+          "King Sisowath",
+          "King Monivong",
+          "King Ang Duong"
+        ],
+        "answer": "King Norodom",
+        "topic": "Key people"
+      },
+      {
+        "step": 3,
+        "prompt": "The 1884 convention France forced on King Norodom",
+        "question": "What did it do?",
+        "options": [
+          "Gave France control of the administration",
+          "Ended the protectorate",
+          "Made Cambodia independent",
+          "Gave Cambodia a parliament"
+        ],
+        "answer": "Gave France control of the administration",
+        "topic": "Colonial control"
+      },
+      {
+        "step": 4,
+        "prompt": "Under the 1907 treaty between France and Siam, which provinces came back to Cambodia?",
+        "question": "Which ones?",
+        "options": [
+          "Battambang and Siem Reap",
+          "Kampot and Kep",
+          "Kratie and Stung Treng",
+          "Prey Veng and Svay Rieng"
+        ],
+        "answer": "Battambang and Siem Reap",
+        "topic": "Borders and treaties"
+      }
+    ],
+    "h2": [
+      {
+        "step": 1,
+        "prompt": "Cambodia’s Independence Day is",
+        "question": "Which date?",
+        "options": [
+          "9 November 1953",
+          "17 April 1975",
+          "7 January 1979",
+          "23 October 1991"
+        ],
+        "answer": "9 November 1953",
+        "topic": "Key dates"
+      },
+      {
+        "step": 2,
+        "prompt": "The Royal Crusade for Independence was led by",
+        "question": "Who?",
+        "options": [
+          "King Norodom Sihanouk",
+          "Lon Nol",
+          "Son Ngoc Thanh",
+          "King Sisowath"
+        ],
+        "answer": "King Norodom Sihanouk",
+        "topic": "Key people"
+      },
+      {
+        "step": 3,
+        "prompt": "Why did Sihanouk give up the throne in 1955?",
+        "question": "Main reason",
+        "options": [
+          "To lead politics through the Sangkum",
+          "He was overthrown",
+          "France forced him",
+          "To study abroad"
+        ],
+        "answer": "To lead politics through the Sangkum",
+        "topic": "Causes and reasons"
+      },
+      {
+        "step": 4,
+        "prompt": "The Sangkum’s foreign policy was",
+        "question": "Which policy?",
+        "options": [
+          "Neutrality",
+          "Alliance with the USA",
+          "Alliance with the USSR",
+          "Joining SEATO"
+        ],
+        "answer": "Neutrality",
+        "topic": "Foreign policy"
+      }
+    ],
+    "h3": [
+      {
+        "step": 1,
+        "prompt": "The Khmer Republic was proclaimed in",
+        "question": "Which year?",
+        "options": [
+          "1955",
+          "1970",
+          "1975",
+          "1979"
+        ],
+        "answer": "1970",
+        "topic": "Key dates"
+      },
+      {
+        "step": 2,
+        "prompt": "The Khmer Republic was led by",
+        "question": "Who?",
+        "options": [
+          "Lon Nol",
+          "Pol Pot",
+          "Penn Nouth",
+          "Son Sann"
+        ],
+        "answer": "Lon Nol",
+        "topic": "Key people"
+      },
+      {
+        "step": 3,
+        "prompt": "In March 1970, Sihanouk lost power because",
+        "question": "What happened?",
+        "options": [
+          "The National Assembly removed him while he was abroad",
+          "He lost an election",
+          "He resigned",
+          "A foreign army arrested him"
+        ],
+        "answer": "The National Assembly removed him while he was abroad",
+        "topic": "Causes and reasons"
+      },
+      {
+        "step": 4,
+        "prompt": "The civil war in the Khmer Republic grew worse mainly because",
+        "question": "Main cause",
+        "options": [
+          "The Vietnam War spread into Cambodia",
+          "A war with Thailand",
+          "A Japanese invasion",
+          "A border war with Laos"
+        ],
+        "answer": "The Vietnam War spread into Cambodia",
+        "topic": "Regional context"
+      }
+    ],
+    "h4": [
+      {
+        "step": 1,
+        "prompt": "The Khmer Rouge took Phnom Penh on",
+        "question": "Which date?",
+        "options": [
+          "9 November 1953",
+          "18 March 1970",
+          "17 April 1975",
+          "7 January 1979"
+        ],
+        "answer": "17 April 1975",
+        "topic": "Key dates"
+      },
+      {
+        "step": 2,
+        "prompt": "Right after taking Phnom Penh, the regime",
+        "question": "What did it do to city people?",
+        "options": [
+          "Forced them out to the countryside",
+          "Held an election",
+          "Sent them abroad",
+          "Left them in place"
+        ],
+        "answer": "Forced them out to the countryside",
+        "topic": "Policies of the regime"
+      },
+      {
+        "step": 3,
+        "prompt": "Democratic Kampuchea abolished",
+        "question": "Which of these?",
+        "options": [
+          "Money, markets and schools",
+          "Only taxes",
+          "Only the monarchy",
+          "Nothing important"
+        ],
+        "answer": "Money, markets and schools",
+        "topic": "Policies of the regime"
+      },
+      {
+        "step": 4,
+        "prompt": "The regime fell on 7 January 1979 because",
+        "question": "What happened?",
+        "options": [
+          "Vietnamese troops and the Salvation Front took Phnom Penh",
+          "UN troops arrived",
+          "It lost an election",
+          "Thailand invaded"
+        ],
+        "answer": "Vietnamese troops and the Salvation Front took Phnom Penh",
+        "topic": "Causes and reasons"
+      }
+    ],
+    "h5": [
+      {
+        "step": 1,
+        "prompt": "The People’s Republic of Kampuchea was founded in",
+        "question": "Which year?",
+        "options": [
+          "1975",
+          "1979",
+          "1989",
+          "1993"
+        ],
+        "answer": "1979",
+        "topic": "Key dates"
+      },
+      {
+        "step": 2,
+        "prompt": "The Paris Peace Agreements were signed on",
+        "question": "Which date?",
+        "options": [
+          "23 October 1991",
+          "9 November 1953",
+          "24 September 1993",
+          "7 January 1979"
+        ],
+        "answer": "23 October 1991",
+        "topic": "Key dates"
+      },
+      {
+        "step": 3,
+        "prompt": "The UN mission that ran the transition after Paris was",
+        "question": "Which one?",
+        "options": [
+          "UNTAC",
+          "UNESCO",
+          "UNICEF",
+          "ASEAN"
+        ],
+        "answer": "UNTAC",
+        "topic": "Peace process"
+      },
+      {
+        "step": 4,
+        "prompt": "Why could the Paris Agreements be signed by 1991?",
+        "question": "Main reason",
+        "options": [
+          "Vietnamese troops had left and the Cold War was ending",
+          "The Khmer Rouge had won",
+          "France took control again",
+          "Cambodia had joined ASEAN"
+        ],
+        "answer": "Vietnamese troops had left and the Cold War was ending",
+        "topic": "Causes and reasons"
+      }
+    ],
+    "h6": [
+      {
+        "step": 1,
+        "prompt": "UN-organised national elections were held in",
+        "question": "Which year?",
+        "options": [
+          "1991",
+          "1993",
+          "1998",
+          "2003"
+        ],
+        "answer": "1993",
+        "topic": "Key dates"
+      },
+      {
+        "step": 2,
+        "prompt": "The constitution of 24 September 1993 restored",
+        "question": "What?",
+        "options": [
+          "The monarchy",
+          "One-party rule",
+          "French protection",
+          "Military rule"
+        ],
+        "answer": "The monarchy",
+        "topic": "The 1993 constitution"
+      },
+      {
+        "step": 3,
+        "prompt": "Cambodia joined ASEAN in",
+        "question": "Which year?",
+        "options": [
+          "1967",
+          "1993",
+          "1999",
+          "2004"
+        ],
+        "answer": "1999",
+        "topic": "Regional relations"
+      },
+      {
+        "step": 4,
+        "prompt": "Under the 1993 constitution, Cambodia is",
+        "question": "Which system?",
+        "options": [
+          "A constitutional monarchy: the King reigns but does not govern",
+          "An absolute monarchy",
+          "A one-party state",
+          "A republic with a president"
+        ],
+        "answer": "A constitutional monarchy: the King reigns but does not govern",
+        "topic": "System of government"
+      }
+    ]
+  }
+}

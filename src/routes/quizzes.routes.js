@@ -8,7 +8,6 @@ const { v4: uuidv4 } = require('uuid');
 const { awardXp, XP_VALUES, xpForQuizScore, levelInfo } = require('../utils/xp');
 const { recordActivity } = require('../utils/streak');
 const { guestCanAccessStep, sendGuestWall } = require('../utils/guest');
-const { notifyQuizComplete } = require('../utils/notifyEvents');
 const { evaluateAchievements } = require('../utils/achievements');
 const { hasCourseAccess, ensureEnrolled } = require('../utils/access');
 const { checkChapterAutoComplete } = require('../utils/progress');
@@ -73,6 +72,16 @@ function toSearchPattern(term) {
 // import gives every unit 6); a student only ever takes a random draw of
 // this many per attempt. Teachers still see the full bank when building it.
 const QUIZ_TAKE_SIZE = 5;
+
+// An explanation that names option letters ("B, A, C each alter the split
+// ratio") only reads correctly against the order it was written for, so those
+// questions keep their authored option order. Everything else gets shuffled.
+const NAMES_OPTION_LETTERS = /(^|[^A-Za-z])[A-D]([^A-Za-z]|$)/;
+const optionsFor = (question, options) =>
+  Array.isArray(options) && options.length > 1
+    && !(question.explanation && NAMES_OPTION_LETTERS.test(question.explanation))
+    ? pickRandom(options, options.length)
+    : options;
 
 // Shared gate for the two student-facing "play" endpoints (per-question
 // /check and final /submit): the quiz must be published and the caller must
@@ -938,22 +947,22 @@ router.get('/daily', authenticateToken, isStudent, async (req, res) => {
 
       const { data: savedAttempt, error } = emptyUnstarted
         ? await supabase
-            .from('daily_quiz_attempts')
-            .update({ question_ids: questionIds })
-            .eq('id', attempt.id)
-            .select()
-            .single()
+          .from('daily_quiz_attempts')
+          .update({ question_ids: questionIds })
+          .eq('id', attempt.id)
+          .select()
+          .single()
         : await supabase
-            .from('daily_quiz_attempts')
-            .insert({
-              id: uuidv4(),
-              student_id: studentId,
-              quiz_date: today,
-              question_ids: questionIds,
-              created_at: new Date()
-            })
-            .select()
-            .single();
+          .from('daily_quiz_attempts')
+          .insert({
+            id: uuidv4(),
+            student_id: studentId,
+            quiz_date: today,
+            question_ids: questionIds,
+            created_at: new Date()
+          })
+          .select()
+          .single();
 
       if (error) throw error;
       attempt = savedAttempt;
@@ -1231,13 +1240,42 @@ router.get('/:id', optionalAuth, async (req, res) => {
       .eq('quiz_id', id)
       .order('order_number', { ascending: true });
 
-    // A student takes a random draw of QUIZ_TAKE_SIZE from the bank (varies
-    // every attempt), never the correct_answer/explanation up front — those
-    // are only revealed in the submit response / results review. A teacher
-    // previewing or editing the quiz still sees the full bank with answers.
-    const forStudent = (allQuestions || []).length > QUIZ_TAKE_SIZE
-      ? pickRandom(allQuestions, QUIZ_TAKE_SIZE).sort((a, b) => (a.order_number || 0) - (b.order_number || 0))
-      : (allQuestions || []);
+    // A student takes a random draw of QUIZ_TAKE_SIZE from the bank, never the
+    // correct_answer/explanation up front — those are only revealed in the
+    // submit response / results review. A teacher previewing or editing the
+    // quiz still sees the full bank, in authored order, with answers.
+    //
+    // No two attempts should look alike, because the cheapest way past a
+    // retake is remembering shapes rather than history: "it was the second
+    // option", "question three was the long one". So the draw prefers
+    // questions this student hasn't been served yet, and what's left is
+    // shuffled rather than replayed in the authored order.
+    let forStudent = allQuestions || [];
+    if (!isTeacher) {
+      if (forStudent.length > QUIZ_TAKE_SIZE) {
+        const served = new Set();
+        if (req.user?.userId) {
+          const { data: prior } = await supabase
+            .from('quiz_submissions')
+            .select('answers')
+            .eq('quiz_id', id)
+            .eq('student_id', req.user.userId);
+          // `answers` comes back from PostgREST as a JSON *string*, same as
+          // quiz_questions.options — parse before reading its keys, or every
+          // character index lands in the set instead of the question ids.
+          (prior || []).forEach(sub => {
+            const parsed = typeof sub.answers === 'string' ? JSON.parse(sub.answers) : sub.answers;
+            Object.keys(parsed || {}).forEach(qid => served.add(qid));
+          });
+        }
+        const draw = pickRandom(forStudent.filter(q => !served.has(q.id)), QUIZ_TAKE_SIZE);
+        if (draw.length < QUIZ_TAKE_SIZE) {
+          draw.push(...pickRandom(forStudent.filter(q => served.has(q.id)), QUIZ_TAKE_SIZE - draw.length));
+        }
+        forStudent = draw;
+      }
+      forStudent = pickRandom(forStudent, forStudent.length);
+    }
 
     const questionsToSend = isTeacher ? (allQuestions || []) : forStudent;
 
@@ -1245,7 +1283,7 @@ router.get('/:id', optionalAuth, async (req, res) => {
       const options = typeof q.options === 'string' ? JSON.parse(q.options) : q.options;
       if (isTeacher) return { ...q, options };
       const { correct_answer, explanation, ...safe } = q;
-      return { ...safe, options };
+      return { ...safe, options: optionsFor(q, options) };
     });
 
     res.json({
@@ -1444,14 +1482,13 @@ router.post('/:id/submit', optionalAuth, async (req, res) => {
       });
     }
 
-    // Has this student ever submitted this quiz before? (drives "first
-    // attempt" notifications + the passed-before XP guard)
+    // Has this student ever passed this quiz before? Drives the XP guard
+    // below (retaking an already-passed quiz shouldn't farm infinite XP).
     const { data: priorSubs } = await supabase
       .from('quiz_submissions')
       .select('passed')
       .eq('quiz_id', id)
       .eq('student_id', req.user.userId);
-    const firstAttempt = (priorSubs || []).length === 0;
     const passedBefore = (priorSubs || []).some(s => s.passed);
 
     // Only award XP the first time this student passes this quiz, so
@@ -1484,16 +1521,6 @@ router.post('/:id/submit', optionalAuth, async (req, res) => {
       await awardXp(req.user.userId, xpAwarded, 'quiz_pass', quiz.course_id || null);
     }
     await evaluateAchievements(req.user.userId);
-    notifyQuizComplete(req.user.userId, id, score, {
-      firstAttempt,
-      xpAwarded,
-      passed,
-      passPercentage: quiz.pass_percentage ?? 70,
-      lessonId: quiz.lesson_id || null,
-      courseId: quiz.course_id || null,
-      correctCount,
-      totalCount,
-    });
 
     // A passed quiz that belongs to a chapter — whether it's a unit's
     // practice quiz or the chapter's own end-of-lesson quiz — is a path step.
@@ -1513,11 +1540,6 @@ router.post('/:id/submit', optionalAuth, async (req, res) => {
       quiz.lesson_id
         ? supabase.from('lessons').select('title, order_number').eq('id', quiz.lesson_id).maybeSingle()
         : Promise.resolve({ data: null }),
-      // Set for a unit's own practice quiz, null for the chapter's
-      // end-of-lesson quiz — lets the quiz-complete screen show which unit
-      // this was, alongside the chapter, instead of a numbered "Chapter N"
-      // (order_number isn't a reliable position — some courses have every
-      // lesson sharing order_number 0, which showed as "Chapter 0").
       quiz.unit_id
         ? supabase.from('lesson_units').select('title').eq('id', quiz.unit_id).maybeSingle()
         : Promise.resolve({ data: null }),
@@ -1588,11 +1610,11 @@ router.get('/:id/results', authenticateToken, async (req, res) => {
     const answeredIds = Object.keys(submittedAnswers);
     const { data: questions } = answeredIds.length > 0
       ? await supabase
-          .from('quiz_questions')
-          .select('id, question, correct_answer, explanation, order_number, question_type')
-          .eq('quiz_id', id)
-          .in('id', answeredIds)
-          .order('order_number', { ascending: true })
+        .from('quiz_questions')
+        .select('id, question, correct_answer, explanation, order_number, question_type')
+        .eq('quiz_id', id)
+        .in('id', answeredIds)
+        .order('order_number', { ascending: true })
       : { data: [] };
 
     const review = (questions || []).map(question => {

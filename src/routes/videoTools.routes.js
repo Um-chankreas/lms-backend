@@ -1,0 +1,682 @@
+const express = require('express');
+const router = express.Router();
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
+const { spawn } = require('child_process');
+const { ZipArchive } = require('archiver');
+const ffmpegPath = require('ffmpeg-static');
+const { v4: uuidv4 } = require('uuid');
+const { authenticateToken } = require('../middleware/auth');
+const { requireFeature } = require('../utils/permissions');
+
+/**
+ * Video trimming / splitting — a standalone tool (not tied to any course
+ * content), so any signed-in user may use it, see /tools/trim-video.
+ *
+ *   POST /api/video-tools/trim   multipart: video, segments (JSON)
+ *       -> one video file (one segment) or a .zip (2+ segments)
+ *
+ * Runs on the server with a real ffmpeg binary (ffmpeg-static bundles the
+ * binary itself — no manual server install) using stream-copy (`-c copy`):
+ * no re-encoding, so it is fast (seconds, regardless of the source's length)
+ * and lossless. The trade-off is a cut can land up to a couple of seconds off
+ * the requested point — ffmpeg snaps `-ss` to the nearest keyframe when
+ * copying rather than re-encoding — which is fine for minute-level splitting
+ * but not frame-accurate editing.
+ *
+ * The video is uploaded to THIS server (unlike course video uploads, which go
+ * straight to Supabase Storage — see lessons.routes.js) because ffmpeg has to
+ * run somewhere, and doing this in the browser (ffmpeg.wasm) doesn't hold up
+ * for the file sizes this app already produces (an hour-long class recording
+ * can be 1-2GB — see utils/browserRecorder.js on the client). Streamed
+ * straight to a temp file on disk (never buffered in memory) and deleted once
+ * the response finishes, whether it succeeded or not.
+ */
+
+const ALLOWED_VIDEO_EXT = { 'video/mp4': '.mp4', 'video/quicktime': '.mov', 'video/webm': '.webm', 'video/x-m4v': '.m4v', 'video/x-matroska': '.mkv' };
+const MAX_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024; // 8GB — long, high-bitrate class recordings (keep in sync with VideoEditorView.vue)
+const MAX_SEGMENTS = 20;
+
+const extFor = (file) => ALLOWED_VIDEO_EXT[file.mimetype] || path.extname(file.originalname).toLowerCase() || '.mp4';
+
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: os.tmpdir(),
+    filename: (req, file, cb) => cb(null, `vt-in-${uuidv4()}${extFor(file)}`)
+  }),
+  limits: { fileSize: MAX_UPLOAD_BYTES },
+  fileFilter: (req, file, cb) => {
+    if (ALLOWED_VIDEO_EXT[file.mimetype] || /\.(mp4|mov|webm|m4v|mkv)$/i.test(file.originalname)) cb(null, true);
+    else cb(Object.assign(new Error('Unsupported video type. Use MP4, MOV, WebM, M4V or MKV.'), { status: 400 }));
+  }
+});
+
+const clampNonNegative = (n) => Math.max(0, Number(n) || 0);
+
+const fmtClock = (totalSeconds) => {
+  const s = Math.max(0, Math.round(totalSeconds));
+  const hh = String(Math.floor(s / 3600)).padStart(2, '0');
+  const mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
+  const ss = String(s % 60).padStart(2, '0');
+  return `${hh}-${mm}-${ss}`;
+};
+
+function runFfmpeg(args) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(ffmpegPath, args);
+    let stderr = '';
+    proc.stderr.on('data', (d) => { stderr += d.toString(); });
+    proc.on('error', reject);
+    proc.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(Object.assign(new Error(`Video processing failed: ${stderr.slice(-1000).trim() || `ffmpeg exited with code ${code}`}`), { status: 422 }));
+    });
+  });
+}
+
+const cleanup = (paths) => paths.filter(Boolean).forEach((p) => fs.unlink(p, () => {}));
+
+router.post('/trim', authenticateToken, requireFeature('trim_video'), upload.single('video'), async (req, res, next) => {
+  const inputPath = req.file?.path;
+  const outputPaths = [];
+  try {
+    if (!inputPath) return res.status(400).json({ success: false, error: 'A video file is required' });
+
+    let segments;
+    try {
+      segments = JSON.parse(req.body.segments || '[]');
+    } catch {
+      return res.status(400).json({ success: false, error: '`segments` must be JSON: [{ start, end }, ...] in seconds' });
+    }
+    if (!Array.isArray(segments) || segments.length === 0) {
+      return res.status(400).json({ success: false, error: 'At least one segment is required' });
+    }
+    if (segments.length > MAX_SEGMENTS) {
+      return res.status(400).json({ success: false, error: `Split into at most ${MAX_SEGMENTS} clips at a time` });
+    }
+
+    const ext = path.extname(inputPath) || '.mp4';
+    const args = ['-y', '-i', inputPath];
+    const names = [];
+    segments.forEach((seg, i) => {
+      const start = clampNonNegative(seg.start);
+      const end = Number(seg.end);
+      if (!Number.isFinite(end) || end <= start) {
+        throw Object.assign(new Error(`Clip ${i + 1}: the end time must be after the start time`), { status: 400 });
+      }
+      const outPath = path.join(os.tmpdir(), `vt-out-${uuidv4()}${ext}`);
+      outputPaths.push(outPath);
+      names.push(`clip-${String(i + 1).padStart(2, '0')}-${fmtClock(start)}_to_${fmtClock(end)}${ext}`);
+      // Per-output options (placed after -i, before this output's path) apply
+      // to that output only — this cuts every segment in one ffmpeg run.
+      args.push('-ss', String(start), '-to', String(end), '-c', 'copy', '-avoid_negative_ts', 'make_zero', outPath);
+    });
+
+    await runFfmpeg(args);
+
+    if (outputPaths.length === 1) {
+      res.setHeader('Content-Disposition', `attachment; filename="${names[0]}"`);
+      res.setHeader('Content-Type', `video/${ext.slice(1)}`);
+      await new Promise((resolve, reject) => {
+        const stream = fs.createReadStream(outputPaths[0]);
+        stream.on('error', reject);
+        res.on('finish', resolve);
+        res.on('error', reject);
+        stream.pipe(res);
+      });
+    } else {
+      res.setHeader('Content-Disposition', 'attachment; filename="clips.zip"');
+      res.setHeader('Content-Type', 'application/zip');
+      await new Promise((resolve, reject) => {
+        const archive = new ZipArchive({ zlib: { level: 6 } });
+        archive.on('error', reject);
+        res.on('finish', resolve);
+        res.on('error', reject);
+        archive.pipe(res);
+        outputPaths.forEach((p, i) => archive.file(p, { name: names[i] }));
+        archive.finalize();
+      });
+    }
+  } catch (err) {
+    if (res.headersSent) res.destroy(err);
+    else next(err);
+  } finally {
+    // Runs on every path — including the early 400 returns above — so an
+    // uploaded file is never left behind in the temp dir.
+    cleanup([inputPath, ...outputPaths]);
+  }
+});
+
+/**
+ * POST /api/video-tools/compress   multipart: video, quality?
+ *       -> the compressed video file, with X-Original-Size / X-Compressed-Size
+ *          headers so the client can show the size reduction.
+ *
+ * Re-encodes with libx264 (unlike /trim's `-c copy`, this is NOT lossless —
+ * that's the point, it's what actually shrinks the file). `quality` picks a
+ * CRF (lower = larger/better) and a resolution cap; the codec never upscales
+ * a smaller source. `-movflags +faststart` moves the moov atom to the front
+ * so the result streams/seeks immediately once served from Supabase Storage,
+ * matching how lesson/unit videos are already served.
+ */
+const QUALITY_PRESETS = {
+  high: { crf: 20, maxHeight: null },     // near-lossless, still shrinks a lot vs. a raw phone/OBS export
+  balanced: { crf: 23, maxHeight: 1080 }, // default — the standard "visually lossless" CRF
+  small: { crf: 28, maxHeight: 720 }      // smallest file, noticeable softening on fast motion
+};
+
+router.post('/compress', authenticateToken, requireFeature('compress_video'), upload.single('video'), async (req, res, next) => {
+  const inputPath = req.file?.path;
+  let outputPath;
+  try {
+    if (!inputPath) return res.status(400).json({ success: false, error: 'A video file is required' });
+
+    const preset = QUALITY_PRESETS[req.body.quality] || QUALITY_PRESETS.balanced;
+    const originalSize = req.file.size;
+
+    outputPath = path.join(os.tmpdir(), `vt-out-${uuidv4()}.mp4`);
+    const args = ['-y', '-i', inputPath];
+    if (preset.maxHeight) args.push('-vf', `scale=-2:'min(ih,${preset.maxHeight})'`);
+    args.push(
+      '-c:v', 'libx264', '-crf', String(preset.crf), '-preset', 'medium',
+      '-c:a', 'aac', '-b:a', '128k',
+      '-movflags', '+faststart',
+      outputPath
+    );
+
+    await runFfmpeg(args);
+
+    const compressedSize = fs.statSync(outputPath).size;
+    const name = path.basename(req.file.originalname, path.extname(req.file.originalname)) + '-compressed.mp4';
+
+    res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+    res.setHeader('Content-Type', 'video/mp4');
+    res.setHeader('X-Original-Size', String(originalSize));
+    res.setHeader('X-Compressed-Size', String(compressedSize));
+    await new Promise((resolve, reject) => {
+      const stream = fs.createReadStream(outputPath);
+      stream.on('error', reject);
+      res.on('finish', resolve);
+      res.on('error', reject);
+      stream.pipe(res);
+    });
+  } catch (err) {
+    if (res.headersSent) res.destroy(err);
+    else next(err);
+  } finally {
+    cleanup([inputPath, outputPath]);
+  }
+});
+
+/**
+ * Compress as a background job, so the client can show encoding progress
+ * (the plain /compress above answers only once ffmpeg is done — for an hour
+ * of video that's many silent minutes, and a long-held request is exactly
+ * what proxies time out).
+ *
+ *   POST /api/video-tools/compress-jobs          multipart: video, quality?
+ *       -> 202 { jobId }  as soon as the upload lands; encoding runs on
+ *   GET  /api/video-tools/compress-jobs/:id
+ *       -> { status: 'running'|'done'|'error', percent, error?, originalSize, compressedSize? }
+ *   GET  /api/video-tools/compress-jobs/:id/file
+ *       -> the compressed .mp4 (the job and its files are deleted once sent)
+ *
+ * Jobs live in memory on this process: a restart drops them (the client
+ * reports the failure and the user retries). Only the user who started a job
+ * can read it. Finished jobs nobody collects are swept after JOB_TTL_MS.
+ */
+const jobs = new Map();
+const JOB_TTL_MS = 2 * 60 * 60 * 1000;
+
+const dropJob = (id) => {
+  const job = jobs.get(id);
+  if (!job) return;
+  jobs.delete(id);
+  if (job.proc && job.status === 'running') job.proc.kill('SIGKILL');
+  cleanup([job.inputPath, job.outputPath, job.zipPath, ...(job.outputPaths || [])]);
+};
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, job] of jobs) {
+    if (now - (job.finishedAt || job.startedAt) > JOB_TTL_MS) dropJob(id);
+  }
+}, 10 * 60 * 1000).unref();
+
+// Like runFfmpeg, but reports percent done via `-progress pipe:1`, whose
+// out_time_us (microseconds encoded so far) we divide by the source length.
+function runFfmpegWithProgress(args, durationSec, onPercent, onSpawn) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(ffmpegPath, ['-progress', 'pipe:1', '-nostats', ...args]);
+    onSpawn?.(proc);
+    let stderr = '';
+    let buf = '';
+    proc.stdout.on('data', (d) => {
+      buf += d.toString();
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        const m = line.match(/^out_time_us=(\d+)/);
+        if (m && durationSec > 0) onPercent(Math.min(99, Math.floor((Number(m[1]) / 1e6 / durationSec) * 100)));
+      }
+    });
+    proc.stderr.on('data', (d) => { stderr = (stderr + d.toString()).slice(-4000); });
+    proc.on('error', reject);
+    proc.on('close', (code, signal) => {
+      if (code === 0) resolve();
+      else reject(Object.assign(new Error(signal ? 'Cancelled' : `Video processing failed: ${stderr.slice(-1000).trim() || `ffmpeg exited with code ${code}`}`), { status: 422 }));
+    });
+  });
+}
+
+const compressArgs = (inputPath, outputPath, preset) => {
+  const args = ['-y', '-i', inputPath];
+  if (preset.maxHeight) args.push('-vf', `scale=-2:'min(ih,${preset.maxHeight})'`);
+  args.push(
+    '-c:v', 'libx264', '-crf', String(preset.crf), '-preset', 'medium',
+    '-c:a', 'aac', '-b:a', '128k',
+    '-movflags', '+faststart',
+    outputPath
+  );
+  return args;
+};
+
+const ownJob = (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job || job.userId !== req.user.userId) {
+    res.status(404).json({ success: false, error: 'That job has expired or doesn’t exist. Please try again.' });
+    return null;
+  }
+  return job;
+};
+
+router.post('/compress-jobs', authenticateToken, requireFeature('compress_video'), upload.single('video'), async (req, res, next) => {
+  const inputPath = req.file?.path;
+  try {
+    if (!inputPath) return res.status(400).json({ success: false, error: 'A video file is required' });
+
+    const preset = QUALITY_PRESETS[req.body.quality] || QUALITY_PRESETS.balanced;
+    const info = await probe(inputPath);
+    if (!info) {
+      cleanup([inputPath]);
+      return res.status(422).json({ success: false, error: 'That file couldn’t be read as a video' });
+    }
+
+    const id = uuidv4();
+    const outputPath = path.join(os.tmpdir(), `vt-out-${uuidv4()}.mp4`);
+    const job = {
+      id, userId: req.user.userId, status: 'running', percent: 0, error: null,
+      inputPath, outputPath, startedAt: Date.now(), finishedAt: null, proc: null,
+      originalSize: req.file.size, compressedSize: null,
+      name: path.basename(req.file.originalname, path.extname(req.file.originalname)) + '-compressed.mp4'
+    };
+    jobs.set(id, job);
+    res.status(202).json({ success: true, jobId: id });
+
+    runFfmpegWithProgress(compressArgs(inputPath, outputPath, preset), info.duration, (p) => { job.percent = p; }, (proc) => { job.proc = proc; })
+      .then(() => {
+        job.status = 'done';
+        job.percent = 100;
+        job.compressedSize = fs.statSync(outputPath).size;
+      })
+      .catch((err) => {
+        job.status = 'error';
+        job.error = err.message;
+        cleanup([outputPath]);
+      })
+      .finally(() => {
+        job.finishedAt = Date.now();
+        job.proc = null;
+        cleanup([inputPath]);
+      });
+  } catch (err) {
+    cleanup([inputPath]);
+    next(err);
+  }
+});
+
+router.get('/compress-jobs/:id', authenticateToken, (req, res) => {
+  const job = ownJob(req, res);
+  if (!job) return;
+  res.json({
+    success: true,
+    status: job.status,
+    percent: job.percent,
+    error: job.error,
+    originalSize: job.originalSize,
+    compressedSize: job.compressedSize
+  });
+});
+
+router.get('/compress-jobs/:id/file', authenticateToken, (req, res, next) => {
+  const job = ownJob(req, res);
+  if (!job) return;
+  if (job.status !== 'done') return res.status(409).json({ success: false, error: 'The video isn’t ready yet' });
+  res.setHeader('Content-Disposition', `attachment; filename="${job.name}"`);
+  res.setHeader('Content-Type', 'video/mp4');
+  res.setHeader('Content-Length', String(job.compressedSize));
+  const stream = fs.createReadStream(job.outputPath);
+  stream.on('error', next);
+  res.on('finish', () => dropJob(job.id));
+  stream.pipe(res);
+});
+
+router.delete('/compress-jobs/:id', authenticateToken, (req, res) => {
+  const job = ownJob(req, res);
+  if (!job) return;
+  dropJob(job.id);
+  res.json({ success: true });
+});
+
+/**
+ * Trim as a background job, same shape as compress-jobs, so the client can
+ * show a percentage and time left. Segments are cut one ffmpeg run at a time
+ * (still `-c copy`) so progress is simply (finished clip seconds + the
+ * current clip's progress) / total clip seconds.
+ *
+ *   POST /api/video-tools/trim-jobs          multipart: video, segments (JSON)
+ *       -> 202 { jobId }
+ *   GET  /api/video-tools/trim-jobs/:id      -> { status, percent, error? }
+ *   GET  /api/video-tools/trim-jobs/:id/file -> the clip, or a .zip for 2+
+ *       (the job and its files are deleted once sent)
+ */
+router.post('/trim-jobs', authenticateToken, requireFeature('trim_video'), upload.single('video'), async (req, res, next) => {
+  const inputPath = req.file?.path;
+  const outputPaths = [];
+  try {
+    if (!inputPath) return res.status(400).json({ success: false, error: 'A video file is required' });
+
+    let segments;
+    try {
+      segments = JSON.parse(req.body.segments || '[]');
+    } catch {
+      cleanup([inputPath]);
+      return res.status(400).json({ success: false, error: '`segments` must be JSON: [{ start, end }, ...] in seconds' });
+    }
+    if (!Array.isArray(segments) || segments.length === 0) {
+      cleanup([inputPath]);
+      return res.status(400).json({ success: false, error: 'At least one segment is required' });
+    }
+    if (segments.length > MAX_SEGMENTS) {
+      cleanup([inputPath]);
+      return res.status(400).json({ success: false, error: `Split into at most ${MAX_SEGMENTS} clips at a time` });
+    }
+
+    const ext = path.extname(inputPath) || '.mp4';
+    const clips = segments.map((seg, i) => {
+      const start = clampNonNegative(seg.start);
+      const end = Number(seg.end);
+      if (!Number.isFinite(end) || end <= start) {
+        throw Object.assign(new Error(`Clip ${i + 1}: the end time must be after the start time`), { status: 400 });
+      }
+      const outPath = path.join(os.tmpdir(), `vt-out-${uuidv4()}${ext}`);
+      outputPaths.push(outPath);
+      return { start, end, outPath, name: `clip-${String(i + 1).padStart(2, '0')}-${fmtClock(start)}_to_${fmtClock(end)}${ext}` };
+    });
+    const totalSec = clips.reduce((n, c) => n + (c.end - c.start), 0);
+
+    const id = uuidv4();
+    const job = {
+      id, userId: req.user.userId, status: 'running', percent: 0, error: null,
+      inputPath, outputPath: null, outputPaths, clips, ext,
+      startedAt: Date.now(), finishedAt: null, proc: null
+    };
+    jobs.set(id, job);
+    res.status(202).json({ success: true, jobId: id });
+
+    (async () => {
+      let doneSec = 0;
+      for (const c of clips) {
+        const len = c.end - c.start;
+        await runFfmpegWithProgress(
+          ['-y', '-i', inputPath, '-ss', String(c.start), '-to', String(c.end), '-c', 'copy', '-avoid_negative_ts', 'make_zero', c.outPath],
+          // With output-side -ss, out_time counts from the clip's own start.
+          len,
+          (p) => { job.percent = Math.min(99, Math.floor(((doneSec + (p / 100) * len) / totalSec) * 100)); },
+          (proc) => { job.proc = proc; }
+        );
+        doneSec += len;
+      }
+      // Zip up front (stored, not deflated — video is already compressed) so
+      // the download has a known size and the client can show real progress.
+      if (clips.length > 1) {
+        job.zipPath = path.join(os.tmpdir(), `vt-out-${uuidv4()}.zip`);
+        await new Promise((resolve, reject) => {
+          const out = fs.createWriteStream(job.zipPath);
+          const archive = new ZipArchive({ store: true });
+          out.on('close', resolve);
+          out.on('error', reject);
+          archive.on('error', reject);
+          archive.pipe(out);
+          clips.forEach((c) => archive.file(c.outPath, { name: c.name }));
+          archive.finalize();
+        });
+      }
+      job.resultSize = fs.statSync(job.zipPath || clips[0].outPath).size;
+    })()
+      .then(() => {
+        job.status = 'done';
+        job.percent = 100;
+      })
+      .catch((err) => {
+        job.status = 'error';
+        job.error = err.message;
+        cleanup([...outputPaths, job.zipPath]);
+      })
+      .finally(() => {
+        job.finishedAt = Date.now();
+        job.proc = null;
+        cleanup([inputPath]);
+      });
+  } catch (err) {
+    cleanup([inputPath, ...outputPaths]);
+    next(err);
+  }
+});
+
+router.get('/trim-jobs/:id', authenticateToken, (req, res) => {
+  const job = ownJob(req, res);
+  if (!job) return;
+  res.json({ success: true, status: job.status, percent: job.percent, error: job.error, resultSize: job.resultSize || null });
+});
+
+router.get('/trim-jobs/:id/file', authenticateToken, (req, res, next) => {
+  const job = ownJob(req, res);
+  if (!job) return;
+  if (job.status !== 'done') return res.status(409).json({ success: false, error: 'The clips aren’t ready yet' });
+  res.on('finish', () => dropJob(job.id));
+  res.setHeader('Content-Length', String(job.resultSize));
+  if (job.clips.length === 1) {
+    const [c] = job.clips;
+    res.setHeader('Content-Disposition', `attachment; filename="${c.name}"`);
+    res.setHeader('Content-Type', `video/${job.ext.slice(1)}`);
+  } else {
+    res.setHeader('Content-Disposition', 'attachment; filename="clips.zip"');
+    res.setHeader('Content-Type', 'application/zip');
+  }
+  const stream = fs.createReadStream(job.zipPath || job.clips[0].outPath);
+  stream.on('error', next);
+  stream.pipe(res);
+});
+
+router.delete('/trim-jobs/:id', authenticateToken, (req, res) => {
+  const job = ownJob(req, res);
+  if (!job) return;
+  dropJob(job.id);
+  res.json({ success: true });
+});
+
+/**
+ * POST /api/video-tools/merge   multipart: videos (2..MAX_MERGE_FILES, in order)
+ *       -> one .mp4 with the inputs joined end to end.
+ *
+ * When every input has the same video codec, resolution and audio layout
+ * (the usual case: one recording split into parts) the parts are joined with
+ * the concat demuxer and `-c copy` — seconds, lossless. Otherwise (different
+ * cameras/phones/resolutions) they're re-encoded through the concat filter,
+ * scaled and letterboxed to the first video's size. That path uses a low CRF
+ * so the editor's optional compress step afterwards doesn't stack two lossy
+ * passes' worth of damage. Gated by trim_video — it's the same "editing"
+ * permission; there's no separate merge feature key.
+ */
+const MAX_MERGE_FILES = 10;
+
+// ffmpeg-static ships no ffprobe, so read `ffmpeg -i`'s stream summary off
+// stderr instead (it exits non-zero for "no output file", which is expected).
+function probe(file) {
+  return new Promise((resolve) => {
+    const proc = spawn(ffmpegPath, ['-hide_banner', '-i', file]);
+    let stderr = '';
+    proc.stderr.on('data', (d) => { stderr += d.toString(); });
+    proc.on('error', () => resolve(null));
+    proc.on('close', () => {
+      const video = stderr.match(/Stream #\S+.*?Video: (\w+).*?, (\d{2,5})x(\d{2,5})/);
+      const audio = stderr.match(/Stream #\S+.*?Audio: (\w+).*?, (\d+) Hz, ([\w.()]+)/);
+      const dur = stderr.match(/Duration: (\d+):(\d+):([\d.]+)/);
+      if (!video) return resolve(null);
+      resolve({
+        duration: dur ? Number(dur[1]) * 3600 + Number(dur[2]) * 60 + Number(dur[3]) : 0,
+        vcodec: video[1], width: Number(video[2]), height: Number(video[3]),
+        acodec: audio?.[1] || null, arate: audio ? Number(audio[2]) : null, alayout: audio?.[3] || null
+      });
+    });
+  });
+}
+
+// Probes the inputs and builds the ffmpeg command that joins them.
+// Throws { status } errors for unreadable inputs.
+async function prepareMerge(files) {
+  const inputPaths = files.map((f) => f.path);
+  const infos = await Promise.all(inputPaths.map(probe));
+  const bad = infos.findIndex((i) => !i);
+  if (bad !== -1) throw Object.assign(new Error(`Video ${bad + 1} (“${files[bad].originalname}”) couldn’t be read`), { status: 422 });
+
+  const [first] = infos;
+  const sameShape = infos.every((i) =>
+    i.vcodec === first.vcodec && i.width === first.width && i.height === first.height
+    && i.acodec === first.acodec && i.arate === first.arate && i.alayout === first.alayout);
+  const hasAudio = infos.some((i) => i.acodec);
+
+  const outputPath = path.join(os.tmpdir(), `vt-out-${uuidv4()}.mp4`);
+  let args;
+  let listPath = null;
+  if (sameShape && ['h264', 'hevc'].includes(first.vcodec)) {
+    listPath = path.join(os.tmpdir(), `vt-list-${uuidv4()}.txt`);
+    fs.writeFileSync(listPath, inputPaths.map((p) => `file '${p.replace(/'/g, `'\\''`)}'`).join('\n'));
+    args = ['-y', '-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', '-movflags', '+faststart', outputPath];
+  } else {
+    // Even dimensions for libx264.
+    const W = first.width - (first.width % 2);
+    const H = first.height - (first.height % 2);
+    args = ['-y'];
+    inputPaths.forEach((p) => args.push('-i', p));
+    // A silent track stands in for any input that has no audio, so the
+    // concat filter always gets one audio pad per segment.
+    if (hasAudio) args.push('-f', 'lavfi', '-t', '1', '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000');
+    const silentIdx = inputPaths.length;
+    const parts = [];
+    const pads = [];
+    infos.forEach((info, i) => {
+      parts.push(`[${i}:v:0]scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[v${i}]`);
+      if (hasAudio) {
+        if (info.acodec) parts.push(`[${i}:a:0]aformat=sample_rates=48000:channel_layouts=stereo[a${i}]`);
+        // No audio track: loop the 1s silence out to this segment's length.
+        else parts.push(`[${silentIdx}:a]aloop=loop=-1:size=48000,atrim=duration=${info.duration.toFixed(3)}[a${i}]`);
+        pads.push(`[v${i}][a${i}]`);
+      } else {
+        pads.push(`[v${i}]`);
+      }
+    });
+    parts.push(`${pads.join('')}concat=n=${inputPaths.length}:v=1:a=${hasAudio ? 1 : 0}[v]${hasAudio ? '[a]' : ''}`);
+    args.push('-filter_complex', parts.join(';'), '-map', '[v]');
+    if (hasAudio) args.push('-map', '[a]', '-c:a', 'aac', '-b:a', '160k');
+    args.push('-c:v', 'libx264', '-crf', '18', '-preset', 'veryfast', '-movflags', '+faststart', outputPath);
+  }
+
+  return { args, outputPath, listPath, totalSec: infos.reduce((n, i) => n + i.duration, 0) };
+}
+
+/**
+ * Merge as a background job (same shape as compress-jobs/trim-jobs) so the
+ * client can show percent done and time left, and no long-held request gets
+ * cut off by a proxy.
+ *
+ *   POST /api/video-tools/merge-jobs          multipart: videos
+ *   GET  /api/video-tools/merge-jobs/:id      -> { status, percent, error?, resultSize }
+ *   GET  /api/video-tools/merge-jobs/:id/file -> the merged .mp4
+ */
+router.post('/merge-jobs', authenticateToken, requireFeature('trim_video'), upload.array('videos', MAX_MERGE_FILES), async (req, res, next) => {
+  const inputPaths = (req.files || []).map((f) => f.path);
+  try {
+    if (inputPaths.length < 2) {
+      cleanup(inputPaths);
+      return res.status(400).json({ success: false, error: 'Pick at least two videos to merge' });
+    }
+    let prepared;
+    try {
+      prepared = await prepareMerge(req.files);
+    } catch (err) {
+      cleanup(inputPaths);
+      return res.status(err.status || 500).json({ success: false, error: err.message });
+    }
+    const { args, outputPath, listPath, totalSec } = prepared;
+
+    const id = uuidv4();
+    const job = {
+      id, userId: req.user.userId, status: 'running', percent: 0, error: null,
+      inputPath: null, outputPath, outputPaths: [...inputPaths, listPath], name: 'merged.mp4',
+      startedAt: Date.now(), finishedAt: null, proc: null, resultSize: null
+    };
+    jobs.set(id, job);
+    res.status(202).json({ success: true, jobId: id });
+
+    runFfmpegWithProgress(args, totalSec, (p) => { job.percent = p; }, (proc) => { job.proc = proc; })
+      .then(() => {
+        job.status = 'done';
+        job.percent = 100;
+        job.resultSize = fs.statSync(outputPath).size;
+      })
+      .catch((err) => {
+        job.status = 'error';
+        job.error = err.message;
+        cleanup([outputPath]);
+      })
+      .finally(() => {
+        job.finishedAt = Date.now();
+        job.proc = null;
+        cleanup([...inputPaths, listPath]);
+      });
+  } catch (err) {
+    cleanup(inputPaths);
+    next(err);
+  }
+});
+
+router.get('/merge-jobs/:id', authenticateToken, (req, res) => {
+  const job = ownJob(req, res);
+  if (!job) return;
+  res.json({ success: true, status: job.status, percent: job.percent, error: job.error, resultSize: job.resultSize });
+});
+
+router.get('/merge-jobs/:id/file', authenticateToken, (req, res, next) => {
+  const job = ownJob(req, res);
+  if (!job) return;
+  if (job.status !== 'done') return res.status(409).json({ success: false, error: 'The video isn’t ready yet' });
+  res.setHeader('Content-Disposition', `attachment; filename="${job.name}"`);
+  res.setHeader('Content-Type', 'video/mp4');
+  res.setHeader('Content-Length', String(job.resultSize));
+  const stream = fs.createReadStream(job.outputPath);
+  stream.on('error', next);
+  res.on('finish', () => dropJob(job.id));
+  stream.pipe(res);
+});
+
+router.delete('/merge-jobs/:id', authenticateToken, (req, res) => {
+  const job = ownJob(req, res);
+  if (!job) return;
+  dropJob(job.id);
+  res.json({ success: true });
+});
+
+module.exports = router;

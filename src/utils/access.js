@@ -78,6 +78,10 @@ function todayYmd() {
 /** A subscription is active through its expiry day (expiry_date >= today). */
 const isSubscriptionActive = (expiryDate) => !!expiryDate && String(expiryDate).slice(0, 10) >= todayYmd();
 
+// Live classes are currently free for everyone. Set
+// LIVE_CLASS_REQUIRES_SUBSCRIPTION=true to bring back the per-course paywall.
+const LIVE_REQUIRES_SUBSCRIPTION = process.env.LIVE_CLASS_REQUIRES_SUBSCRIPTION === 'true';
+
 /**
  * Whether a student has an active subscription for THIS course
  * (student_course_subscriptions.expiry_date >= today). This is what gates
@@ -85,6 +89,7 @@ const isSubscriptionActive = (expiryDate) => !!expiryDate && String(expiryDate).
  * another.
  */
 async function hasCourseSubscription({ supabase, studentId, courseId }) {
+  if (!LIVE_REQUIRES_SUBSCRIPTION) return true;
   if (!studentId || !courseId) return false;
   const { data } = await supabase
     .from('student_course_subscriptions')
@@ -100,6 +105,7 @@ async function hasCourseSubscription({ supabase, studentId, courseId }) {
  * (one query — used to annotate a whole list). Returns a Set of course ids.
  */
 async function subscribedCourseIds({ supabase, studentId, courseIds }) {
+  if (!LIVE_REQUIRES_SUBSCRIPTION) return new Set(courseIds || []);
   if (!studentId || !courseIds || courseIds.length === 0) return new Set();
   const { data } = await supabase
     .from('student_course_subscriptions')
