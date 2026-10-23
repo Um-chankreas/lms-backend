@@ -902,8 +902,20 @@ async function buildAnalytics(req) {
     scopeStudentIds = [...new Set(enr.map(e => e.student_id))];
   }
   const rangeDays = [7, 30, 90].includes(Number(req.query.days)) ? Number(req.query.days) : null;
-  const winNew = rangeDays || 7;
-  const winQuiz = rangeDays || 30;
+  // ?from=YYYY-MM-DD&to=YYYY-MM-DD: a custom window (inclusive, UTC days, up to a
+  // year) — compared against the equally long window right before it.
+  const ymdRe = /^\d{4}-\d{2}-\d{2}$/;
+  let custom = null;
+  if (ymdRe.test(req.query.from || '') && ymdRe.test(req.query.to || '')) {
+    const f = new Date(`${req.query.from}T00:00:00.000Z`);
+    const t = new Date(`${req.query.to}T00:00:00.000Z`);
+    const len = Math.round((t - f) / 86400000) + 1;
+    if (Number.isFinite(len) && len >= 1 && len <= 366) {
+      custom = { from: req.query.from, to: req.query.to, start: f, end: new Date(t.getTime() + 86400000), len };
+    }
+  }
+  const winNew = custom ? custom.len : (rangeDays || 7);
+  const winQuiz = custom ? custom.len : (rangeDays || 30);
   // `.in()` with an empty list isn't valid PostgREST, so a teacher with no
   // students filters on an id that can't exist and gets all-zero stats.
   const NONE = ['00000000-0000-0000-0000-000000000000'];
@@ -918,10 +930,15 @@ async function buildAnalytics(req) {
   const iso = (d) => d.toISOString();
   const ymd = (d) => d.toISOString().slice(0, 10);
   const d7 = daysAgo(7), d14 = daysAgo(14), d30 = daysAgo(30);
-  const dNew = daysAgo(winNew), dNew2 = daysAgo(winNew * 2);
-  const dQuiz = daysAgo(winQuiz), dQuiz2 = daysAgo(winQuiz * 2);
-  const xpSince = daysAgo(Math.max(45, winNew * 2));
-  const quizSince = daysAgo(Math.max(60, winQuiz * 2));
+  const rangeEnd = custom ? custom.end : now;
+  const prevStart = custom ? new Date(custom.start.getTime() - winNew * ms) : null;
+  const dNew = custom ? custom.start : daysAgo(winNew);
+  const dNew2 = custom ? prevStart : daysAgo(winNew * 2);
+  const dQuiz = custom ? custom.start : daysAgo(winQuiz);
+  const dQuiz2 = custom ? prevStart : daysAgo(winQuiz * 2);
+  const earliest = (a, b) => (a < b ? a : b);
+  const xpSince = earliest(daysAgo(Math.max(45, winNew * 2)), dNew2);
+  const quizSince = earliest(daysAgo(Math.max(60, winQuiz * 2)), dQuiz2);
   const WEEKS = 12;
   const mondayOf = (d) => {
     const x = new Date(d); x.setUTCHours(0, 0, 0, 0);
@@ -957,7 +974,7 @@ async function buildAnalytics(req) {
   const kpis = {
     total_students: S.length,
     active_eligible: S.filter(s => s.is_active !== false).length,
-    new_students_7d: countCreatedBetween(dNew, now),
+    new_students_7d: countCreatedBetween(dNew, rangeEnd),
     new_students_prev_7d: countCreatedBetween(dNew2, dNew),
     paid_students: S.filter(s => paidIds.has(s.id)).length,
   };
@@ -970,7 +987,12 @@ async function buildAnalytics(req) {
   };
   (xpRows || []).forEach(r => touch(r.student_id, r.created_at));
   (subs || []).forEach(r => touch(r.student_id, r.submitted_at));
-  const active7 = [...lastActive].filter(([, ts]) => new Date(ts) >= dNew).length;
+  // Active in the window = any XP event or quiz submission inside it.
+  const activeInWindow = new Set();
+  const inWin = (ts) => { const t = new Date(ts); return t >= dNew && t < rangeEnd; };
+  (xpRows || []).forEach(r => { if (inWin(r.created_at)) activeInWindow.add(r.student_id); });
+  (subs || []).forEach(r => { if (inWin(r.submitted_at)) activeInWindow.add(r.student_id); });
+  const active7 = activeInWindow.size;
   kpis.active_students_7d = active7;
 
   // ── Weekly signups (last 12 weeks) + cumulative ──────────────────────
@@ -997,8 +1019,8 @@ async function buildAnalytics(req) {
     const sc = Number(x.score);
     if (!Number.isFinite(sc)) return;
     const t = new Date(x.submitted_at);
-    if (t >= dQuiz) { push(recent, x.student_id, sc); all30.push(sc); }
-    else if (t >= dQuiz2) { push(prior, x.student_id, sc); allPrev30.push(sc); }
+    if (t >= dQuiz && t < rangeEnd) { push(recent, x.student_id, sc); all30.push(sc); }
+    else if (t >= dQuiz2 && t < dQuiz) { push(prior, x.student_id, sc); allPrev30.push(sc); }
   });
   const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
   kpis.avg_quiz_score_30d = all30.length ? Math.round(mean(all30)) : null;
@@ -1058,7 +1080,8 @@ async function buildAnalytics(req) {
 
   return {
     kpis,
-    range_days: rangeDays || null,
+    range_days: custom ? null : rangeDays || null,
+    range: custom ? { from: custom.from, to: custom.to } : null,
     window_days: { activity: winNew, quiz: winQuiz },
     signups_weekly,
     most_improved,
@@ -1095,6 +1118,7 @@ async function analyticsExportHandler(req, res) {
       scope = `Class: ${c?.title || req.query.course_id}`;
     }
     if (data.range_days) scope += ` · Last ${data.range_days} days`;
+    if (data.range) scope += ` · ${data.range.from} to ${data.range.to}`;
     const wb = await buildDashboardWorkbook(data, scope);
     const buffer = await wb.xlsx.writeBuffer();
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
