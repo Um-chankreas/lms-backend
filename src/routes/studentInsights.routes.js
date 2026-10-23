@@ -6,6 +6,7 @@ const { levelInfo } = require('../utils/xp');
 const { getStreakSummary } = require('../utils/streak');
 const { isSubscriptionActive } = require('../utils/access');
 const { buildStudentTableWorkbook } = require('../utils/dashboardReport');
+const { buildCsv, buildCsvZip, buildPdf, safeName } = require('../utils/studentTableExport');
 const { courseProgress, fetchAllRows, fetchAllIn, toMs, toIso } = require('../utils/studentProgress');
 
 // Student progress insights for the web portal (admins + teachers). Teachers
@@ -533,6 +534,18 @@ function queryTable(rows, query) {
   const status = TABLE_STATUSES.includes(query.status) ? query.status : null;
   let out = rows;
   if (status) out = out.filter(r => r.status === status);
+  // Last-active date range (UTC days, inclusive). Students who were never
+  // active have no date, so any date range leaves them out.
+  const ymd = /^\d{4}-\d{2}-\d{2}$/;
+  const from = ymd.test(query.active_from || '') ? query.active_from : null;
+  const to = ymd.test(query.active_to || '') ? query.active_to : null;
+  if (from || to) {
+    out = out.filter(r => {
+      if (!r.last_active) return false;
+      const day = String(r.last_active).slice(0, 10);
+      return (!from || day >= from) && (!to || day <= to);
+    });
+  }
   if (q) {
     out = out.filter(r =>
       r.name.toLowerCase().includes(q) ||
@@ -565,6 +578,7 @@ const courseFilterOf = (req) => {
  *   ?course_id=<uuid>  one class (teachers: only their own; anything else is empty)
  *   &status=on_track|behind|inactive|not_started|completed
  *   &q=<text>          name / email / phone contains
+ *   &active_from=YYYY-MM-DD&active_to=YYYY-MM-DD  last active within (UTC days)
  *   &sort=name|course|progress|avg_quiz|quizzes|last_active|status  &dir=asc|desc
  *   &page=1&limit=10 (max 100)   &fresh=1 skips the 1-minute cache
  * -> { rows, pagination, status_counts, generated_at }
@@ -604,24 +618,66 @@ router.get('/students-table', async (req, res) => {
 
 /**
  * GET /api/insights/students-table/export
- * The same filters as /students-table, every matching row (no paging), as an
- * .xlsx. `include_contacts=1` adds email + phone columns (left out otherwise).
+ *   ?format=xlsx|csv|pdf  (default xlsx)
+ *   ?course_id=<uuid>     one class; omit for ALL classes
+ *   + the same search / status / active_from / active_to filters as the table
+ *   &include_contacts=1   adds email + phone (left out otherwise)
+ * One class -> a single sheet/file. All classes -> "All classes" first, then
+ * one sheet per class (Excel), one CSV per class zipped (CSV), or one section
+ * per class (PDF). Every matching row, no paging.
  */
 router.get('/students-table/export', async (req, res) => {
   try {
-    const all = await loadTableRows(req, courseFilterOf(req), req.query.fresh === '1');
-    const rows = queryTable(all, req.query);
-    const wb = buildStudentTableWorkbook(rows, {
-      includeContacts: req.query.include_contacts === '1',
-      description: [
-        courseFilterOf(req) ? `Class: ${rows[0]?.course_title || 'selected class'}` : 'All classes',
-        TABLE_STATUSES.includes(req.query.status) ? `Status: ${req.query.status.replace('_', ' ')}` : null,
-        req.query.q ? `Search: "${String(req.query.q).slice(0, 60)}"` : null,
-      ].filter(Boolean).join(' · '),
-    });
+    const format = ['xlsx', 'csv', 'pdf'].includes(req.query.format) ? req.query.format : 'xlsx';
+    const courseFilter = courseFilterOf(req);
+    const all = await loadTableRows(req, courseFilter, req.query.fresh === '1');
+
+    const filteredAll = queryTable(all, req.query);
+    let groups;
+    if (courseFilter) {
+      groups = [{ title: all[0]?.course_title || 'Class', rows: filteredAll }];
+    } else {
+      const byCourse = new Map();
+      all.forEach(r => { if (!byCourse.has(r.course_id)) byCourse.set(r.course_id, r.course_title || 'Class'); });
+      const perClass = [...byCourse]
+        .sort((a, b) => a[1].localeCompare(b[1]))
+        .map(([id, title]) => ({ title, rows: filteredAll.filter(r => r.course_id === id) }));
+      groups = [{ title: 'All classes', rows: filteredAll }, ...perClass];
+    }
+
+    const includeContacts = req.query.include_contacts === '1';
+    const description = [
+      courseFilter ? `Class: ${groups[0].title}` : 'All classes',
+      TABLE_STATUSES.includes(req.query.status) ? `Status: ${req.query.status.replace('_', ' ')}` : null,
+      req.query.q ? `Search: "${String(req.query.q).slice(0, 60)}"` : null,
+      (req.query.active_from || req.query.active_to) ? `Last active ${req.query.active_from || '…'} to ${req.query.active_to || '…'}` : null,
+    ].filter(Boolean).join(' · ');
+    const today = new Date().toISOString().slice(0, 10);
+    const scopeName = courseFilter ? safeName(groups[0].title, 'class').replace(/\s/g, '-') : 'all-classes';
+    const base = `romduol-students_${scopeName}_${today}`;
+    // Quote + RFC 5987 so Khmer class names survive in the header.
+    const disposition = (ext) => `attachment; filename="romduol-students_${today}.${ext}"; filename*=UTF-8''${encodeURIComponent(`${base}.${ext}`)}`;
+
+    if (format === 'csv') {
+      if (groups.length === 1) {
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', disposition('csv'));
+        return res.send(buildCsv(groups[0].rows, { includeContacts }));
+      }
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', disposition('zip'));
+      return res.send(await buildCsvZip(groups, { includeContacts }));
+    }
+    if (format === 'pdf') {
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', disposition('pdf'));
+      return res.send(await buildPdf(groups, { description, includeContacts }));
+    }
+
+    const wb = buildStudentTableWorkbook(groups, { includeContacts, description });
     const buffer = await wb.xlsx.writeBuffer();
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="romduol-students_${new Date().toISOString().slice(0, 10)}.xlsx"`);
+    res.setHeader('Content-Disposition', disposition('xlsx'));
     res.send(Buffer.from(buffer));
   } catch (error) {
     console.error('Insights students-table export error:', error);

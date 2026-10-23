@@ -306,8 +306,12 @@ const STATUS_FILL = {
   on_track: 'FFD6F1E2', behind: 'FFFCEBB3', inactive: 'FFFBD5D2', not_started: 'FFE6EAEE', completed: 'FFDDDFFB',
 };
 
-/** The dashboard's student table (one row per student per class) as a workbook. */
-function buildStudentTableWorkbook(rows, { includeContacts = false, description = '' } = {}) {
+/**
+ * The dashboard's student table as a workbook. `groups` = [{ title, rows }]:
+ * one sheet per group (for "all classes": "All classes" first, then a sheet
+ * for each class).
+ */
+function buildStudentTableWorkbook(groups, { includeContacts = false, description = '' } = {}) {
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Romduol Scholars';
   const columns = [
@@ -321,26 +325,38 @@ function buildStudentTableWorkbook(rows, { includeContacts = false, description 
     { key: 'idle', header: 'Days inactive', width: 15 },
     { key: 'status', header: 'Status', width: 14 },
   ];
-  const ws = addTable(wb, 'Student performance', 'Student performance · Romduol Scholars',
-    `${description || 'All classes'} · ${rows.length} rows · Generated ${new Date().toISOString().replace('T', ' ').slice(0, 16)} UTC`,
-    columns,
-    rows.map(r => ({
-      name: r.name || '—', email: r.email || '', phone: r.phone || '', course: r.course_title || '—',
-      progress: r.progress, avg: r.avg_quiz, quizzes: `${r.quizzes_attempted}/${r.quizzes_total}`,
-      last: dateOnly(r.last_active), idle: r.days_inactive, status: r.status,
-    })));
   const statusCol = columns.findIndex(c => c.key === 'status') + 1;
   const progressCol = columns.findIndex(c => c.key === 'progress') + 1;
-  ws.eachRow((row, n) => {
-    if (n < 5) return;
-    const st = row.getCell(statusCol).value;
-    row.getCell(statusCol).value = STATUS_LABEL[st] || st;
-    row.getCell(statusCol).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: STATUS_FILL[st] || 'FFE6EAEE' } };
-    // Data bar-ish shading for progress.
-    const pct = row.getCell(progressCol).value;
-    if (typeof pct === 'number') {
-      row.getCell(progressCol).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: pct >= 60 ? 'FFB9E6CD' : pct >= 20 ? 'FFE3F6EC' : 'FFF6F8F7' } };
-    }
+  const used = new Set();
+  // Excel sheet names: max 31 chars, none of  [ ] : * ? / \, unique (case-insensitive).
+  const sheetName = (title, i) => {
+    let base = String(title || '').replace(/[\[\]:*?/\\]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 31) || `Class ${i}`;
+    let name = base;
+    for (let n = 2; used.has(name.toLowerCase()); n += 1) name = `${base.slice(0, 31 - String(n).length - 1)} ${n}`;
+    used.add(name.toLowerCase());
+    return name;
+  };
+
+  groups.forEach((g, i) => {
+    const name = sheetName(g.title, i);
+    const ws = addTable(wb, name, `Student performance · ${g.title} · Romduol Scholars`,
+      `${description || 'All classes'} · ${g.rows.length} rows · Generated ${new Date().toISOString().replace('T', ' ').slice(0, 16)} UTC`,
+      columns,
+      g.rows.map(r => ({
+        name: r.name || '—', email: r.email || '', phone: r.phone || '', course: r.course_title || '—',
+        progress: r.progress, avg: r.avg_quiz, quizzes: `${r.quizzes_attempted}/${r.quizzes_total}`,
+        last: dateOnly(r.last_active), idle: r.days_inactive, status: r.status,
+      })));
+    ws.eachRow((row, n) => {
+      if (n < 5) return;
+      const st = row.getCell(statusCol).value;
+      row.getCell(statusCol).value = STATUS_LABEL[st] || st;
+      row.getCell(statusCol).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: STATUS_FILL[st] || 'FFE6EAEE' } };
+      const pct = row.getCell(progressCol).value;
+      if (typeof pct === 'number') {
+        row.getCell(progressCol).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: pct >= 60 ? 'FFB9E6CD' : pct >= 20 ? 'FFE3F6EC' : 'FFF6F8F7' } };
+      }
+    });
   });
   return wb;
 }
