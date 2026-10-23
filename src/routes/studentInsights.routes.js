@@ -470,14 +470,17 @@ router.get('/overview', async (req, res) => {
 const TABLE_TTL_MS = 60 * 1000;
 const TABLE_MAX_LIMIT = 100;
 const TABLE_STATUSES = ['on_track', 'behind', 'inactive', 'not_started', 'completed'];
-const tableCache = new Map();   // key -> { at, rows, promise }
+const tableCache = new Map();   // key -> { at, data, promise }
 
-async function loadTableRows(req, courseFilter, fresh) {
+// Cached class rosters for the viewer (+ optional class filter) — the shared
+// base of the student table and the learning overview. Concurrent callers wait
+// on one build; a failed build is not cached.
+async function loadRosters(req, courseFilter, fresh) {
   const key = `${req.staffRole}:${req.user.userId}:${courseFilter || 'all'}`;
   const hit = tableCache.get(key);
   if (hit && !fresh) {
     if (hit.promise) return hit.promise;
-    if (Date.now() - hit.at < TABLE_TTL_MS) return hit.rows;
+    if (Date.now() - hit.at < TABLE_TTL_MS) return hit.data;
   }
 
   const promise = (async () => {
@@ -495,38 +498,49 @@ async function loadTableRows(req, courseFilter, fresh) {
     for (let i = 0; i < courses.length; i += OVERVIEW_CONCURRENCY) {
       rosters.push(...await Promise.all(courses.slice(i, i + OVERVIEW_CONCURRENCY).map(buildRoster)));
     }
-
-    const rows = [];
-    rosters.forEach(r => r.students.forEach(st => rows.push({
-      student_id: st.student.id,
-      name: st.student.name || '',
-      email: st.student.email,
-      phone: st.student.phone,
-      avatar_url: st.student.avatar_url,
-      is_active: st.student.is_active,
-      course_id: r.course.id,
-      course_title: r.course.title || '',
-      progress: st.progress.percentage,
-      avg_quiz: st.quizzes.avg_score,
-      quizzes_attempted: st.quizzes.attempted,
-      quizzes_total: st.quizzes.total,
-      last_active: st.activity.last_active,
-      days_inactive: st.activity.days_inactive,
-      status: st.status,
-    })));
-    return rows;
+    return { rosters, rows: rosterRows(rosters) };
   })();
 
-  tableCache.set(key, { at: Date.now(), rows: null, promise });
+  tableCache.set(key, { at: Date.now(), data: null, promise });
   try {
-    const rows = await promise;
-    tableCache.set(key, { at: Date.now(), rows, promise: null });
-    return rows;
+    const data = await promise;
+    tableCache.set(key, { at: Date.now(), data, promise: null });
+    return data;
   } catch (err) {
     tableCache.delete(key);
     throw err;
   }
 }
+
+// One flat row per (student, class) for the dashboard table.
+function rosterRows(rosters) {
+  const rows = [];
+  rosters.forEach(r => r.students.forEach(st => rows.push({
+    student_id: st.student.id,
+    name: st.student.name || '',
+    email: st.student.email,
+    phone: st.student.phone,
+    avatar_url: st.student.avatar_url,
+    is_active: st.student.is_active,
+    course_id: r.course.id,
+    course_title: r.course.title || '',
+    progress: st.progress.percentage,
+    // Where the student is now: the first chapter they haven't finished. null
+    // title + finished=true once nothing is left; null + false if the class has no lessons.
+    current_lesson_index: st.progress.current?.lesson_index ?? null,
+    current_lesson_title: st.progress.current?.lesson_title ?? null,
+    finished: st.progress.current === null && st.progress.units_total > 0,
+    avg_quiz: st.quizzes.avg_score,
+    quizzes_attempted: st.quizzes.attempted,
+    quizzes_total: st.quizzes.total,
+    last_active: st.activity.last_active,
+    days_inactive: st.activity.days_inactive,
+    status: st.status,
+  })));
+  return rows;
+}
+
+const loadTableRows = async (req, courseFilter, fresh) => (await loadRosters(req, courseFilter, fresh)).rows;
 
 // Filter + sort the cached rows according to the query string.
 function queryTable(rows, query) {
@@ -682,6 +696,197 @@ router.get('/students-table/export', async (req, res) => {
   } catch (error) {
     console.error('Insights students-table export error:', error);
     res.status(500).json({ success: false, error: 'Failed to export student table: ' + error.message });
+  }
+});
+
+// ── Learning overview: classes, lesson locations, live-class attendance ──
+const ATTENDANCE_SESSIONS = 8;     // most recent held live classes per class
+const MISSED_LIST = 8;
+const LOW_ATTENDANCE_PCT = 70;
+const INACTIVE_SHARE_FLAG = 0.4;   // this share of a class inactive -> "needs attention"
+
+const pct = (num, den) => (den ? Math.round((num / den) * 100) : null);
+const ymdOf = (ms) => new Date(ms).toISOString().slice(0, 10);
+
+/**
+ * GET /api/insights/learning-overview   (&course_id=<uuid>, &fresh=1)
+ * Everything the dashboard needs to answer "how are my classes doing":
+ *   totals            — classes, students, avg progress, active 7d, avg quiz, attendance %
+ *   classes[]         — per class: students, lessons, next live class, avg progress,
+ *                       attendance %, avg quiz, inactive, status counts, a flag, and
+ *                       the lesson distribution (students currently on each lesson)
+ *   attendance        — per class series for the last 8 held live classes
+ *   missed            — students who missed the latest live class(es), most in a row first
+ * A student counts for a live class only if enrolled before it started and
+ * still active. Teachers only get their own classes. Built on the same cached
+ * class rosters as the student table.
+ */
+router.get('/learning-overview', async (req, res) => {
+  try {
+    const { rosters } = await loadRosters(req, courseFilterOf(req), req.query.fresh === '1');
+    const courseIds = rosters.map(r => r.course.id);
+    const nowMs = Date.now();
+
+    const liveClasses = courseIds.length
+      ? await fetchAllIn(courseIds, chunk => supabase
+        .from('live_classes')
+        .select('id, course_id, title, status, scheduled_at, started_at')
+        .in('course_id', chunk)
+        .order('id', { ascending: true }))
+      : [];
+
+    // Held = it actually started. Time of a session = when it started.
+    const heldByCourse = new Map();
+    const nextByCourse = new Map();
+    liveClasses.forEach(c => {
+      const startedMs = toMs(c.started_at);
+      if (startedMs != null) {
+        if (!heldByCourse.has(c.course_id)) heldByCourse.set(c.course_id, []);
+        heldByCourse.get(c.course_id).push({ ...c, timeMs: startedMs });
+      } else if (c.status === 'scheduled') {
+        const when = toMs(c.scheduled_at);
+        if (when != null && when >= nowMs && when < (nextByCourse.get(c.course_id) ?? Infinity)) nextByCourse.set(c.course_id, when);
+      }
+    });
+    heldByCourse.forEach((list, courseId) => {
+      list.sort((a, b) => a.timeMs - b.timeMs);
+      heldByCourse.set(courseId, list.slice(-ATTENDANCE_SESSIONS));
+    });
+
+    const heldIds = [...heldByCourse.values()].flat().map(c => c.id);
+    const participantRows = heldIds.length
+      ? await fetchAllIn(heldIds, chunk => supabase
+        .from('live_class_participants')
+        .select('id, live_class_id, user_id')
+        .eq('role', 'student')
+        .in('live_class_id', chunk)
+        .order('id', { ascending: true }))
+      : [];
+    const joinedBy = new Map();   // live_class_id -> Set(user_id)
+    participantRows.forEach(r => {
+      if (!joinedBy.has(r.live_class_id)) joinedBy.set(r.live_class_id, new Set());
+      joinedBy.get(r.live_class_id).add(r.user_id);
+    });
+
+    let allAttended = 0;
+    let allEligible = 0;
+    const missed = [];
+    const attendance = [];
+
+    const classes = rosters.map(r => {
+      const sessions = heldByCourse.get(r.course.id) || [];
+      const students = r.students.filter(s => s.student.is_active);
+      const eligibleFor = (session) => students.filter(s => {
+        const enrolled = toMs(s.enrolled_at);
+        return enrolled == null || enrolled <= session.timeMs;
+      });
+
+      let attended = 0;
+      let eligibleTotal = 0;
+      const series = sessions.map(session => {
+        const eligible = eligibleFor(session);
+        const joined = joinedBy.get(session.id) || new Set();
+        const got = eligible.filter(s => joined.has(s.student.id)).length;
+        attended += got;
+        eligibleTotal += eligible.length;
+        return {
+          live_class_id: session.id,
+          title: session.title,
+          date: ymdOf(session.timeMs),
+          eligible: eligible.length,
+          attended: got,
+          rate: pct(got, eligible.length),
+        };
+      });
+      allAttended += attended;
+      allEligible += eligibleTotal;
+      attendance.push({ course: publicCourse(r.course), sessions: series });
+
+      // Misses in a row, counting back from the latest session the student was
+      // eligible for (sessions from before they enrolled are skipped).
+      students.forEach(s => {
+        const enrolled = toMs(s.enrolled_at);
+        let inARow = 0;
+        for (let i = sessions.length - 1; i >= 0; i--) {
+          if (enrolled != null && enrolled > sessions[i].timeMs) continue;
+          if (joinedBy.get(sessions[i].id)?.has(s.student.id)) break;
+          inARow += 1;
+        }
+        if (inARow === 0) return;
+        let lastJoinedMs = null;
+        for (let i = sessions.length - 1; i >= 0; i--) {
+          if (joinedBy.get(sessions[i].id)?.has(s.student.id)) { lastJoinedMs = sessions[i].timeMs; break; }
+        }
+        missed.push({
+          student_id: s.student.id,
+          name: s.student.name,
+          avatar_url: s.student.avatar_url,
+          course_id: r.course.id,
+          course_title: r.course.title,
+          missed_in_a_row: inARow,
+          last_joined: lastJoinedMs == null ? null : ymdOf(lastJoinedMs),
+        });
+      });
+
+      const inactiveShare = r.summary.students ? r.summary.inactive / r.summary.students : 0;
+      const attendanceRate = pct(attended, eligibleTotal);
+      const flag = attendanceRate != null && attendanceRate < LOW_ATTENDANCE_PCT
+        ? { key: 'low_attendance', label: 'Low attendance' }
+        : inactiveShare >= INACTIVE_SHARE_FLAG
+          ? { key: 'needs_attention', label: 'Needs attention' }
+          : { key: 'on_track', label: 'On track' };
+
+      const counts = Object.fromEntries(TABLE_STATUSES.map(st => [st, 0]));
+      r.students.forEach(s => { counts[s.status] += 1; });
+      const nextMs = nextByCourse.get(r.course.id);
+
+      return {
+        course: publicCourse(r.course),
+        students: r.summary.students,
+        lessons: r.lessons.length,
+        next_live_at: nextMs ? new Date(nextMs).toISOString() : null,
+        avg_progress: r.summary.avg_progress,
+        attendance_rate: attendanceRate,
+        live_classes_held: sessions.length,
+        avg_quiz: r.summary.avg_quiz_score,
+        inactive: r.summary.inactive,
+        status_counts: counts,
+        flag,
+        finished: r.students.filter(s => s.progress.current === null && s.progress.units_total > 0).length,
+        lesson_distribution: r.lessons.map(({ lesson_id, title, index, students_here }) => ({ lesson_id, title, index, students_here })),
+      };
+    }).sort((a, b) => b.students - a.students || (a.course.title || '').localeCompare(b.course.title || ''));
+
+    missed.sort((a, b) => b.missed_in_a_row - a.missed_in_a_row || (a.name || '').localeCompare(b.name || ''));
+
+    const rows = rosters.flatMap(r => r.students);
+    const unique = new Map();
+    rows.forEach(s => { if (!unique.has(s.student.id)) unique.set(s.student.id, s); });
+    const quizScores = rows.map(s => s.quizzes.avg_score).filter(v => v != null);
+    const totals = {
+      classes: rosters.length,
+      classes_with_students: rosters.filter(r => r.students.length > 0).length,
+      enrolments: rows.length,
+      students: unique.size,
+      avg_progress: rows.length ? Math.round(mean(rows.map(s => s.progress.percentage))) : 0,
+      active_7d: [...unique.values()].filter(s => s.activity.days_inactive != null && s.activity.days_inactive < INACTIVE_DAYS).length,
+      avg_quiz: quizScores.length ? Math.round(mean(quizScores)) : null,
+      attendance_rate: pct(allAttended, allEligible),
+    };
+
+    res.json({
+      success: true,
+      data: {
+        totals,
+        classes,
+        attendance,
+        missed: { total: missed.length, students: missed.slice(0, MISSED_LIST) },
+        generated_at: new Date().toISOString(),
+      },
+    });
+  } catch (error) {
+    console.error('Insights learning-overview error:', error);
+    res.status(500).json({ success: false, error: 'Failed to load learning overview: ' + error.message });
   }
 });
 
