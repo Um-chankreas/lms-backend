@@ -719,8 +719,10 @@ function quantile(sorted, q) {
  * includes 100) and box-plot numbers — whiskers reach the most extreme score
  * within 1.5 x IQR of the box, anything beyond is an outlier.
  */
-function scoreSpread(scores) {
-  const sorted = scores.filter(v => v != null).sort((a, b) => a - b);
+function scoreSpread(people) {
+  // people: [{ id, name, score }] — the names let the box plot label its outliers.
+  const scored = people.filter(p => p.score != null).sort((a, b) => a.score - b.score);
+  const sorted = scored.map(p => p.score);
   const buckets = Array(10).fill(0);
   sorted.forEach(v => { buckets[Math.min(9, Math.max(0, Math.floor(v / 10)))] += 1; });
   if (!sorted.length) return { n: 0, buckets, box: null };
@@ -738,7 +740,10 @@ function scoreSpread(scores) {
       median: Math.round(med * 10) / 10,
       q3: Math.round(q3 * 10) / 10,
       max: inside[inside.length - 1],
-      outliers: sorted.filter(v => v < q1 - fence || v > q3 + fence),
+      // Students far from the rest, lowest first, with who they are.
+      outliers: scored
+        .filter(p => p.score < q1 - fence || p.score > q3 + fence)
+        .map(p => ({ student_id: p.id, name: p.name || null, score: p.score })),
     },
   };
 }
@@ -900,7 +905,7 @@ router.get('/learning-overview', async (req, res) => {
           index,
           students_here: r.students.filter(s => s.status !== 'not_started' && s.progress.current?.lesson_id === lesson_id).length,
         })),
-        scores: scoreSpread(r.students.map(s => s.quizzes.avg_score)),
+        scores: scoreSpread(r.students.map(s => ({ id: s.student.id, name: s.student.name, score: s.quizzes.avg_score }))),
       };
     }).sort((a, b) => b.students - a.students || (a.course.title || '').localeCompare(b.course.title || ''));
 
@@ -926,7 +931,7 @@ router.get('/learning-overview', async (req, res) => {
       data: {
         totals,
         classes,
-        scores_all: scoreSpread(rosters.flatMap(r => r.students.map(s => s.quizzes.avg_score))),
+        scores_all: scoreSpread(rosters.flatMap(r => r.students.map(s => ({ id: s.student.id, name: s.student.name, score: s.quizzes.avg_score })))),
         attendance,
         missed: { total: missed.length, students: missed.slice(0, MISSED_LIST) },
         generated_at: new Date().toISOString(),
