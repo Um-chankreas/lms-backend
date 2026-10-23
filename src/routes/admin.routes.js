@@ -11,7 +11,7 @@ const PHONE_REGEX = /^\+?[0-9]{8,15}$/;
 const normalizeEmail = e => String(e).trim().toLowerCase();
 const normalizePhone = p => String(p).replace(/[\s\-()]/g, '');
 
-const { todayYmd, isSubscriptionActive, ensureEnrolled } = require('../utils/access');
+const { todayYmd, isSubscriptionActive, ensureEnrolled, LIVE_REQUIRES_SUBSCRIPTION } = require('../utils/access');
 
 // PostgREST caps one response at 1000 rows; page through anything that can
 // outgrow that. `build` must return a fresh query each call.
@@ -74,6 +74,18 @@ async function subscriptionSummaries(studentIds) {
   subs.forEach(r => coursesOf.get(r.student_id)?.add(r.course_id));
 
   studentIds.forEach(id => { out.get(id).enrolled = coursesOf.get(id).size; });
+  if (!LIVE_REQUIRES_SUBSCRIPTION) {
+    // Paywall is off: every course a student is in is open to them, so
+    // enrolment alone counts as active (no expiry date to show).
+    studentIds.forEach(id => {
+      const s = out.get(id);
+      coursesOf.get(id).forEach(courseId => {
+        s.active += 1;
+        s.active_courses.push({ course_id: courseId, title: titleById[courseId] || 'Course', expiry_date: null });
+      });
+    });
+    return out;
+  }
   subs.filter(r => isSubscriptionActive(r.expiry_date)).forEach(r => {
     const s = out.get(r.student_id);
     s.active += 1;
@@ -153,7 +165,9 @@ router.get('/students', async (req, res) => {
       // (a giant id list in the query string would outgrow URL limits).
       const [idRows, activeRows] = await Promise.all([
         fetchAllRows(() => filtered('id')),
-        fetchAllRows(() => supabase.from('student_course_subscriptions').select('student_id').gte('expiry_date', todayYmd())),
+        LIVE_REQUIRES_SUBSCRIPTION
+          ? fetchAllRows(() => supabase.from('student_course_subscriptions').select('student_id').gte('expiry_date', todayYmd()))
+          : fetchAllRows(() => supabase.from('course_enrollments').select('student_id')),
       ]);
       const activeIds = new Set(activeRows.map(r => r.student_id));
       const matching = idRows.map(r => r.id).filter(id => activeIds.has(id) === paidFilter);

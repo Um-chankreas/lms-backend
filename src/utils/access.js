@@ -122,5 +122,6 @@ module.exports = {
   hasCourseSubscription,
   subscribedCourseIds,
   isSubscriptionActive,
+  LIVE_REQUIRES_SUBSCRIPTION,
   todayYmd
 };
