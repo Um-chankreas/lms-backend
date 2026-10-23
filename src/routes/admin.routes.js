@@ -886,11 +886,24 @@ async function buildAnalytics(req) {
   if (req.user.role === 'teacher') {
     const own = await fetchAllRows(() => supabase.from('courses').select('id').eq('teacher_id', req.user.userId));
     scopeCourseIds = own.map(c => c.id);
+  }
+  // Optional filters: ?course_id=<id> narrows to one class (a teacher can only
+  // pick one of their own — anything else yields an empty scope), and
+  // ?days=7|30|90 sets the comparison window (default: 7d signups/activity,
+  // 30d quiz scores, as before).
+  const courseFilter = typeof req.query.course_id === 'string' && req.query.course_id ? req.query.course_id : null;
+  if (courseFilter) {
+    scopeCourseIds = scopeCourseIds ? scopeCourseIds.filter(id => id === courseFilter) : [courseFilter];
+  }
+  if (scopeCourseIds) {
     const enr = scopeCourseIds.length
       ? await fetchAllRows(() => supabase.from('course_enrollments').select('student_id').in('course_id', scopeCourseIds))
       : [];
     scopeStudentIds = [...new Set(enr.map(e => e.student_id))];
   }
+  const rangeDays = [7, 30, 90].includes(Number(req.query.days)) ? Number(req.query.days) : null;
+  const winNew = rangeDays || 7;
+  const winQuiz = rangeDays || 30;
   // `.in()` with an empty list isn't valid PostgREST, so a teacher with no
   // students filters on an id that can't exist and gets all-zero stats.
   const NONE = ['00000000-0000-0000-0000-000000000000'];
@@ -904,7 +917,11 @@ async function buildAnalytics(req) {
   const daysAgo = (n) => new Date(now.getTime() - n * ms);
   const iso = (d) => d.toISOString();
   const ymd = (d) => d.toISOString().slice(0, 10);
-  const d7 = daysAgo(7), d14 = daysAgo(14), d30 = daysAgo(30), d45 = daysAgo(45), d60 = daysAgo(60);
+  const d7 = daysAgo(7), d14 = daysAgo(14), d30 = daysAgo(30);
+  const dNew = daysAgo(winNew), dNew2 = daysAgo(winNew * 2);
+  const dQuiz = daysAgo(winQuiz), dQuiz2 = daysAgo(winQuiz * 2);
+  const xpSince = daysAgo(Math.max(45, winNew * 2));
+  const quizSince = daysAgo(Math.max(60, winQuiz * 2));
   const WEEKS = 12;
   const mondayOf = (d) => {
     const x = new Date(d); x.setUTCHours(0, 0, 0, 0);
@@ -922,8 +939,8 @@ async function buildAnalytics(req) {
     activeSubRows,
   ] = await Promise.all([
     byStudent(supabase.from('users').select('id, name, avatar_url, created_at, is_active').eq('role', 'student'), 'id'),
-    byStudent(supabase.from('quiz_submissions').select('student_id, score, submitted_at').gte('submitted_at', iso(d60))),
-    byStudent(supabase.from('xp_events').select('student_id, created_at').gte('created_at', iso(d45))),
+    byStudent(supabase.from('quiz_submissions').select('student_id, score, submitted_at').gte('submitted_at', iso(quizSince))),
+    byStudent(supabase.from('xp_events').select('student_id, created_at').gte('created_at', iso(xpSince))),
     byStudent(supabase.from('lesson_completions').select('student_id, completed_at').gte('completed_at', iso(d30))),
     byCourse(supabase.from('course_enrollments').select('student_id')),
     fetchAllRows(() => byCourse(supabase.from('student_course_subscriptions').select('student_id').gte('expiry_date', todayYmd()))),
@@ -940,8 +957,8 @@ async function buildAnalytics(req) {
   const kpis = {
     total_students: S.length,
     active_eligible: S.filter(s => s.is_active !== false).length,
-    new_students_7d: countCreatedBetween(d7, now),
-    new_students_prev_7d: countCreatedBetween(d14, d7),
+    new_students_7d: countCreatedBetween(dNew, now),
+    new_students_prev_7d: countCreatedBetween(dNew2, dNew),
     paid_students: S.filter(s => paidIds.has(s.id)).length,
   };
 
@@ -953,7 +970,7 @@ async function buildAnalytics(req) {
   };
   (xpRows || []).forEach(r => touch(r.student_id, r.created_at));
   (subs || []).forEach(r => touch(r.student_id, r.submitted_at));
-  const active7 = [...lastActive].filter(([, ts]) => new Date(ts) >= d7).length;
+  const active7 = [...lastActive].filter(([, ts]) => new Date(ts) >= dNew).length;
   kpis.active_students_7d = active7;
 
   // ── Weekly signups (last 12 weeks) + cumulative ──────────────────────
@@ -980,8 +997,8 @@ async function buildAnalytics(req) {
     const sc = Number(x.score);
     if (!Number.isFinite(sc)) return;
     const t = new Date(x.submitted_at);
-    if (t >= d30) { push(recent, x.student_id, sc); all30.push(sc); }
-    else if (t >= d60) { push(prior, x.student_id, sc); allPrev30.push(sc); }
+    if (t >= dQuiz) { push(recent, x.student_id, sc); all30.push(sc); }
+    else if (t >= dQuiz2) { push(prior, x.student_id, sc); allPrev30.push(sc); }
   });
   const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
   kpis.avg_quiz_score_30d = all30.length ? Math.round(mean(all30)) : null;
@@ -1041,6 +1058,8 @@ async function buildAnalytics(req) {
 
   return {
     kpis,
+    range_days: rangeDays || null,
+    window_days: { activity: winNew, quiz: winQuiz },
     signups_weekly,
     most_improved,
     at_risk: atRisk.slice(0, 20).map(({ _sev, ...x }) => x),
@@ -1070,7 +1089,12 @@ async function analyticsHandler(req, res) {
 async function analyticsExportHandler(req, res) {
   try {
     const data = await buildAnalytics(req);
-    const scope = req.user.role === 'teacher' ? 'My classes' : 'All classes';
+    let scope = req.user.role === 'teacher' ? 'My classes' : 'All classes';
+    if (typeof req.query.course_id === 'string' && req.query.course_id) {
+      const { data: c } = await supabase.from('courses').select('title').eq('id', req.query.course_id).maybeSingle();
+      scope = `Class: ${c?.title || req.query.course_id}`;
+    }
+    if (data.range_days) scope += ` · Last ${data.range_days} days`;
     const wb = await buildDashboardWorkbook(data, scope);
     const buffer = await wb.xlsx.writeBuffer();
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
