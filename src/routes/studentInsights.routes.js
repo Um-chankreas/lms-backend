@@ -688,7 +688,7 @@ router.get('/students-table/export', async (req, res) => {
       return res.send(await buildPdf(groups, { description, includeContacts }));
     }
 
-    const wb = buildStudentTableWorkbook(groups, { includeContacts, description });
+    const wb = await buildStudentTableWorkbook(groups, { includeContacts, description });
     const buffer = await wb.xlsx.writeBuffer();
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', disposition('xlsx'));
