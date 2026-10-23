@@ -5,6 +5,7 @@ const { authenticateToken } = require('../middleware/auth');
 const { levelInfo } = require('../utils/xp');
 const { getStreakSummary } = require('../utils/streak');
 const { isSubscriptionActive } = require('../utils/access');
+const { buildStudentTableWorkbook } = require('../utils/dashboardReport');
 const { courseProgress, fetchAllRows, fetchAllIn, toMs, toIso } = require('../utils/studentProgress');
 
 // Student progress insights for the web portal (admins + teachers). Teachers
@@ -456,6 +457,175 @@ router.get('/overview', async (req, res) => {
   } catch (error) {
     console.error('Insights overview error:', error);
     res.status(500).json({ success: false, error: 'Failed to load student overview: ' + error.message });
+  }
+});
+
+// ── Dashboard "Student performance" table ───────────────────────────────
+// One row per (student, course) enrollment, built from the same class rosters
+// as the overview (progress %, quiz average, last active, status). Rosters are
+// the expensive part (~a dozen queries per course), so the assembled rows are
+// cached for a minute per viewer + class filter and concurrent requests share
+// one build. Search / filter / sort / paging then run in memory.
+const TABLE_TTL_MS = 60 * 1000;
+const TABLE_MAX_LIMIT = 100;
+const TABLE_STATUSES = ['on_track', 'behind', 'inactive', 'not_started', 'completed'];
+const tableCache = new Map();   // key -> { at, rows, promise }
+
+async function loadTableRows(req, courseFilter, fresh) {
+  const key = `${req.staffRole}:${req.user.userId}:${courseFilter || 'all'}`;
+  const hit = tableCache.get(key);
+  if (hit && !fresh) {
+    if (hit.promise) return hit.promise;
+    if (Date.now() - hit.at < TABLE_TTL_MS) return hit.rows;
+  }
+
+  const promise = (async () => {
+    const courses = await fetchAllRows(() => {
+      let q = supabase
+        .from('courses')
+        .select('id, title, color, icon, teacher_id')
+        .order('id', { ascending: true });
+      if (req.staffRole !== 'admin') q = q.eq('teacher_id', req.user.userId);
+      if (courseFilter) q = q.eq('id', courseFilter);
+      return q;
+    });
+
+    const rosters = [];
+    for (let i = 0; i < courses.length; i += OVERVIEW_CONCURRENCY) {
+      rosters.push(...await Promise.all(courses.slice(i, i + OVERVIEW_CONCURRENCY).map(buildRoster)));
+    }
+
+    const rows = [];
+    rosters.forEach(r => r.students.forEach(st => rows.push({
+      student_id: st.student.id,
+      name: st.student.name || '',
+      email: st.student.email,
+      phone: st.student.phone,
+      avatar_url: st.student.avatar_url,
+      is_active: st.student.is_active,
+      course_id: r.course.id,
+      course_title: r.course.title || '',
+      progress: st.progress.percentage,
+      avg_quiz: st.quizzes.avg_score,
+      quizzes_attempted: st.quizzes.attempted,
+      quizzes_total: st.quizzes.total,
+      last_active: st.activity.last_active,
+      days_inactive: st.activity.days_inactive,
+      status: st.status,
+    })));
+    return rows;
+  })();
+
+  tableCache.set(key, { at: Date.now(), rows: null, promise });
+  try {
+    const rows = await promise;
+    tableCache.set(key, { at: Date.now(), rows, promise: null });
+    return rows;
+  } catch (err) {
+    tableCache.delete(key);
+    throw err;
+  }
+}
+
+// Filter + sort the cached rows according to the query string.
+function queryTable(rows, query) {
+  const q = String(query.q || '').trim().toLowerCase();
+  const status = TABLE_STATUSES.includes(query.status) ? query.status : null;
+  let out = rows;
+  if (status) out = out.filter(r => r.status === status);
+  if (q) {
+    out = out.filter(r =>
+      r.name.toLowerCase().includes(q) ||
+      (r.email || '').toLowerCase().includes(q) ||
+      (r.phone || '').toLowerCase().includes(q));
+  }
+
+  const sorts = {
+    name: (a, b) => a.name.localeCompare(b.name),
+    course: (a, b) => a.course_title.localeCompare(b.course_title),
+    progress: (a, b) => a.progress - b.progress,
+    avg_quiz: (a, b) => (a.avg_quiz ?? -1) - (b.avg_quiz ?? -1),
+    quizzes: (a, b) => a.quizzes_attempted - b.quizzes_attempted,
+    // Smaller days_inactive = more recent; never active sorts as oldest.
+    last_active: (a, b) => (b.days_inactive ?? Infinity) - (a.days_inactive ?? Infinity),
+    status: (a, b) => TABLE_STATUSES.indexOf(a.status) - TABLE_STATUSES.indexOf(b.status),
+  };
+  const key = sorts[query.sort] ? query.sort : 'progress';
+  const dir = query.dir === 'asc' || (!query.dir && key === 'name') ? 1 : -1;
+  return [...out].sort((a, b) => dir * sorts[key](a, b) || a.name.localeCompare(b.name));
+}
+
+const courseFilterOf = (req) => {
+  const c = typeof req.query.course_id === 'string' ? req.query.course_id : '';
+  return UUID_REGEX.test(c) ? c : null;
+};
+
+/**
+ * GET /api/insights/students-table
+ *   ?course_id=<uuid>  one class (teachers: only their own; anything else is empty)
+ *   &status=on_track|behind|inactive|not_started|completed
+ *   &q=<text>          name / email / phone contains
+ *   &sort=name|course|progress|avg_quiz|quizzes|last_active|status  &dir=asc|desc
+ *   &page=1&limit=10 (max 100)   &fresh=1 skips the 1-minute cache
+ * -> { rows, pagination, status_counts, generated_at }
+ */
+router.get('/students-table', async (req, res) => {
+  try {
+    const all = await loadTableRows(req, courseFilterOf(req), req.query.fresh === '1');
+
+    // Counts per status for the chosen class + search (before the status filter).
+    const { status: _ignored, ...noStatus } = req.query;
+    const base = queryTable(all, noStatus);
+    const status_counts = Object.fromEntries(TABLE_STATUSES.map(s => [s, 0]));
+    base.forEach(r => { status_counts[r.status] += 1; });
+
+    const filtered = queryTable(all, req.query);
+    const limit = Math.min(TABLE_MAX_LIMIT, Math.max(1, parseInt(req.query.limit, 10) || 10));
+    const total = filtered.length;
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const page = Math.min(totalPages, Math.max(1, parseInt(req.query.page, 10) || 1));
+    const rows = filtered.slice((page - 1) * limit, page * limit)
+      .map(({ phone, ...r }) => r);   // phone is only used for search / export
+
+    res.json({
+      success: true,
+      data: {
+        rows,
+        pagination: { page, limit, total, total_pages: totalPages },
+        status_counts,
+        generated_at: new Date().toISOString(),
+      },
+    });
+  } catch (error) {
+    console.error('Insights students-table error:', error);
+    res.status(500).json({ success: false, error: 'Failed to load student table: ' + error.message });
+  }
+});
+
+/**
+ * GET /api/insights/students-table/export
+ * The same filters as /students-table, every matching row (no paging), as an
+ * .xlsx. `include_contacts=1` adds email + phone columns (left out otherwise).
+ */
+router.get('/students-table/export', async (req, res) => {
+  try {
+    const all = await loadTableRows(req, courseFilterOf(req), req.query.fresh === '1');
+    const rows = queryTable(all, req.query);
+    const wb = buildStudentTableWorkbook(rows, {
+      includeContacts: req.query.include_contacts === '1',
+      description: [
+        courseFilterOf(req) ? `Class: ${rows[0]?.course_title || 'selected class'}` : 'All classes',
+        TABLE_STATUSES.includes(req.query.status) ? `Status: ${req.query.status.replace('_', ' ')}` : null,
+        req.query.q ? `Search: "${String(req.query.q).slice(0, 60)}"` : null,
+      ].filter(Boolean).join(' · '),
+    });
+    const buffer = await wb.xlsx.writeBuffer();
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="romduol-students_${new Date().toISOString().slice(0, 10)}.xlsx"`);
+    res.send(Buffer.from(buffer));
+  } catch (error) {
+    console.error('Insights students-table export error:', error);
+    res.status(500).json({ success: false, error: 'Failed to export student table: ' + error.message });
   }
 });
 

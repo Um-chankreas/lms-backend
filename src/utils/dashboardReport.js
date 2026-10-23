@@ -299,4 +299,50 @@ async function buildDashboardWorkbook(data, scopeLabel) {
   return wb;
 }
 
-module.exports = { buildDashboardWorkbook };
+const STATUS_LABEL = {
+  on_track: 'On track', behind: 'Behind', inactive: 'Inactive', not_started: 'Not started', completed: 'Completed',
+};
+const STATUS_FILL = {
+  on_track: 'FFD6F1E2', behind: 'FFFCEBB3', inactive: 'FFFBD5D2', not_started: 'FFE6EAEE', completed: 'FFDDDFFB',
+};
+
+/** The dashboard's student table (one row per student per class) as a workbook. */
+function buildStudentTableWorkbook(rows, { includeContacts = false, description = '' } = {}) {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Romduol Scholars';
+  const columns = [
+    { key: 'name', header: 'Student', width: 28 },
+    ...(includeContacts ? [{ key: 'email', header: 'Email', width: 30 }, { key: 'phone', header: 'Phone', width: 16 }] : []),
+    { key: 'course', header: 'Class', width: 26 },
+    { key: 'progress', header: 'Progress %', width: 13 },
+    { key: 'avg', header: 'Avg quiz %', width: 13 },
+    { key: 'quizzes', header: 'Quizzes taken', width: 15 },
+    { key: 'last', header: 'Last active', width: 14 },
+    { key: 'idle', header: 'Days inactive', width: 15 },
+    { key: 'status', header: 'Status', width: 14 },
+  ];
+  const ws = addTable(wb, 'Student performance', 'Student performance · Romduol Scholars',
+    `${description || 'All classes'} · ${rows.length} rows · Generated ${new Date().toISOString().replace('T', ' ').slice(0, 16)} UTC`,
+    columns,
+    rows.map(r => ({
+      name: r.name || '—', email: r.email || '', phone: r.phone || '', course: r.course_title || '—',
+      progress: r.progress, avg: r.avg_quiz, quizzes: `${r.quizzes_attempted}/${r.quizzes_total}`,
+      last: dateOnly(r.last_active), idle: r.days_inactive, status: r.status,
+    })));
+  const statusCol = columns.findIndex(c => c.key === 'status') + 1;
+  const progressCol = columns.findIndex(c => c.key === 'progress') + 1;
+  ws.eachRow((row, n) => {
+    if (n < 5) return;
+    const st = row.getCell(statusCol).value;
+    row.getCell(statusCol).value = STATUS_LABEL[st] || st;
+    row.getCell(statusCol).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: STATUS_FILL[st] || 'FFE6EAEE' } };
+    // Data bar-ish shading for progress.
+    const pct = row.getCell(progressCol).value;
+    if (typeof pct === 'number') {
+      row.getCell(progressCol).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: pct >= 60 ? 'FFB9E6CD' : pct >= 20 ? 'FFE3F6EC' : 'FFF6F8F7' } };
+    }
+  });
+  return wb;
+}
+
+module.exports = { buildDashboardWorkbook, buildStudentTableWorkbook };
