@@ -112,7 +112,7 @@ function lineSvg(title, labels, values) {
   return frame(title, inner);
 }
 
-function barPairSvg(title, items) {
+function barPairSvg(title, items, days = 30) {
   const max = 100;
   const slot = (PLOT.r - PLOT.l) / items.length;
   const bw = 70;
@@ -129,8 +129,8 @@ function barPairSvg(title, items) {
     inner += draw(it.recent, cx + 6, GREEN);
     inner += text(cx, PLOT.b + 22, it.label, { size: 12, anchor: 'middle' });
   });
-  inner += `<rect x="${W - 250}" y="38" width="10" height="10" fill="#9AD9B5"/>${text(W - 235, 47, 'Previous 30 days', { size: 10, fill: MUTED })}`;
-  inner += `<rect x="${W - 130}" y="38" width="10" height="10" fill="${GREEN}"/>${text(W - 115, 47, 'Last 30 days', { size: 10, fill: MUTED })}`;
+  inner += `<rect x="${W - 250}" y="38" width="10" height="10" fill="#9AD9B5"/>${text(W - 235, 47, `Previous ${days} days`, { size: 10, fill: MUTED })}`;
+  inner += `<rect x="${W - 130}" y="38" width="10" height="10" fill="${GREEN}"/>${text(W - 115, 47, `Last ${days} days`, { size: 10, fill: MUTED })}`;
   return frame(title, inner);
 }
 
@@ -172,7 +172,9 @@ const REASON_LABEL = {
 };
 
 async function buildDashboardWorkbook(data, scopeLabel) {
-  const { kpis, signups_weekly, most_improved, at_risk_total, generated_at, _export } = data;
+  const { kpis, signups_weekly, most_improved, at_risk_total, generated_at, window_days, _export } = data;
+  const wa = window_days?.activity || 7;
+  const wq = window_days?.quiz || 30;
   const { students, lastActive, trend, atRisk, enrolledSet, now } = _export;
   const subtitle = `${scopeLabel} · Generated ${new Date(generated_at).toISOString().replace('T', ' ').slice(0, 16)} UTC`;
 
@@ -187,10 +189,10 @@ async function buildDashboardWorkbook(data, scopeLabel) {
     { key: 'value', header: 'Value', width: 14 },
     { key: 'note', header: 'Note', width: 44 },
   ], [
-    { metric: 'Total students', value: kpis.total_students, note: `${kpis.new_students_7d} new in the last 7 days (${kpis.new_students_prev_7d} the week before)` },
-    { metric: 'Active students (7 days)', value: kpis.active_students_7d, note: kpis.total_students ? `${Math.round((kpis.active_students_7d / kpis.total_students) * 100)}% of students` : '' },
+    { metric: 'Total students', value: kpis.total_students, note: `${kpis.new_students_7d} new in the last ${wa} days (${kpis.new_students_prev_7d} in the ${wa} days before)` },
+    { metric: `Active students (${wa} days)`, value: kpis.active_students_7d, note: kpis.total_students ? `${Math.round((kpis.active_students_7d / kpis.total_students) * 100)}% of students` : '' },
     { metric: 'Paid / subscribed students', value: kpis.paid_students, note: '' },
-    { metric: 'Avg quiz score (last 30 days)', value: kpis.avg_quiz_score_30d == null ? '—' : `${kpis.avg_quiz_score_30d}%`, note: kpis.avg_quiz_score_prev_30d == null ? '' : `${kpis.avg_quiz_score_prev_30d}% in the previous 30 days (${pct(kpis.avg_quiz_score_30d, kpis.avg_quiz_score_prev_30d)}% change)` },
+    { metric: `Avg quiz score (last ${wq} days)`, value: kpis.avg_quiz_score_30d == null ? '—' : `${kpis.avg_quiz_score_30d}%`, note: kpis.avg_quiz_score_prev_30d == null ? '' : `${kpis.avg_quiz_score_prev_30d}% in the previous ${wq} days (${pct(kpis.avg_quiz_score_30d, kpis.avg_quiz_score_prev_30d)}% change)` },
     { metric: 'Students needing attention', value: at_risk_total, note: '' },
   ]);
 
@@ -226,8 +228,8 @@ async function buildDashboardWorkbook(data, scopeLabel) {
     { key: 'joined', header: 'Joined', width: 14 },
     { key: 'enrolled', header: 'Enrolled', width: 11 },
     { key: 'last', header: 'Last active', width: 14 },
-    { key: 'avg', header: 'Avg quiz (30d) %', width: 17 },
-    { key: 'prev', header: 'Avg quiz (prev 30d) %', width: 21 },
+    { key: 'avg', header: `Avg quiz (${wq}d) %`, width: 17 },
+    { key: 'prev', header: `Avg quiz (prev ${wq}d) %`, width: 21 },
     { key: 'delta', header: 'Change (pts)', width: 14 },
     { key: 'status', header: 'Status', width: 18 },
   ], perfRows);
@@ -252,7 +254,7 @@ async function buildDashboardWorkbook(data, scopeLabel) {
     days: a.days_inactive, avg: a.recent_avg, delta: a.delta,
   })));
 
-  addTable(wb, 'Most improved', 'Most improved (last 30 days vs previous 30 days)', subtitle, [
+  addTable(wb, 'Most improved', `Most improved (last ${wq} days vs previous ${wq} days)`, subtitle, [
     { key: 'name', header: 'Student', width: 28 },
     { key: 'prior', header: 'Previous avg %', width: 16 },
     { key: 'recent', header: 'Recent avg %', width: 16 },
@@ -281,7 +283,7 @@ async function buildDashboardWorkbook(data, scopeLabel) {
       label: 'All classes',
       prior: kpis.avg_quiz_score_prev_30d,
       recent: kpis.avg_quiz_score_30d,
-    }])),
+    }], wq)),
   ]);
   const cs = wb.addWorksheet('Charts', { views: [{ showGridLines: false }] });
   cs.getCell('A1').value = 'Charts · Romduol Scholars';
