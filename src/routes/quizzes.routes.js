@@ -1,4 +1,5 @@
 const express = require('express');
+const { notifyFriendsQuizDone } = require('../utils/friendNotify');
 const router = express.Router();
 const path = require('path');
 const multer = require('multer');
@@ -1521,6 +1522,15 @@ router.post('/:id/submit', optionalAuth, async (req, res) => {
       await awardXp(req.user.userId, xpAwarded, 'quiz_pass', quiz.course_id || null);
     }
     await evaluateAchievements(req.user.userId);
+    // Classmates hear about it (bell) and anyone just overtaken gets a nudge. Fire-and-forget.
+    notifyFriendsQuizDone({
+      studentId: req.user.userId,
+      courseId: quiz.course_id,
+      quizId: id,
+      quizTitle: quiz.title,
+      score,
+      submissionId,
+    });
 
     // A passed quiz that belongs to a chapter — whether it's a unit's
     // practice quiz or the chapter's own end-of-lesson quiz — is a path step.

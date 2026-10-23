@@ -5,7 +5,7 @@ const { v4: uuidv4 } = require('uuid');
 const { authenticateToken, isStudent } = require('../middleware/auth');
 const { awardXp, XP_VALUES, levelInfo } = require('../utils/xp');
 const { recordActivity } = require('../utils/streak');
-const { createNotification } = require('../utils/notifications');
+const { sendNudges } = require('../utils/nudges');
 const { grantBadge } = require('../utils/achievements');
 const {
   CHALLENGE_TYPES,
@@ -246,11 +246,15 @@ router.post('/submit', authenticateToken, isStudent, async (req, res) => {
     if (streak.milestone) {
       streakBonusXp = XP_VALUES[`DAILY_CHALLENGE_STREAK_${streak.milestone}`] || 0;
       if (streakBonusXp > 0) await awardXp(studentId, streakBonusXp, 'daily_challenge_streak');
-      await createNotification(studentId, 'daily_challenge_streak', {
-        title: `🔥 ${streak.milestone}-day streak!`,
-        body: `You've completed the Daily Challenge ${streak.milestone} days in a row — +${streakBonusXp} XP!`,
+      // The celebration is a nudge: it follows the daily cap and quiet hours.
+      // Fire-and-forget: it must never slow down or break the submit response.
+      sendNudges('streak_milestone', [{
+        userId: studentId,
+        type: 'daily_challenge_streak',
+        vars: { milestone: streak.milestone, streakBonusXp: streakBonusXp > 0 ? streakBonusXp : null },
+        groups: [streak.milestone >= 30 ? 'big' : 'std'],
         data: { streak: streak.milestone },
-      });
+      }]).catch(e => console.warn('streak milestone notification failed:', e.message));
     }
 
     const { data: userXpRow } = await supabase.from('users').select('xp').eq('id', studentId).single();
