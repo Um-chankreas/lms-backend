@@ -426,6 +426,9 @@ async function getChallengeStreak(studentId) {
  * a retake — a retake doesn't move the streak). Returns the updated summary
  * plus `milestone` (7 | 14 | 30 | null) when this completion newly reached one.
  */
+// Streak lengths that get a celebration (and, where one is defined in utils/xp.js, a bonus).
+const STREAK_MILESTONES = [3, 7, 14, 30, 50, 100];
+
 async function bumpStreakOnComplete(studentId, dateStr) {
   const existing = await getChallengeStreak(studentId);
   const last = existing.last_completed_date ? String(existing.last_completed_date).slice(0, 10) : null;
@@ -447,7 +450,7 @@ async function bumpStreakOnComplete(studentId, dateStr) {
   }, { onConflict: 'student_id' });
   if (error) console.warn('daily_challenge_streaks upsert failed:', error.message);
 
-  const milestone = [30, 14, 7].find(m => current === m) || null;
+  const milestone = STREAK_MILESTONES.find(m => current === m) || null;
   return { current_streak: current, longest_streak: longest, milestone };
 }
 
@@ -463,4 +466,5 @@ module.exports = {
   gradeAnswers,
   getChallengeStreak,
   bumpStreakOnComplete,
+  STREAK_MILESTONES,
 };

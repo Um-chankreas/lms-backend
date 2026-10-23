@@ -56,6 +56,7 @@ const sanitizeUser = (user) => ({
   avatar_url: user.avatar_url || null,
   bio: user.bio || null,
   notification_style: user.notification_style || 'balanced',
+  language: user.language || 'km',   // which language notifications are written in
   created_at: user.created_at,
   // Self-service account state — lets the client show a "reactivate" /
   // "cancel deletion" banner instead of forcing a logout.
@@ -317,11 +318,16 @@ router.post('/login', credentialLimiter, async (req, res) => {
  */
 router.get('/profile', authenticateToken, async (req, res) => {
   try {
-    const { data: user, error } = await supabase
+    const profileColumns = 'id, name, email, phone, role, avatar_url, bio, notification_style, created_at, deactivated_at, deletion_scheduled_at';
+    let { data: user, error } = await supabase
       .from('users')
-      .select('id, name, email, phone, role, avatar_url, bio, notification_style, created_at, deactivated_at, deletion_scheduled_at')
+      .select(`${profileColumns}, language`)
       .eq('id', req.user.userId)
       .single();
+    // users.language comes from sql/055; until it exists, load the profile without it.
+    if (error && (error.code === '42703' || /language/.test(error.message || ''))) {
+      ({ data: user, error } = await supabase.from('users').select(profileColumns).eq('id', req.user.userId).single());
+    }
 
     if (error) throw error;
 
@@ -344,7 +350,7 @@ router.get('/profile', authenticateToken, async (req, res) => {
  */
 router.put('/profile', authenticateToken, async (req, res) => {
   try {
-    let { name, email, phone, bio, notification_style } = req.body;
+    let { name, email, phone, bio, notification_style, language } = req.body;
     const updates = {};
 
     if (name) updates.name = name;
@@ -354,6 +360,12 @@ router.put('/profile', authenticateToken, async (req, res) => {
         return res.status(400).json({ success: false, error: 'Invalid notification_style' });
       }
       updates.notification_style = notification_style;
+    }
+    if (language !== undefined) {
+      if (!['km', 'en'].includes(language)) {
+        return res.status(400).json({ success: false, error: 'Invalid language' });
+      }
+      updates.language = language;
     }
 
     if (email) {
