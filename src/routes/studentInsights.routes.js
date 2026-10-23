@@ -705,6 +705,44 @@ const MISSED_LIST = 8;
 const LOW_ATTENDANCE_PCT = 70;
 const INACTIVE_SHARE_FLAG = 0.4;   // this share of a class inactive -> "needs attention"
 
+// Quartile by linear interpolation on a sorted array.
+function quantile(sorted, q) {
+  if (!sorted.length) return null;
+  const pos = (sorted.length - 1) * q;
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+}
+
+/**
+ * Score spread for a list of 0-100 scores: ten 10-point buckets (the last one
+ * includes 100) and box-plot numbers — whiskers reach the most extreme score
+ * within 1.5 x IQR of the box, anything beyond is an outlier.
+ */
+function scoreSpread(scores) {
+  const sorted = scores.filter(v => v != null).sort((a, b) => a - b);
+  const buckets = Array(10).fill(0);
+  sorted.forEach(v => { buckets[Math.min(9, Math.max(0, Math.floor(v / 10)))] += 1; });
+  if (!sorted.length) return { n: 0, buckets, box: null };
+  const q1 = quantile(sorted, 0.25);
+  const med = quantile(sorted, 0.5);
+  const q3 = quantile(sorted, 0.75);
+  const fence = 1.5 * (q3 - q1);
+  const inside = sorted.filter(v => v >= q1 - fence && v <= q3 + fence);
+  return {
+    n: sorted.length,
+    buckets,
+    box: {
+      min: inside[0],
+      q1: Math.round(q1 * 10) / 10,
+      median: Math.round(med * 10) / 10,
+      q3: Math.round(q3 * 10) / 10,
+      max: inside[inside.length - 1],
+      outliers: sorted.filter(v => v < q1 - fence || v > q3 + fence),
+    },
+  };
+}
+
 const pct = (num, den) => (den ? Math.round((num / den) * 100) : null);
 const ymdOf = (ms) => new Date(ms).toISOString().slice(0, 10);
 
@@ -853,7 +891,16 @@ router.get('/learning-overview', async (req, res) => {
         status_counts: counts,
         flag,
         finished: r.students.filter(s => s.progress.current === null && s.progress.units_total > 0).length,
-        lesson_distribution: r.lessons.map(({ lesson_id, title, index, students_here }) => ({ lesson_id, title, index, students_here })),
+        // Students who haven't started would all pile onto chapter 1, so they're
+        // counted separately and the per-lesson counts only cover those under way.
+        not_started: counts.not_started,
+        lesson_distribution: r.lessons.map(({ lesson_id, title, index }) => ({
+          lesson_id,
+          title,
+          index,
+          students_here: r.students.filter(s => s.status !== 'not_started' && s.progress.current?.lesson_id === lesson_id).length,
+        })),
+        scores: scoreSpread(r.students.map(s => s.quizzes.avg_score)),
       };
     }).sort((a, b) => b.students - a.students || (a.course.title || '').localeCompare(b.course.title || ''));
 
@@ -879,6 +926,7 @@ router.get('/learning-overview', async (req, res) => {
       data: {
         totals,
         classes,
+        scores_all: scoreSpread(rosters.flatMap(r => r.students.map(s => s.quizzes.avg_score))),
         attendance,
         missed: { total: missed.length, students: missed.slice(0, MISSED_LIST) },
         generated_at: new Date().toISOString(),
