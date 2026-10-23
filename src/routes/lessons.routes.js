@@ -1,4 +1,5 @@
 const express = require('express');
+const { notifyFriendsLessonDone } = require('../utils/friendNotify');
 const router = express.Router();
 const multer = require('multer');
 const supabase = require('../config/supabase');
@@ -1280,7 +1281,7 @@ router.post('/:id/mark-complete', optionalAuth, async (req, res) => {
 
     const { data: lesson, error: lessonError } = await supabase
       .from('lessons')
-      .select('id, is_free, courses(*)')
+      .select('id, title, is_free, courses(*)')
       .eq('id', id)
       .single();
 
@@ -1344,7 +1345,13 @@ router.post('/:id/mark-complete', optionalAuth, async (req, res) => {
     await awardXp(studentId, XP_VALUES.LESSON_COMPLETE, 'lesson_complete', lesson.courses?.id || null);
     await require('../utils/streak').recordActivity(studentId).catch(() => { });
     await evaluateAchievements(studentId);
-    // notifyLessonComplete(studentId, id);
+    // Classmates hear about it (bell only). Fire-and-forget.
+    notifyFriendsLessonDone({
+      studentId,
+      courseId: lesson.courses?.id,
+      lessonId: id,
+      lessonTitle: lesson.title,
+    });
 
     res.json({
       success: true,

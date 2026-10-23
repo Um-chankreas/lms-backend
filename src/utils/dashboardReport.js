@@ -1,5 +1,6 @@
 const ExcelJS = require('exceljs');
 const sharp = require('sharp');
+const path = require('path');
 
 /**
  * Builds the dashboard Excel report: data sheets plus a "Charts" sheet whose
@@ -112,7 +113,7 @@ function lineSvg(title, labels, values) {
   return frame(title, inner);
 }
 
-function barPairSvg(title, items, days = 30) {
+function barPairSvg(title, items, days = 30, legend = [`Previous ${days} days`, `Last ${days} days`]) {
   const max = 100;
   const slot = (PLOT.r - PLOT.l) / items.length;
   const bw = 70;
@@ -129,9 +130,49 @@ function barPairSvg(title, items, days = 30) {
     inner += draw(it.recent, cx + 6, GREEN);
     inner += text(cx, PLOT.b + 22, it.label, { size: 12, anchor: 'middle' });
   });
-  inner += `<rect x="${W - 250}" y="38" width="10" height="10" fill="#9AD9B5"/>${text(W - 235, 47, `Previous ${days} days`, { size: 10, fill: MUTED })}`;
-  inner += `<rect x="${W - 130}" y="38" width="10" height="10" fill="${GREEN}"/>${text(W - 115, 47, `Last ${days} days`, { size: 10, fill: MUTED })}`;
+  inner += `<rect x="${W - 250}" y="38" width="10" height="10" fill="#9AD9B5"/>${text(W - 235, 47, legend[0], { size: 10, fill: MUTED })}`;
+  inner += `<rect x="${W - 130}" y="38" width="10" height="10" fill="${GREEN}"/>${text(W - 115, 47, legend[1], { size: 10, fill: MUTED })}`;
   return frame(title, inner);
+}
+
+// ── Brand: header logo + faded watermark on every sheet ─────────────────
+const BRAND_DIR = path.join(__dirname, '..', 'assets', 'brand');
+let BRAND = null;          // { header, watermark } PNG buffers, once loaded
+let brandLoading = null;
+
+/**
+ * Loads (once) the header logo and a watermark — the emblem at ~9% opacity, so
+ * cell text stays readable through it. Failure to load only skips branding.
+ */
+async function loadBrand() {
+  if (BRAND) return BRAND;
+  if (!brandLoading) {
+    brandLoading = (async () => {
+      const header = await sharp(path.join(BRAND_DIR, 'rs_text_logo.png')).resize({ width: 300 }).png().toBuffer();
+      const watermark = await sharp(path.join(BRAND_DIR, 'RS_logo.png'))
+        .resize({ width: 380 })
+        .ensureAlpha()
+        .composite([{ input: Buffer.from([255, 255, 255, 24]), raw: { width: 1, height: 1, channels: 4 }, tile: true, blend: 'dest-in' }])
+        .png()
+        .toBuffer();
+      BRAND = { header, watermark };
+      return BRAND;
+    })().catch((err) => { console.warn('Report branding unavailable:', err.message); BRAND = { header: null, watermark: null }; return BRAND; });
+  }
+  return brandLoading;
+}
+
+/** Logo top-right (header size 150x50) and a faded watermark in the middle of the sheet. */
+function addBrand(wb, ws, { logoCol, wmCol, wmRow }) {
+  if (!BRAND) return;
+  if (BRAND.header) {
+    const id = wb.addImage({ buffer: BRAND.header, extension: 'png' });
+    ws.addImage(id, { tl: { col: logoCol, row: 0.1 }, ext: { width: 150, height: 50 } });
+  }
+  if (BRAND.watermark) {
+    const id = wb.addImage({ buffer: BRAND.watermark, extension: 'png' });
+    ws.addImage(id, { tl: { col: wmCol, row: wmRow }, ext: { width: 380, height: 389 }, editAs: 'absolute' });
+  }
 }
 
 const png = (svg) => sharp(Buffer.from(svg)).png().toBuffer();
@@ -142,27 +183,48 @@ const shortWeek = (ymd) => {
 };
 const dateOnly = (v) => (v ? String(new Date(v).toISOString()).slice(0, 10) : '—');
 
-function styleHeader(row) {
-  row.eachCell((c) => {
+function styleHeader(row, columns) {
+  row.eachCell((c, col) => {
     c.font = { bold: true, color: { argb: 'FFFFFFFF' } };
     c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E6B3E' } };
-    c.alignment = { vertical: 'middle' };
+    c.alignment = { vertical: 'middle', horizontal: columns?.[col - 1]?.align || 'left', wrapText: true };
   });
-  row.height = 22;
+  row.height = 32;
 }
 
+const LINE = { style: 'thin', color: { argb: 'FFE4E9E6' } };
+
+/**
+ * A titled table sheet. Columns: { key, header, width, align?, numFmt? }.
+ * Rows are 24pt tall and vertically centred (Khmer text needs the height),
+ * lightly ruled and zebra-striped; the header row and first column stay put.
+ */
 function addTable(wb, name, title, subtitle, columns, rows) {
-  const ws = wb.addWorksheet(name, { views: [{ state: 'frozen', ySplit: 4 }] });
+  const ws = wb.addWorksheet(name, { views: [{ state: 'frozen', xSplit: 1, ySplit: 4 }] });
+  ws.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 };   // prints one page wide
   ws.getCell('A1').value = title;
   ws.getCell('A1').font = { size: 16, bold: true, color: { argb: 'FF1E6B3E' } };
+  ws.getRow(1).height = 30;
+  ws.getCell('A1').alignment = { vertical: 'middle' };
   ws.getCell('A2').value = subtitle;
   ws.getCell('A2').font = { color: { argb: 'FF5B6B62' } };
   ws.columns = columns.map(c => ({ key: c.key, width: c.width }));
   const header = ws.getRow(4);
   columns.forEach((c, i) => { header.getCell(i + 1).value = c.header; });
-  styleHeader(header);
-  rows.forEach(r => ws.addRow(columns.map(c => r[c.key])));
+  styleHeader(header, columns);
+  rows.forEach((r, i) => {
+    const row = ws.addRow(columns.map(c => r[c.key]));
+    row.height = 24;
+    columns.forEach((c, ci) => {
+      const cell = row.getCell(ci + 1);
+      cell.alignment = { vertical: 'middle', horizontal: c.align || 'left' };
+      cell.border = { bottom: LINE };
+      if (c.numFmt && typeof cell.value !== 'string') cell.numFmt = c.numFmt;
+      if (i % 2 === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAF9' } };
+    });
+  });
   if (rows.length) ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: 4 + rows.length, column: columns.length } };
+  addBrand(wb, ws, { logoCol: Math.max(1, columns.length - 1.8), wmCol: Math.max(1, columns.length / 2 - 1.5), wmRow: 6 });
   return ws;
 }
 
@@ -178,6 +240,7 @@ async function buildDashboardWorkbook(data, scopeLabel) {
   const { students, lastActive, trend, atRisk, enrolledSet, now } = _export;
   const subtitle = `${scopeLabel} · Generated ${new Date(generated_at).toISOString().replace('T', ' ').slice(0, 16)} UTC`;
 
+  await loadBrand();
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Romduol Scholars';
   wb.created = now;
@@ -290,6 +353,7 @@ async function buildDashboardWorkbook(data, scopeLabel) {
   cs.getCell('A1').font = { size: 16, bold: true, color: { argb: 'FF1E6B3E' } };
   cs.getCell('A2').value = subtitle;
   cs.getCell('A2').font = { color: { argb: 'FF5B6B62' } };
+  addBrand(wb, cs, { logoCol: 18, wmCol: 8, wmRow: 12 });
   const spots = [[0, 3], [11, 3], [0, 23], [11, 23]];
   images.forEach((buf, i) => {
     const id = wb.addImage({ buffer: buf, extension: 'png' });
@@ -311,23 +375,26 @@ const STATUS_FILL = {
  * one sheet per group (for "all classes": "All classes" first, then a sheet
  * for each class).
  */
-function buildStudentTableWorkbook(groups, { includeContacts = false, description = '' } = {}) {
+async function buildStudentTableWorkbook(groups, { includeContacts = false, description = '' } = {}) {
+  await loadBrand();
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Romduol Scholars';
+  await addStudentSummarySheet(wb, groups, description);
   const columns = [
-    { key: 'name', header: 'Student', width: 28 },
-    ...(includeContacts ? [{ key: 'email', header: 'Email', width: 30 }, { key: 'phone', header: 'Phone', width: 16 }] : []),
-    { key: 'course', header: 'Class', width: 26 },
-    { key: 'progress', header: 'Progress %', width: 13 },
-    { key: 'avg', header: 'Avg quiz %', width: 13 },
-    { key: 'quizzes', header: 'Quizzes taken', width: 15 },
-    { key: 'last', header: 'Last active', width: 14 },
-    { key: 'idle', header: 'Days inactive', width: 15 },
-    { key: 'status', header: 'Status', width: 14 },
+    { key: 'name', header: 'Student', width: 30 },
+    ...(includeContacts ? [{ key: 'email', header: 'Email', width: 32 }, { key: 'phone', header: 'Phone', width: 18 }] : []),
+    { key: 'course', header: 'Class', width: 28 },
+    { key: 'lesson', header: 'Current lesson', width: 36 },
+    { key: 'progress', header: 'Progress', width: 14, align: 'center', numFmt: '0"%"' },
+    { key: 'avg', header: 'Avg quiz', width: 14, align: 'center', numFmt: '0"%"' },
+    { key: 'quizzes', header: 'Quizzes taken', width: 17, align: 'center' },
+    { key: 'last', header: 'Last active', width: 17, align: 'center', numFmt: 'yyyy-mm-dd' },
+    { key: 'idle', header: 'Days inactive', width: 17, align: 'center', numFmt: '0' },
+    { key: 'status', header: 'Status', width: 16, align: 'center' },
   ];
   const statusCol = columns.findIndex(c => c.key === 'status') + 1;
   const progressCol = columns.findIndex(c => c.key === 'progress') + 1;
-  const used = new Set();
+  const used = new Set(['summary']);
   // Excel sheet names: max 31 chars, none of  [ ] : * ? / \, unique (case-insensitive).
   const sheetName = (title, i) => {
     let base = String(title || '').replace(/[\[\]:*?/\\]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 31) || `Class ${i}`;
@@ -344,8 +411,10 @@ function buildStudentTableWorkbook(groups, { includeContacts = false, descriptio
       columns,
       g.rows.map(r => ({
         name: r.name || '—', email: r.email || '', phone: r.phone || '', course: r.course_title || '—',
-        progress: r.progress, avg: r.avg_quiz, quizzes: `${r.quizzes_attempted}/${r.quizzes_total}`,
-        last: dateOnly(r.last_active), idle: r.days_inactive, status: r.status,
+        lesson: lessonLabel(r),
+        progress: r.progress, avg: r.avg_quiz ?? '—', quizzes: `${r.quizzes_attempted}/${r.quizzes_total}`,
+        last: r.last_active ? new Date(String(r.last_active).slice(0, 10) + 'T00:00:00Z') : '—',
+        idle: r.days_inactive ?? '—', status: r.status,
       })));
     ws.eachRow((row, n) => {
       if (n < 5) return;
@@ -359,6 +428,218 @@ function buildStudentTableWorkbook(groups, { includeContacts = false, descriptio
     });
   });
   return wb;
+}
+
+function lessonLabel(r) {
+  if (r.finished) return 'Finished';
+  if (r.status === 'not_started') return 'Not started';
+  if (r.current_lesson_index == null) return '—';
+  return `Ch ${r.current_lesson_index} · ${r.current_lesson_title || ''}`.trim();
+}
+
+const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
+const round1 = (v) => (v == null ? null : Math.round(v * 10) / 10);
+
+/**
+ * First sheet of the student workbook, laid out on a 12-column grid (B:M):
+ * eight KPI tiles, a per-class comparison with totals, three charts and a short
+ * guide. Chart pictures use "C1, C2…" labels (the class table maps each code to
+ * its name) so they don't depend on Khmer fonts being installed on the server.
+ */
+async function addStudentSummarySheet(wb, groups, description) {
+  const perClass = groups.length > 1 ? groups.slice(1) : groups;
+  const all = groups[0].rows;
+  const ws = wb.addWorksheet('Summary', { views: [{ showGridLines: false }] });
+  ws.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
+  ws.getColumn(1).width = 3;
+  for (let c = 2; c <= 13; c++) ws.getColumn(c).width = 13;
+  ws.getColumn(14).width = 3;
+
+  const GREEN_ARGB = 'FF1E6B3E';
+  const TILE = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF4F8F6' } };
+  const BOX = { style: 'thin', color: { argb: 'FFD7E2DB' } };
+  const box = (r1, c1, r2, c2) => {
+    for (let r = r1; r <= r2; r++) for (let c = c1; c <= c2; c++) {
+      ws.getCell(r, c).border = {
+        top: r === r1 ? BOX : undefined, bottom: r === r2 ? BOX : undefined,
+        left: c === c1 ? BOX : undefined, right: c === c2 ? BOX : undefined,
+      };
+    }
+  };
+  const section = (row, text) => {
+    const c = ws.getCell(row, 2);
+    c.value = text;
+    c.font = { size: 13, bold: true, color: { argb: GREEN_ARGB } };
+    ws.getRow(row).height = 24;
+    c.alignment = { vertical: 'middle' };
+  };
+
+  ws.getCell('B1').value = 'Student performance summary · Romduol Scholars';
+  ws.getCell('B1').font = { size: 18, bold: true, color: { argb: GREEN_ARGB } };
+  ws.getCell('B1').alignment = { vertical: 'middle' };
+  ws.getRow(1).height = 34;
+  ws.getCell('B2').value = `${description || 'All classes'} · Generated ${new Date().toISOString().replace('T', ' ').slice(0, 16)} UTC`;
+  ws.getCell('B2').font = { color: { argb: 'FF5B6B62' } };
+
+  // ── KPI tiles: 4 per row, 3 columns each ──
+  const count = (st) => all.filter(r => r.status === st).length;
+  const share = (n) => (all.length ? `${Math.round((n / all.length) * 100)}% of enrolments` : '—');
+  const active7 = all.filter(r => r.days_inactive != null && r.days_inactive < 7).length;
+  const progressAvg = round1(mean(all.map(r => r.progress)));
+  const quizAvg = round1(mean(all.map(r => r.avg_quiz).filter(v => v != null)));
+  const uniqueCount = new Set(all.map(r => r.student_id)).size;
+  const tiles = [
+    [
+      { label: 'STUDENTS', value: uniqueCount, fmt: '0', note: `${all.length} enrolments` },
+      { label: 'AVG PROGRESS', value: progressAvg ?? 0, fmt: '0.0"%"', note: 'lessons and units finished' },
+      { label: 'AVG QUIZ SCORE', value: quizAvg ?? '—', fmt: '0.0"%"', note: 'best score per quiz, averaged' },
+      { label: 'ACTIVE (7 DAYS)', value: active7, fmt: '0', note: share(active7) },
+    ],
+    [
+      { label: 'INACTIVE (7+ DAYS)', value: count('inactive'), fmt: '0', note: share(count('inactive')), color: 'FFB42318' },
+      { label: 'BEHIND', value: count('behind'), fmt: '0', note: share(count('behind')), color: 'FF92400E' },
+      { label: 'NOT STARTED', value: count('not_started'), fmt: '0', note: share(count('not_started')) },
+      { label: 'COMPLETED', value: count('completed'), fmt: '0', note: share(count('completed')), color: 'FF3730A3' },
+    ],
+  ];
+  section(4, 'Key numbers');
+  tiles.forEach((rowTiles, ti) => {
+    const r0 = 5 + ti * 4;
+    ws.getRow(r0).height = 20;
+    ws.getRow(r0 + 1).height = 38;
+    ws.getRow(r0 + 2).height = 20;
+    rowTiles.forEach((t, i) => {
+      const c0 = 2 + i * 3;
+      [[r0, t.label, { size: 9, bold: true, color: { argb: 'FF5B6B62' } }],
+       [r0 + 1, t.value, { size: 22, bold: true, color: { argb: t.color || 'FF0F1F17' } }],
+       [r0 + 2, t.note, { size: 9, color: { argb: 'FF5B6B62' } }]].forEach(([r, v, font], k) => {
+        ws.mergeCells(r, c0, r, c0 + 2);
+        const cell = ws.getCell(r, c0);
+        cell.value = v;
+        cell.font = font;
+        cell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+        if (k === 1 && t.fmt && typeof v === 'number') cell.numFmt = t.fmt;
+      });
+      for (let r = r0; r <= r0 + 2; r++) for (let c = c0; c <= c0 + 2; c++) ws.getCell(r, c).fill = TILE;
+      box(r0, c0, r0 + 2, c0 + 2);
+    });
+    if (ti === 0) ws.getRow(r0 + 3).height = 8;
+  });
+
+  // ── By class ──
+  let row = 14;
+  section(row, 'By class');
+  row += 1;
+  const head = ['Code', 'Class', '', '', 'Students', 'Avg progress', 'Avg quiz', 'On track', 'Behind', 'Inactive', 'Not started', 'Completed'];
+  head.forEach((h, i) => { ws.getCell(row, 2 + i).value = h; });
+  ws.mergeCells(row, 3, row, 5);
+  const headRow = ws.getRow(row);
+  headRow.eachCell({ includeEmpty: false }, (c) => {
+    c.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: GREEN_ARGB } };
+  });
+  for (let c = 2; c <= 13; c++) {
+    ws.getCell(row, c).alignment = { vertical: 'middle', horizontal: c >= 6 || c === 2 ? 'center' : 'left', wrapText: true, indent: c === 3 ? 1 : 0 };
+    ws.getCell(row, c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: GREEN_ARGB } };
+  }
+  headRow.height = 32;
+  const firstClassRow = row + 1;
+  perClass.forEach((g, i) => {
+    const r = firstClassRow + i;
+    const rows = g.rows;
+    const vals = {
+      2: `C${i + 1}`, 3: g.title, 6: rows.length,
+      7: round1(mean(rows.map(x => x.progress))), 8: round1(mean(rows.map(x => x.avg_quiz).filter(v => v != null))) ?? '—',
+    };
+    ['on_track', 'behind', 'inactive', 'not_started', 'completed'].forEach((st, k) => { vals[9 + k] = rows.filter(x => x.status === st).length; });
+    ws.mergeCells(r, 3, r, 5);
+    Object.entries(vals).forEach(([c, v]) => { ws.getCell(r, Number(c)).value = v; });
+    ws.getRow(r).height = 26;
+    for (let c = 2; c <= 13; c++) {
+      const cell = ws.getCell(r, c);
+      cell.alignment = { vertical: 'middle', horizontal: c >= 6 || c === 2 ? 'center' : 'left', indent: c === 3 ? 1 : 0 };
+      cell.border = { bottom: LINE };
+      if (c === 7 || c === 8) cell.numFmt = '0.0"%"';
+      if (c === 3) cell.font = { bold: true };
+    }
+  });
+  let lastRow = firstClassRow + perClass.length - 1;
+  if (perClass.length > 1) {
+    const r = lastRow + 1;
+    ws.mergeCells(r, 3, r, 5);
+    ws.getCell(r, 3).value = 'All classes';
+    ws.getCell(r, 6).value = { formula: `SUM(F${firstClassRow}:F${lastRow})`, result: perClass.reduce((a, g) => a + g.rows.length, 0) };
+    ws.getCell(r, 7).value = progressAvg;
+    ws.getCell(r, 8).value = quizAvg ?? '—';
+    ['I', 'J', 'K', 'L', 'M'].forEach((col, k) => {
+      const st = ['on_track', 'behind', 'inactive', 'not_started', 'completed'][k];
+      ws.getCell(`${col}${r}`).value = { formula: `SUM(${col}${firstClassRow}:${col}${lastRow})`, result: count(st) };
+    });
+    ws.getRow(r).height = 26;
+    for (let c = 2; c <= 13; c++) {
+      const cell = ws.getCell(r, c);
+      cell.font = { bold: true };
+      cell.fill = TILE;
+      cell.alignment = { vertical: 'middle', horizontal: c >= 6 || c === 2 ? 'center' : 'left', indent: c === 3 ? 1 : 0 };
+      cell.border = { top: { style: 'thin', color: { argb: GREEN_ARGB } }, bottom: { style: 'thin', color: { argb: GREEN_ARGB } } };
+      if (c === 7 || c === 8) cell.numFmt = '0.0"%"';
+    }
+    lastRow = r;
+  }
+
+  // ── Charts: two per row, six columns (576px) each ──
+  const CH_W = 520, CH_H = Math.round(520 * H / W);          // 520 x 267 — leaves slack inside 6 columns
+  const slices = [
+    { label: 'On track', value: count('on_track'), color: GREEN },
+    { label: 'Behind', value: count('behind'), color: '#E0A100' },
+    { label: 'Inactive', value: count('inactive'), color: '#E5484D' },
+    { label: 'Not started', value: count('not_started'), color: '#C5CDD6', light: true },
+    { label: 'Completed', value: count('completed'), color: '#5B5BD6' },
+  ];
+  const buckets = Array(10).fill(0);
+  all.forEach(r => { if (r.avg_quiz != null) buckets[Math.min(9, Math.max(0, Math.floor(r.avg_quiz / 10)))] += 1; });
+  const classAvg = (g, key) => { const m = mean(g.rows.map(r => r[key]).filter(v => v != null)); return m == null ? null : Math.round(m); };
+  const images = await Promise.all([
+    png(pieSvg('Student status (all enrolments)', slices)),
+    png(barPairSvg('Average progress and quiz score by class', perClass.map((g, i) => ({ label: `C${i + 1}`, prior: classAvg(g, 'progress'), recent: classAvg(g, 'avg_quiz') })), 0, ['Avg progress', 'Avg quiz'])),
+    png(columnSvg('Quiz scores: students per score band', ['0–10', '10–20', '20–30', '30–40', '40–50', '50–60', '60–70', '70–80', '80–90', '90–100'], buckets)),
+  ]);
+  const chartsRow = lastRow + 2;
+  section(chartsRow, 'Charts');
+  const rowsPerChart = Math.ceil(CH_H / 20) + 1;                  // default row = 20px
+  const spots = [[1, chartsRow], [7, chartsRow], [1, chartsRow + rowsPerChart]];   // 0-indexed: col B/H, row after heading
+  images.forEach((buf, i) => {
+    const id = wb.addImage({ buffer: buf, extension: 'png' });
+    ws.addImage(id, { tl: { col: spots[i][0], row: spots[i][1] }, ext: { width: CH_W, height: CH_H } });
+  });
+
+  // ── Guide: below the charts, label in B:C and text from D ──
+  const gRow = chartsRow + rowsPerChart * 2 + 1;
+  section(gRow, 'How to read this workbook');
+  [
+    ['On track', 'active in the last 7 days, not far behind the class'],
+    ['Behind', 'progress 20+ points below the class median'],
+    ['Inactive', 'no activity for 7 days or more'],
+    ['Not started', 'no lesson progress, quiz or XP yet'],
+    ['Completed', 'every lesson and unit finished'],
+    ['Avg quiz', 'best score on each quiz taken, averaged'],
+    ['Current lesson', 'the first chapter not yet finished'],
+    ['Note', '"All classes" lists one row per enrolment, so a student in two classes appears twice'],
+  ].forEach(([k, v], i) => {
+    const r = gRow + 1 + i;
+    ws.mergeCells(r, 2, r, 3);
+    const kc = ws.getCell(r, 2);
+    kc.value = k;
+    kc.font = { bold: true, color: { argb: 'FF0F1F17' } };
+    kc.alignment = { vertical: 'middle', indent: 1 };
+    const vc = ws.getCell(r, 4);
+    vc.value = v;
+    vc.font = { color: { argb: 'FF35453C' } };
+    vc.alignment = { vertical: 'middle' };
+    ws.getRow(r).height = 20;
+  });
+
+  addBrand(wb, ws, { logoCol: 10.2, wmCol: 4, wmRow: 12 });
 }
 
 module.exports = { buildDashboardWorkbook, buildStudentTableWorkbook };

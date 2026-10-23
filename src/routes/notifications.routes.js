@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const { authenticateToken } = require('../middleware/auth');
+const { isMissingColumn } = require('../utils/notifications');
 
 // The bell feed is for real, logged-in accounts only.
 router.use(authenticateToken);
@@ -73,21 +74,20 @@ router.patch('/read', async (req, res) => {
     const userId = req.user.userId;
     const { all, ids } = req.body || {};
 
-    let query = supabase
-      .from('notifications')
-      .update({ read_at: new Date() })
-      .eq('user_id', userId)
-      .is('read_at', null);
-
-    if (all === true) {
-      // mark everything unread as read
-    } else if (Array.isArray(ids) && ids.length > 0) {
-      query = query.in('id', ids.slice(0, 200));
-    } else {
+    if (!(all === true) && !(Array.isArray(ids) && ids.length > 0)) {
       return res.status(400).json({ success: false, error: 'Provide { all: true } or { ids: [...] }' });
     }
-
-    const { error } = await query;
+    // Opening the bell means the app was opened: opened_at feeds the nudge
+    // back-off rule (students who ignore their nudges get fewer). Falls back to
+    // read_at alone until sql/055 has been run.
+    const mark = (fields) => {
+      let q = supabase.from('notifications').update(fields).eq('user_id', userId).is('read_at', null);
+      if (!(all === true)) q = q.in('id', ids.slice(0, 200));
+      return q;
+    };
+    const now = new Date();
+    let { error } = await mark({ read_at: now, opened_at: now });
+    if (error && isMissingColumn(error)) ({ error } = await mark({ read_at: now }));
     if (error) throw error;
 
     res.json({ success: true, message: 'Marked as read' });

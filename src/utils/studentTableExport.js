@@ -24,6 +24,14 @@ function safeName(title, fallback) {
   return cleaned || fallback;
 }
 
+// Where the student is now, e.g. "Ch 3 · Derivatives".
+function lessonLabel(r) {
+  if (r.finished) return 'Finished';
+  if (r.status === 'not_started') return 'Not started';
+  if (r.current_lesson_index == null) return '';
+  return `Ch ${r.current_lesson_index} · ${r.current_lesson_title || ''}`.trim();
+}
+
 // ── CSV ──────────────────────────────────────────────────────────────────
 const csvCell = (v) => {
   let s = v == null ? '' : String(v);
@@ -33,11 +41,11 @@ const csvCell = (v) => {
 };
 
 function buildCsv(rows, { includeContacts = false } = {}) {
-  const head = ['Student', ...(includeContacts ? ['Email', 'Phone'] : []), 'Class', 'Progress %', 'Avg quiz %', 'Quizzes taken', 'Last active', 'Days inactive', 'Status'];
+  const head = ['Student', ...(includeContacts ? ['Email', 'Phone'] : []), 'Class', 'Current lesson', 'Progress %', 'Avg quiz %', 'Quizzes taken', 'Last active', 'Days inactive', 'Status'];
   const lines = [head.map(csvCell).join(',')];
   rows.forEach(r => {
     lines.push([
-      r.name, ...(includeContacts ? [r.email, r.phone] : []), r.course_title, r.progress, r.avg_quiz,
+      r.name, ...(includeContacts ? [r.email, r.phone] : []), r.course_title, lessonLabel(r), r.progress, r.avg_quiz,
       `${r.quizzes_attempted}/${r.quizzes_total}`, dateOnly(r.last_active), r.days_inactive, STATUS_LABEL[r.status] || r.status,
     ].map(csvCell).join(','));
   });
