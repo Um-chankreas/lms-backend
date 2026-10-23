@@ -1,5 +1,6 @@
 const ExcelJS = require('exceljs');
 const sharp = require('sharp');
+const path = require('path');
 
 /**
  * Builds the dashboard Excel report: data sheets plus a "Charts" sheet whose
@@ -134,6 +135,46 @@ function barPairSvg(title, items, days = 30, legend = [`Previous ${days} days`, 
   return frame(title, inner);
 }
 
+// ── Brand: header logo + faded watermark on every sheet ─────────────────
+const BRAND_DIR = path.join(__dirname, '..', 'assets', 'brand');
+let BRAND = null;          // { header, watermark } PNG buffers, once loaded
+let brandLoading = null;
+
+/**
+ * Loads (once) the header logo and a watermark — the emblem at ~9% opacity, so
+ * cell text stays readable through it. Failure to load only skips branding.
+ */
+async function loadBrand() {
+  if (BRAND) return BRAND;
+  if (!brandLoading) {
+    brandLoading = (async () => {
+      const header = await sharp(path.join(BRAND_DIR, 'rs_text_logo.png')).resize({ width: 300 }).png().toBuffer();
+      const watermark = await sharp(path.join(BRAND_DIR, 'RS_logo.png'))
+        .resize({ width: 380 })
+        .ensureAlpha()
+        .composite([{ input: Buffer.from([255, 255, 255, 24]), raw: { width: 1, height: 1, channels: 4 }, tile: true, blend: 'dest-in' }])
+        .png()
+        .toBuffer();
+      BRAND = { header, watermark };
+      return BRAND;
+    })().catch((err) => { console.warn('Report branding unavailable:', err.message); BRAND = { header: null, watermark: null }; return BRAND; });
+  }
+  return brandLoading;
+}
+
+/** Logo top-right (header size 150x50) and a faded watermark in the middle of the sheet. */
+function addBrand(wb, ws, { logoCol, wmCol, wmRow }) {
+  if (!BRAND) return;
+  if (BRAND.header) {
+    const id = wb.addImage({ buffer: BRAND.header, extension: 'png' });
+    ws.addImage(id, { tl: { col: logoCol, row: 0.1 }, ext: { width: 150, height: 50 } });
+  }
+  if (BRAND.watermark) {
+    const id = wb.addImage({ buffer: BRAND.watermark, extension: 'png' });
+    ws.addImage(id, { tl: { col: wmCol, row: wmRow }, ext: { width: 380, height: 389 }, editAs: 'absolute' });
+  }
+}
+
 const png = (svg) => sharp(Buffer.from(svg)).png().toBuffer();
 
 const shortWeek = (ymd) => {
@@ -183,6 +224,7 @@ function addTable(wb, name, title, subtitle, columns, rows) {
     });
   });
   if (rows.length) ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: 4 + rows.length, column: columns.length } };
+  addBrand(wb, ws, { logoCol: Math.max(1, columns.length - 1.8), wmCol: Math.max(1, columns.length / 2 - 1.5), wmRow: 6 });
   return ws;
 }
 
@@ -198,6 +240,7 @@ async function buildDashboardWorkbook(data, scopeLabel) {
   const { students, lastActive, trend, atRisk, enrolledSet, now } = _export;
   const subtitle = `${scopeLabel} · Generated ${new Date(generated_at).toISOString().replace('T', ' ').slice(0, 16)} UTC`;
 
+  await loadBrand();
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Romduol Scholars';
   wb.created = now;
@@ -310,6 +353,7 @@ async function buildDashboardWorkbook(data, scopeLabel) {
   cs.getCell('A1').font = { size: 16, bold: true, color: { argb: 'FF1E6B3E' } };
   cs.getCell('A2').value = subtitle;
   cs.getCell('A2').font = { color: { argb: 'FF5B6B62' } };
+  addBrand(wb, cs, { logoCol: 18, wmCol: 8, wmRow: 12 });
   const spots = [[0, 3], [11, 3], [0, 23], [11, 23]];
   images.forEach((buf, i) => {
     const id = wb.addImage({ buffer: buf, extension: 'png' });
@@ -332,6 +376,7 @@ const STATUS_FILL = {
  * for each class).
  */
 async function buildStudentTableWorkbook(groups, { includeContacts = false, description = '' } = {}) {
+  await loadBrand();
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Romduol Scholars';
   await addStudentSummarySheet(wb, groups, description);
@@ -543,7 +588,7 @@ async function addStudentSummarySheet(wb, groups, description) {
   }
 
   // ── Charts: two per row, six columns (576px) each ──
-  const CH_W = 570, CH_H = Math.round(570 * H / W);          // 570 x 293
+  const CH_W = 520, CH_H = Math.round(520 * H / W);          // 520 x 267 — leaves slack inside 6 columns
   const slices = [
     { label: 'On track', value: count('on_track'), color: GREEN },
     { label: 'Behind', value: count('behind'), color: '#E0A100' },
@@ -568,11 +613,9 @@ async function addStudentSummarySheet(wb, groups, description) {
     ws.addImage(id, { tl: { col: spots[i][0], row: spots[i][1] }, ext: { width: CH_W, height: CH_H } });
   });
 
-  // ── Guide: beside the third chart ──
-  const gRow = chartsRow + rowsPerChart + 1;
-  const gc = ws.getCell(gRow, 8);
-  gc.value = 'How to read this workbook';
-  gc.font = { size: 12, bold: true, color: { argb: GREEN_ARGB } };
+  // ── Guide: below the charts, label in B:C and text from D ──
+  const gRow = chartsRow + rowsPerChart * 2 + 1;
+  section(gRow, 'How to read this workbook');
   [
     ['On track', 'active in the last 7 days, not far behind the class'],
     ['Behind', 'progress 20+ points below the class median'],
@@ -583,13 +626,20 @@ async function addStudentSummarySheet(wb, groups, description) {
     ['Current lesson', 'the first chapter not yet finished'],
     ['Note', '"All classes" lists one row per enrolment, so a student in two classes appears twice'],
   ].forEach(([k, v], i) => {
-    const kc = ws.getCell(gRow + 1 + i, 8);
+    const r = gRow + 1 + i;
+    ws.mergeCells(r, 2, r, 3);
+    const kc = ws.getCell(r, 2);
     kc.value = k;
     kc.font = { bold: true, color: { argb: 'FF0F1F17' } };
-    const vc = ws.getCell(gRow + 1 + i, 10);
+    kc.alignment = { vertical: 'middle', indent: 1 };
+    const vc = ws.getCell(r, 4);
     vc.value = v;
     vc.font = { color: { argb: 'FF35453C' } };
+    vc.alignment = { vertical: 'middle' };
+    ws.getRow(r).height = 20;
   });
+
+  addBrand(wb, ws, { logoCol: 10.2, wmCol: 4, wmRow: 12 });
 }
 
 module.exports = { buildDashboardWorkbook, buildStudentTableWorkbook };
