@@ -112,7 +112,7 @@ function lineSvg(title, labels, values) {
   return frame(title, inner);
 }
 
-function barPairSvg(title, items, days = 30) {
+function barPairSvg(title, items, days = 30, legend = [`Previous ${days} days`, `Last ${days} days`]) {
   const max = 100;
   const slot = (PLOT.r - PLOT.l) / items.length;
   const bw = 70;
@@ -129,8 +129,8 @@ function barPairSvg(title, items, days = 30) {
     inner += draw(it.recent, cx + 6, GREEN);
     inner += text(cx, PLOT.b + 22, it.label, { size: 12, anchor: 'middle' });
   });
-  inner += `<rect x="${W - 250}" y="38" width="10" height="10" fill="#9AD9B5"/>${text(W - 235, 47, `Previous ${days} days`, { size: 10, fill: MUTED })}`;
-  inner += `<rect x="${W - 130}" y="38" width="10" height="10" fill="${GREEN}"/>${text(W - 115, 47, `Last ${days} days`, { size: 10, fill: MUTED })}`;
+  inner += `<rect x="${W - 250}" y="38" width="10" height="10" fill="#9AD9B5"/>${text(W - 235, 47, legend[0], { size: 10, fill: MUTED })}`;
+  inner += `<rect x="${W - 130}" y="38" width="10" height="10" fill="${GREEN}"/>${text(W - 115, 47, legend[1], { size: 10, fill: MUTED })}`;
   return frame(title, inner);
 }
 
@@ -311,23 +311,25 @@ const STATUS_FILL = {
  * one sheet per group (for "all classes": "All classes" first, then a sheet
  * for each class).
  */
-function buildStudentTableWorkbook(groups, { includeContacts = false, description = '' } = {}) {
+async function buildStudentTableWorkbook(groups, { includeContacts = false, description = '' } = {}) {
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Romduol Scholars';
+  await addStudentSummarySheet(wb, groups, description);
   const columns = [
-    { key: 'name', header: 'Student', width: 28 },
-    ...(includeContacts ? [{ key: 'email', header: 'Email', width: 30 }, { key: 'phone', header: 'Phone', width: 16 }] : []),
-    { key: 'course', header: 'Class', width: 26 },
-    { key: 'progress', header: 'Progress %', width: 13 },
-    { key: 'avg', header: 'Avg quiz %', width: 13 },
-    { key: 'quizzes', header: 'Quizzes taken', width: 15 },
-    { key: 'last', header: 'Last active', width: 14 },
-    { key: 'idle', header: 'Days inactive', width: 15 },
-    { key: 'status', header: 'Status', width: 14 },
+    { key: 'name', header: 'Student', width: 30 },
+    ...(includeContacts ? [{ key: 'email', header: 'Email', width: 32 }, { key: 'phone', header: 'Phone', width: 18 }] : []),
+    { key: 'course', header: 'Class', width: 28 },
+    { key: 'lesson', header: 'Current lesson', width: 34 },
+    { key: 'progress', header: 'Progress %', width: 16 },
+    { key: 'avg', header: 'Avg quiz %', width: 16 },
+    { key: 'quizzes', header: 'Quizzes taken', width: 18 },
+    { key: 'last', header: 'Last active', width: 17 },
+    { key: 'idle', header: 'Days inactive', width: 18 },
+    { key: 'status', header: 'Status', width: 17 },
   ];
   const statusCol = columns.findIndex(c => c.key === 'status') + 1;
   const progressCol = columns.findIndex(c => c.key === 'progress') + 1;
-  const used = new Set();
+  const used = new Set(['summary']);
   // Excel sheet names: max 31 chars, none of  [ ] : * ? / \, unique (case-insensitive).
   const sheetName = (title, i) => {
     let base = String(title || '').replace(/[\[\]:*?/\\]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 31) || `Class ${i}`;
@@ -344,6 +346,7 @@ function buildStudentTableWorkbook(groups, { includeContacts = false, descriptio
       columns,
       g.rows.map(r => ({
         name: r.name || '—', email: r.email || '', phone: r.phone || '', course: r.course_title || '—',
+        lesson: lessonLabel(r),
         progress: r.progress, avg: r.avg_quiz, quizzes: `${r.quizzes_attempted}/${r.quizzes_total}`,
         last: dateOnly(r.last_active), idle: r.days_inactive, status: r.status,
       })));
@@ -359,6 +362,147 @@ function buildStudentTableWorkbook(groups, { includeContacts = false, descriptio
     });
   });
   return wb;
+}
+
+function lessonLabel(r) {
+  if (r.finished) return 'Finished';
+  if (r.status === 'not_started') return 'Not started';
+  if (r.current_lesson_index == null) return '—';
+  return `Ch ${r.current_lesson_index} · ${r.current_lesson_title || ''}`.trim();
+}
+
+const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
+const round1 = (v) => (v == null ? null : Math.round(v * 10) / 10);
+
+/**
+ * First sheet of the student workbook: key numbers, a per-class comparison with
+ * totals, three charts (status split, progress vs quiz by class, quiz score
+ * histogram) and a short guide to the columns and statuses. Chart pictures use
+ * "C1, C2…" labels (the class table next to them maps each code to its name) so
+ * they don't depend on Khmer fonts being installed on the server.
+ */
+async function addStudentSummarySheet(wb, groups, description) {
+  const perClass = groups.length > 1 ? groups.slice(1) : groups;
+  const all = groups.length > 1 ? groups[0].rows : groups[0].rows;
+  const ws = wb.addWorksheet('Summary', { views: [{ showGridLines: false }] });
+  ws.columns = [{ width: 6 }, { width: 34 }, { width: 14 }, { width: 14 }, { width: 14 }, { width: 12 }, { width: 12 }, { width: 12 }, { width: 14 }, { width: 14 }];
+
+  const title = ws.getCell('A1');
+  title.value = 'Student performance summary · Romduol Scholars';
+  title.font = { size: 17, bold: true, color: { argb: 'FF1E6B3E' } };
+  ws.getCell('A2').value = `${description || 'All classes'} · Generated ${new Date().toISOString().replace('T', ' ').slice(0, 16)} UTC`;
+  ws.getCell('A2').font = { color: { argb: 'FF5B6B62' } };
+
+  const section = (row, text) => {
+    const c = ws.getCell(`A${row}`);
+    c.value = text;
+    c.font = { size: 13, bold: true, color: { argb: 'FF1E6B3E' } };
+  };
+
+  // Key numbers
+  const uniqueIds = new Set(all.map(r => r.student_id));
+  const count = (st) => all.filter(r => r.status === st).length;
+  const share = (n) => (all.length ? `${Math.round((n / all.length) * 100)}% of enrolments` : '');
+  const quizAvg = mean(all.map(r => r.avg_quiz).filter(v => v != null));
+  section(4, 'Key numbers');
+  const keys = [
+    ['Students (unique)', uniqueIds.size, 'A student in two classes counts once here'],
+    ['Enrolments (student × class)', all.length, 'The student sheets list one row per enrolment'],
+    ['Average progress', `${round1(mean(all.map(r => r.progress))) ?? 0}%`, 'Share of lessons and units finished'],
+    ['Average quiz score', quizAvg == null ? '—' : `${round1(quizAvg)}%`, 'Best score per quiz, averaged'],
+    ['Active in the last 7 days', all.filter(r => r.days_inactive != null && r.days_inactive < 7).length, share(all.filter(r => r.days_inactive != null && r.days_inactive < 7).length)],
+    ['Inactive (7+ days)', count('inactive'), share(count('inactive'))],
+    ['Not started', count('not_started'), share(count('not_started'))],
+    ['Completed the course', count('completed'), share(count('completed'))],
+  ];
+  keys.forEach(([label, value, note], i) => {
+    const r = 5 + i;
+    ws.getCell(`B${r}`).value = label;
+    ws.getCell(`C${r}`).value = value;
+    ws.getCell(`C${r}`).font = { bold: true };
+    ws.getCell(`C${r}`).alignment = { horizontal: 'right' };
+    ws.getCell(`D${r}`).value = note;
+    ws.getCell(`D${r}`).font = { color: { argb: 'FF5B6B62' } };
+    if (i % 2 === 0) for (const col of ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']) ws.getCell(`${col}${r}`).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF6F8F7' } };
+  });
+
+  // By class
+  let row = 5 + keys.length + 2;
+  section(row, 'By class');
+  row += 1;
+  const head = ['Code', 'Class', 'Students', 'Avg progress %', 'Avg quiz %', 'On track', 'Behind', 'Inactive', 'Not started', 'Completed'];
+  head.forEach((h, i) => { ws.getRow(row).getCell(i + 1).value = h; });
+  styleHeader(ws.getRow(row));
+  ws.getRow(row).alignment = { vertical: 'middle', wrapText: true };
+  const firstClassRow = row + 1;
+  perClass.forEach((g, i) => {
+    const rows = g.rows;
+    const vals = [
+      `C${i + 1}`, g.title, rows.length,
+      round1(mean(rows.map(r => r.progress))), round1(mean(rows.map(r => r.avg_quiz).filter(v => v != null))),
+      ...['on_track', 'behind', 'inactive', 'not_started', 'completed'].map(st => rows.filter(r => r.status === st).length),
+    ];
+    const r = ws.getRow(firstClassRow + i);
+    vals.forEach((v, c) => { r.getCell(c + 1).value = v; });
+    r.getCell(2).font = { bold: true };
+  });
+  const lastClassRow = firstClassRow + perClass.length - 1;
+  if (perClass.length > 1) {
+    const t = ws.getRow(lastClassRow + 1);
+    t.getCell(2).value = 'All classes';
+    t.getCell(3).value = { formula: `SUM(C${firstClassRow}:C${lastClassRow})`, result: perClass.reduce((a, g) => a + g.rows.length, 0) };
+    t.getCell(4).value = round1(mean(all.map(r => r.progress)));
+    t.getCell(5).value = round1(quizAvg);
+    ['F', 'G', 'H', 'I', 'J'].forEach((col, i) => {
+      const st = ['on_track', 'behind', 'inactive', 'not_started', 'completed'][i];
+      t.getCell(col).value = { formula: `SUM(${col}${firstClassRow}:${col}${lastClassRow})`, result: all.filter(r => r.status === st).length };
+    });
+    t.eachCell(c => { c.font = { bold: true }; c.border = { top: { style: 'thin', color: { argb: 'FF1E6B3E' } } }; });
+    row = lastClassRow + 1;
+  } else {
+    row = lastClassRow;
+  }
+
+  // Charts
+  const slices = [
+    { label: 'On track', value: count('on_track'), color: GREEN },
+    { label: 'Behind', value: count('behind'), color: '#E0A100' },
+    { label: 'Inactive', value: count('inactive'), color: '#E5484D' },
+    { label: 'Not started', value: count('not_started'), color: '#C5CDD6', light: true },
+    { label: 'Completed', value: count('completed'), color: '#5B5BD6' },
+  ];
+  const buckets = Array(10).fill(0);
+  all.forEach(r => { if (r.avg_quiz != null) buckets[Math.min(9, Math.max(0, Math.floor(r.avg_quiz / 10)))] += 1; });
+  const images = await Promise.all([
+    png(pieSvg('Student status (enrolments)', slices)),
+    png(barPairSvg('Average progress and quiz score by class', perClass.map((g, i) => ({
+      label: `C${i + 1}`,
+      prior: round1(mean(g.rows.map(r => r.progress))) == null ? null : Math.round(mean(g.rows.map(r => r.progress))),
+      recent: (() => { const q = mean(g.rows.map(r => r.avg_quiz).filter(v => v != null)); return q == null ? null : Math.round(q); })(),
+    })), 0, ['Avg progress', 'Avg quiz'])),
+    png(columnSvg('How quiz scores are spread (students per score band)', ['0–10', '10–20', '20–30', '30–40', '40–50', '50–60', '60–70', '70–80', '80–90', '90–100'], buckets)),
+  ]);
+  row += 2;
+  section(row, 'Charts');
+  const top = row; // images are 0-indexed rows: place just under the heading
+  const spots = [[0, top + 1], [7, top + 1], [0, top + 20]];
+  images.forEach((buf, i) => {
+    const id = wb.addImage({ buffer: buf, extension: 'png' });
+    ws.addImage(id, { tl: { col: spots[i][0], row: spots[i][1] }, ext: { width: W, height: H } });
+  });
+
+  // Guide (below the charts)
+  let g = top + 41;
+  section(g, 'How to read this workbook');
+  const notes = [
+    'On track — active in the last 7 days and not far behind the class.',
+    'Behind — progress is 20+ points below the class median.',
+    'Inactive — no activity for 7 days or more (or never active after starting).',
+    'Not started — no lesson progress, quiz or XP yet.   Completed — every lesson and unit finished.',
+    'Avg quiz % — the best score on each quiz the student took, averaged.   Current lesson — the first chapter not yet finished.',
+    'The "All classes" sheet has one row per enrolment, so a student in two classes appears twice. Use the class sheets for per-class lists.',
+  ];
+  notes.forEach((n, i) => { ws.getCell(`B${g + 1 + i}`).value = n; ws.getCell(`B${g + 1 + i}`).font = { color: { argb: 'FF35453C' } }; });
 }
 
 module.exports = { buildDashboardWorkbook, buildStudentTableWorkbook };
