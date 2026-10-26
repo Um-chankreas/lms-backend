@@ -63,9 +63,35 @@ const fmtClock = (totalSeconds) => {
   return `${hh}-${mm}-${ss}`;
 };
 
-function runFfmpeg(args) {
+// Only this many ffmpeg runs go at once; the rest wait their turn. A small
+// server (1 vCPU / 2GB RAM) runs two encodes at half speed each — and can run
+// out of memory — so the default is one at a time. Raise FFMPEG_MAX_CONCURRENT
+// on a bigger machine.
+const MAX_FFMPEG_JOBS = parseInt(process.env.FFMPEG_MAX_CONCURRENT, 10) || 1;
+let activeFfmpeg = 0;
+const ffmpegQueue = [];
+async function withFfmpegSlot(fn) {
+  if (activeFfmpeg >= MAX_FFMPEG_JOBS) await new Promise((resolve) => ffmpegQueue.push(resolve));
+  else activeFfmpeg++;
+  try {
+    return await fn();
+  } finally {
+    const next = ffmpegQueue.shift();
+    if (next) next(); // hand the slot straight to the next waiter
+    else activeFfmpeg--;
+  }
+}
+
+// Linux: run ffmpeg at lower CPU priority so the API stays responsive.
+const spawnFfmpeg = (args) => (process.platform === 'linux'
+  ? spawn('nice', ['-n', '10', ffmpegPath, ...args])
+  : spawn(ffmpegPath, args));
+
+const runFfmpeg = (args) => withFfmpegSlot(() => runFfmpegNow(args));
+
+function runFfmpegNow(args) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(ffmpegPath, args);
+    const proc = spawnFfmpeg(args);
     let stderr = '';
     proc.stderr.on('data', (d) => { stderr += d.toString(); });
     proc.on('error', reject);
@@ -246,9 +272,11 @@ setInterval(() => {
 
 // Like runFfmpeg, but reports percent done via `-progress pipe:1`, whose
 // out_time_us (microseconds encoded so far) we divide by the source length.
-function runFfmpegWithProgress(args, durationSec, onPercent, onSpawn) {
+const runFfmpegWithProgress = (...a) => withFfmpegSlot(() => runFfmpegWithProgressNow(...a));
+
+function runFfmpegWithProgressNow(args, durationSec, onPercent, onSpawn) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(ffmpegPath, ['-progress', 'pipe:1', '-nostats', ...args]);
+    const proc = spawnFfmpeg(['-progress', 'pipe:1', '-nostats', ...args]);
     onSpawn?.(proc);
     let stderr = '';
     let buf = '';
