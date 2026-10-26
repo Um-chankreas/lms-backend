@@ -3,12 +3,20 @@ const router = express.Router();
 const path = require('path');
 const multer = require('multer');
 const supabase = require('../config/supabase');
-const { authenticateToken, isTeacher } = require('../middleware/auth');
+const { authenticateToken, hasRole } = require('../middleware/auth');
 const { awardXp, XP_VALUES } = require('../utils/xp');
 const { evaluateAchievements } = require('../utils/achievements');
 const { v4: uuidv4 } = require('uuid');
 const { parseQuestionRows } = require('../utils/csvQuestions');
 const { notifyAssignmentPublished } = require('../utils/notifyEvents');
+
+// Teachers manage assignments for their own courses; admins and super admins
+// can manage assignments for any course.
+const STAFF_ROLES = ['teacher', 'admin', 'super_admin'];
+const isTeacher = hasRole(...STAFF_ROLES);
+const isStaff = (user) => STAFF_ROLES.includes(user?.role);
+const canManageCourse = (courseTeacherId, user) =>
+  !!user && (['admin', 'super_admin'].includes(user.role) || courseTeacherId === user.userId);
 
 // Configure multer for submission file uploads
 const storage = multer.memoryStorage();
@@ -47,7 +55,7 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
       .eq('id', course_id)
       .single();
 
-    if (course?.teacher_id !== req.user.userId) {
+    if (!canManageCourse(course?.teacher_id, req.user)) {
       return res.status(403).json({
         success: false,
         error: 'You can only create assignments for your own courses'
@@ -98,14 +106,14 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
 // Shared ownership check for the per-question endpoints below: the
 // assignment must exist and belong (via its course) to the calling teacher.
 // Mirrors quizzes.routes.js's loadOwnedQuiz.
-async function loadOwnedAssignment(assignmentId, teacherId) {
+async function loadOwnedAssignment(assignmentId, user) {
   const { data: assignment } = await supabase
     .from('assignments')
     .select('id, type, status, course_id, courses(teacher_id)')
     .eq('id', assignmentId)
     .single();
   if (!assignment) return { error: { status: 404, message: 'Assignment not found' } };
-  if (assignment.courses?.teacher_id !== teacherId) return { error: { status: 403, message: 'Unauthorized assignment access' } };
+  if (!canManageCourse(assignment.courses?.teacher_id, user)) return { error: { status: 403, message: 'Unauthorized assignment access' } };
   return { assignment };
 }
 
@@ -120,7 +128,7 @@ async function loadOwnedAssignment(assignmentId, teacherId) {
 router.put('/:id', authenticateToken, isTeacher, async (req, res) => {
   try {
     const { id } = req.params;
-    const { error: ownError, assignment } = await loadOwnedAssignment(id, req.user.userId);
+    const { error: ownError, assignment } = await loadOwnedAssignment(id, req.user);
     if (ownError) return res.status(ownError.status).json({ success: false, error: ownError.message });
 
     const { title, description, due_date, status, points } = req.body;
@@ -190,7 +198,7 @@ async function assertQuestionsEditable(assignmentId, res) {
 router.post('/:id/questions', authenticateToken, isTeacher, async (req, res) => {
   try {
     const { id } = req.params;
-    const { error: ownError, assignment } = await loadOwnedAssignment(id, req.user.userId);
+    const { error: ownError, assignment } = await loadOwnedAssignment(id, req.user);
     if (ownError) return res.status(ownError.status).json({ success: false, error: ownError.message });
     if (assignment.type !== 'quiz') {
       return res.status(400).json({ success: false, error: 'This assignment is not a quiz-type assignment' });
@@ -240,7 +248,7 @@ router.post('/:id/questions', authenticateToken, isTeacher, async (req, res) => 
 router.put('/:id/questions/:questionId', authenticateToken, isTeacher, async (req, res) => {
   try {
     const { id, questionId } = req.params;
-    const { error: ownError } = await loadOwnedAssignment(id, req.user.userId);
+    const { error: ownError } = await loadOwnedAssignment(id, req.user);
     if (ownError) return res.status(ownError.status).json({ success: false, error: ownError.message });
     if (!(await assertQuestionsEditable(id, res))) return;
 
@@ -275,7 +283,7 @@ router.put('/:id/questions/:questionId', authenticateToken, isTeacher, async (re
 router.delete('/:id/questions/:questionId', authenticateToken, isTeacher, async (req, res) => {
   try {
     const { id, questionId } = req.params;
-    const { error: ownError } = await loadOwnedAssignment(id, req.user.userId);
+    const { error: ownError } = await loadOwnedAssignment(id, req.user);
     if (ownError) return res.status(ownError.status).json({ success: false, error: ownError.message });
     if (!(await assertQuestionsEditable(id, res))) return;
 
@@ -319,7 +327,7 @@ router.post('/:id/questions/import', authenticateToken, isTeacher, csvUpload.sin
       return res.status(400).json({ success: false, error: 'CSV file is required (form field name: "file")' });
     }
 
-    const { error: ownError, assignment } = await loadOwnedAssignment(id, req.user.userId);
+    const { error: ownError, assignment } = await loadOwnedAssignment(id, req.user);
     if (ownError) return res.status(ownError.status).json({ success: false, error: ownError.message });
     if (assignment.type !== 'quiz') {
       return res.status(400).json({ success: false, error: 'This assignment is not a quiz-type assignment' });
@@ -471,7 +479,7 @@ router.get('/course/:courseId', authenticateToken, async (req, res) => {
       .select('teacher_id')
       .eq('id', courseId)
       .maybeSingle();
-    const isOwner = req.user.role === 'teacher' && course?.teacher_id === req.user.userId;
+    const isOwner = isStaff(req.user) && canManageCourse(course?.teacher_id, req.user);
 
     let query = supabase
       .from('assignments')
@@ -523,7 +531,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
       .select('id, title, color, icon, teacher_id')
       .eq('id', assignment.course_id)
       .maybeSingle();
-    const isOwner = req.user.role === 'teacher' && course?.teacher_id === req.user.userId;
+    const isOwner = isStaff(req.user) && canManageCourse(course?.teacher_id, req.user);
 
     // A draft is invisible to everyone but its own teacher — hide its
     // existence entirely rather than a 403, same as a nonexistent id.
@@ -536,7 +544,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
 
     // Get submissions if teacher
     let submissions = [];
-    if (req.user.role === 'teacher') {
+    if (isStaff(req.user)) {
       const { data: subs } = await supabase
         .from('assignment_submissions')
         .select('*, users(name, email)')
@@ -567,12 +575,12 @@ router.get('/:id', authenticateToken, async (req, res) => {
         .eq('assignment_id', id)
         .order('order_number', { ascending: true });
 
-      const revealAnswerKey = req.user.role === 'teacher' || submissions.length > 0;
+      const revealAnswerKey = isStaff(req.user) || submissions.length > 0;
       questions = revealAnswerKey
         ? (qs || [])
         : (qs || []).map(({ correct_answer, explanation, ...safe }) => safe);
 
-      if (req.user.role === 'teacher') {
+      if (isStaff(req.user)) {
         const { data: enrollments } = await supabase
           .from('course_enrollments')
           .select('student_id, users(id, name, email, avatar_url)')
@@ -833,7 +841,7 @@ router.put('/:id/submissions/:submissionId/grade', authenticateToken, isTeacher,
       .eq('id', id)
       .single();
 
-    if (assignment?.courses?.teacher_id !== req.user.userId) {
+    if (!canManageCourse(assignment?.courses?.teacher_id, req.user)) {
       return res.status(403).json({
         success: false,
         error: 'You can only grade assignments in your courses'

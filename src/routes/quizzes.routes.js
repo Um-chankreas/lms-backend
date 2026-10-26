@@ -1,10 +1,11 @@
 const express = require('express');
 const { notifyFriendsQuizDone } = require('../utils/friendNotify');
 const router = express.Router();
+
 const path = require('path');
 const multer = require('multer');
 const supabase = require('../config/supabase');
-const { authenticateToken, optionalAuth, isTeacher, isStudent } = require('../middleware/auth');
+const { authenticateToken, optionalAuth, hasRole, isStudent } = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
 const { awardXp, XP_VALUES, xpForQuizScore, levelInfo } = require('../utils/xp');
 const { recordActivity } = require('../utils/streak');
@@ -13,6 +14,14 @@ const { evaluateAchievements } = require('../utils/achievements');
 const { hasCourseAccess, ensureEnrolled } = require('../utils/access');
 const { checkChapterAutoComplete } = require('../utils/progress');
 const { normalizeQuestionType, parseQuestionRows } = require('../utils/csvQuestions');
+
+// Teachers manage quizzes for their own courses; admins and super admins can
+// manage quizzes for any course.
+const STAFF_ROLES = ['teacher', 'admin', 'super_admin'];
+const isTeacher = hasRole(...STAFF_ROLES);
+const isStaff = (user) => STAFF_ROLES.includes(user?.role);
+const canManageCourse = (courseTeacherId, user) =>
+  !!user && (['admin', 'super_admin'].includes(user.role) || courseTeacherId === user.userId);
 
 // Configure multer for quiz question CSV imports
 const csvUpload = multer({
@@ -141,7 +150,7 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
       .eq('id', course_id)
       .single();
 
-    if (course?.teacher_id !== req.user.userId) {
+    if (!canManageCourse(course?.teacher_id, req.user)) {
       return res.status(403).json({
         success: false,
         error: 'You can only create quizzes for your own courses'
@@ -309,7 +318,7 @@ router.post('/:id/questions/import', authenticateToken, isTeacher, csvUpload.sin
     if (!quiz) {
       return res.status(404).json({ success: false, error: 'Quiz not found' });
     }
-    if (quiz.courses?.teacher_id !== req.user.userId) {
+    if (!canManageCourse(quiz.courses?.teacher_id, req.user)) {
       return res.status(403).json({ success: false, error: 'Unauthorized quiz access' });
     }
 
@@ -397,7 +406,7 @@ router.get('/unit/:unitId', authenticateToken, async (req, res) => {
       .select('*, quiz_questions(count)')
       .eq('unit_id', req.params.unitId);
 
-    if (req.user.role !== 'teacher') query = query.eq('status', 'published');
+    if (!isStaff(req.user)) query = query.eq('status', 'published');
 
     const { data: quizzes, error } = await query.order('created_at', { ascending: false });
     if (error) throw error;
@@ -438,7 +447,7 @@ router.post('/import/units', authenticateToken, isTeacher, csvUpload.single('fil
       .single();
 
     if (!chapter) return res.status(404).json({ success: false, error: 'Chapter not found' });
-    if (chapter.courses?.teacher_id !== req.user.userId) {
+    if (!canManageCourse(chapter.courses?.teacher_id, req.user)) {
       return res.status(403).json({ success: false, error: 'You can only import into your own courses' });
     }
 
@@ -580,7 +589,7 @@ router.put('/:id', authenticateToken, isTeacher, async (req, res) => {
       .eq('id', id)
       .single();
 
-    if (quiz?.courses?.teacher_id !== req.user.userId) {
+    if (!canManageCourse(quiz?.courses?.teacher_id, req.user)) {
       return res.status(403).json({
         success: false,
         error: 'Unauthorized quiz access'
@@ -648,14 +657,14 @@ router.put('/:id', authenticateToken, isTeacher, async (req, res) => {
 
 // Shared ownership check for the per-question endpoints below: the quiz
 // must exist and belong (via its course) to the calling teacher.
-async function loadOwnedQuiz(quizId, teacherId) {
+async function loadOwnedQuiz(quizId, user) {
   const { data: quiz } = await supabase
     .from('quizzes')
     .select('id, courses(teacher_id)')
     .eq('id', quizId)
     .single();
   if (!quiz) return { error: { status: 404, message: 'Quiz not found' } };
-  if (quiz.courses?.teacher_id !== teacherId) return { error: { status: 403, message: 'Unauthorized quiz access' } };
+  if (!canManageCourse(quiz.courses?.teacher_id, user)) return { error: { status: 403, message: 'Unauthorized quiz access' } };
   return { quiz };
 }
 
@@ -669,7 +678,7 @@ async function loadOwnedQuiz(quizId, teacherId) {
 router.post('/:id/questions', authenticateToken, isTeacher, async (req, res) => {
   try {
     const { id } = req.params;
-    const { error: ownError } = await loadOwnedQuiz(id, req.user.userId);
+    const { error: ownError } = await loadOwnedQuiz(id, req.user);
     if (ownError) return res.status(ownError.status).json({ success: false, error: ownError.message });
 
     const { question, options, correct_answer, explanation, difficulty, question_type } = req.body;
@@ -720,7 +729,7 @@ router.post('/:id/questions', authenticateToken, isTeacher, async (req, res) => 
 router.put('/:id/questions/:questionId', authenticateToken, isTeacher, async (req, res) => {
   try {
     const { id, questionId } = req.params;
-    const { error: ownError } = await loadOwnedQuiz(id, req.user.userId);
+    const { error: ownError } = await loadOwnedQuiz(id, req.user);
     if (ownError) return res.status(ownError.status).json({ success: false, error: ownError.message });
 
     const { question, options, correct_answer, explanation, difficulty, question_type } = req.body;
@@ -759,7 +768,7 @@ router.put('/:id/questions/:questionId', authenticateToken, isTeacher, async (re
 router.delete('/:id/questions/:questionId', authenticateToken, isTeacher, async (req, res) => {
   try {
     const { id, questionId } = req.params;
-    const { error: ownError } = await loadOwnedQuiz(id, req.user.userId);
+    const { error: ownError } = await loadOwnedQuiz(id, req.user);
     if (ownError) return res.status(ownError.status).json({ success: false, error: ownError.message });
 
     const { error } = await supabase
@@ -793,7 +802,7 @@ router.delete('/:id', authenticateToken, isTeacher, async (req, res) => {
     if (!quiz) {
       return res.status(404).json({ success: false, error: 'Quiz not found' });
     }
-    if (quiz.courses?.teacher_id !== req.user.userId) {
+    if (!canManageCourse(quiz.courses?.teacher_id, req.user)) {
       return res.status(403).json({ success: false, error: 'You can only delete your own quizzes' });
     }
 
@@ -828,7 +837,7 @@ router.get('/lesson/:lessonId', authenticateToken, async (req, res) => {
       .is('unit_id', null);
 
     // Filter out drafts for students
-    if (req.user.role !== 'teacher') {
+    if (!isStaff(req.user)) {
       query = query.eq('status', 'published');
     }
 
@@ -862,7 +871,7 @@ router.get('/course/:courseId', authenticateToken, async (req, res) => {
       .select('*, quiz_questions(count)')
       .eq('course_id', courseId);
 
-    if (req.user.role !== 'teacher') {
+    if (!isStaff(req.user)) {
       query = query.eq('status', 'published');
     }
 
@@ -1180,7 +1189,7 @@ router.get('/:id', optionalAuth, async (req, res) => {
       }
     }
 
-    const isTeacher = req.user?.role === 'teacher';
+    const isTeacher = isStaff(req.user);
 
     // Teacher building/editing the bank: paginated (a bank can grow into the
     // hundreds over time as questions get added, and the editor only needs

@@ -10,6 +10,9 @@ async function hasCourseAccess({ supabase, course, user }) {
   if (course.is_free) return true;
   if (!user) return false;
 
+  // Admins and super admins can open and edit every course.
+  if (user.role === 'admin' || user.role === 'super_admin') return true;
+
   if (user.role === 'teacher') {
     return course.teacher_id === user.userId;
   }
