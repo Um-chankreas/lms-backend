@@ -591,7 +591,10 @@ async function prepareMerge(files) {
     parts.push(`${pads.join('')}concat=n=${inputPaths.length}:v=1:a=${hasAudio ? 1 : 0}[v]${hasAudio ? '[a]' : ''}`);
     args.push('-filter_complex', parts.join(';'), '-map', '[v]');
     if (hasAudio) args.push('-map', '[a]', '-c:a', 'aac', '-b:a', '160k');
-    args.push('-c:v', 'libx264', '-crf', '18', '-preset', 'veryfast', '-movflags', '+faststart', outputPath);
+    // crf 23 keeps the result about as large as the sources (these are usually
+    // already-compressed files); max_muxing_queue_size avoids the sporadic
+    // "Too many packets buffered for output stream" failure on uneven A/V.
+    args.push('-c:v', 'libx264', '-crf', '23', '-preset', 'superfast', '-max_muxing_queue_size', '9999', '-movflags', '+faststart', outputPath);
   }
 
   return { args, outputPath, listPath, totalSec: infos.reduce((n, i) => n + i.duration, 0) };
