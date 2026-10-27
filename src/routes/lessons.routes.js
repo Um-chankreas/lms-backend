@@ -10,6 +10,7 @@ const { awardXp, XP_VALUES } = require('../utils/xp');
 const { evaluateAchievements } = require('../utils/achievements');
 const { hasCourseAccess, ensureEnrolled } = require('../utils/access');
 const { starsForScore } = require('../utils/progress');
+const { OPEN_PROGRESSION } = require('../config/progression');
 const { guestCanAccessStep, guestFreeStepKeys, sendGuestWall } = require('../utils/guest');
 
 // Safe resolver for pdf-parse module interop issues
@@ -353,7 +354,9 @@ router.get('/:id/path', optionalAuth, async (req, res) => {
       // ever reachable for them.
       previousLessonDone = false;
     }
-    const lessonReachable = lessonAccess && previousLessonDone;
+    // Open progression: learners may jump to any chapter/step without
+    // finishing the earlier ones (see config/progression.js).
+    const lessonReachable = lessonAccess && (OPEN_PROGRESSION || previousLessonDone);
 
     const { data: units } = await supabase
       .from('lesson_units')
@@ -423,7 +426,7 @@ router.get('/:id/path', optionalAuth, async (req, res) => {
 
     const placeStep = ({ done, scorable, score, node }) => {
       totalSteps++;
-      const locked = !lessonReachable || !previousStepDone;
+      const locked = !lessonReachable || (!OPEN_PROGRESSION && !previousStepDone);
       let status = 'locked';
       if (!locked) {
         if (done) status = 'completed';

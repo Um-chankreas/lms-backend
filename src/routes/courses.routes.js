@@ -6,6 +6,7 @@ const { authenticateToken, optionalAuth, isStudent, hasRole } = require('../midd
 const { hasCourseAccess, ensureEnrolled, isSubscriptionActive } = require('../utils/access');
 const { awardXp, XP_VALUES } = require('../utils/xp');
 const { starsForScore } = require('../utils/progress');
+const { OPEN_PROGRESSION } = require('../config/progression');
 const { GUEST_FREE_STEPS } = require('../utils/guest');
 const { v4: uuidv4 } = require('uuid');
 
@@ -681,7 +682,7 @@ router.get('/:id/path', optionalAuth, async (req, res) => {
     const nodes = [];
     lessons.forEach((lesson, idx) => {
       const lessonAccess = isGuest || courseAccess || lesson.is_free;
-      const positioned = idx === 0 || previousDone;
+      const positioned = OPEN_PROGRESSION || idx === 0 || previousDone;
       const locked = !lessonAccess || !positioned;
 
       const completed = completedSet.has(lesson.id);
