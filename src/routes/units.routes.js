@@ -27,6 +27,7 @@ const { recordActivity } = require('../utils/streak');
  *   POST   /api/units/:id/video/upload-url   signed upload URL for a unit's video (teacher)
  *   POST   /api/units/:id/video        attach the uploaded video           (teacher)
  *   DELETE /api/units/:id/video        remove a unit's video               (teacher)
+ *     (all three take `kind`: 'lesson' (default) | 'practice' — body, or ?kind= on DELETE)
  *   PUT    /api/units/:id              edit a unit                        (teacher)
  *   DELETE /api/units/:id              remove a unit                      (teacher)
  */
@@ -72,11 +73,19 @@ async function storageObjectExists(folder, path) {
 
 const isAdminRole = (user) => ['admin', 'super_admin'].includes(user?.role);
 
+/** A unit has two optional videos. `lesson` is the original `video_url` column, so units that
+ * already had a video keep it as their lesson video. */
+const VIDEO_KINDS = {
+  lesson: { urlCol: 'video_url', durCol: 'duration_seconds', folder: 'unit-videos' },
+  practice: { urlCol: 'practice_video_url', durCol: 'practice_duration_seconds', folder: 'unit-practice-videos' }
+};
+const videoKind = (raw) => VIDEO_KINDS[raw === undefined || raw === null || raw === '' ? 'lesson' : raw] || null;
+
 /** Load a unit + confirm the caller owns its course, or is admin/super_admin. */
 async function loadOwnedUnit(id, user) {
   const { data: unit } = await supabase
     .from('lesson_units')
-    .select('id, video_url, lessons(courses(teacher_id))')
+    .select('id, video_url, practice_video_url, lessons(courses(teacher_id))')
     .eq('id', id)
     .single();
   if (!unit) return { error: { status: 404, message: 'Unit not found' } };
@@ -547,10 +556,13 @@ router.post('/:id/video/upload-url', authenticateToken, hasRole('teacher', 'admi
       });
     }
 
+    const kind = videoKind(req.body?.kind);
+    if (!kind) return res.status(400).json({ success: false, error: "kind must be 'lesson' or 'practice'" });
+
     const { unit, error } = await loadOwnedUnit(req.params.id, req.user);
     if (error) return res.status(error.status).json({ success: false, error: error.message });
 
-    const path = `unit-videos/${unit.id}-${Date.now()}.${ext}`;
+    const path = `${kind.folder}/${unit.id}-${Date.now()}.${ext}`;
     const { data, error: signError } = await supabase
       .storage.from('course-materials').createSignedUploadUrl(path);
     if (signError) throw signError;
@@ -580,7 +592,9 @@ router.post('/:id/video', authenticateToken, hasRole('teacher', 'admin', 'super_
   try {
     const { id } = req.params;
     const { path, duration_seconds } = req.body || {};
-    if (!path || !path.startsWith(`unit-videos/${id}-`)) {
+    const kind = videoKind(req.body?.kind);
+    if (!kind) return res.status(400).json({ success: false, error: "kind must be 'lesson' or 'practice'" });
+    if (!path || !path.startsWith(`${kind.folder}/${id}-`)) {
       return res.status(400).json({
         success: false,
         error: 'A valid `path` from /video/upload-url is required'
@@ -590,7 +604,7 @@ router.post('/:id/video', authenticateToken, hasRole('teacher', 'admin', 'super_
     const { unit, error } = await loadOwnedUnit(id, req.user);
     if (error) return res.status(error.status).json({ success: false, error: error.message });
 
-    if (!(await storageObjectExists('unit-videos', path))) {
+    if (!(await storageObjectExists(kind.folder, path))) {
       return res.status(409).json({
         success: false,
         error: 'Upload not found in storage — finish the upload before calling this'
@@ -600,8 +614,8 @@ router.post('/:id/video', authenticateToken, hasRole('teacher', 'admin', 'super_
     const { data: updated, error: updateError } = await supabase
       .from('lesson_units')
       .update({
-        video_url: path,
-        duration_seconds: duration_seconds ? parseInt(duration_seconds, 10) : null,
+        [kind.urlCol]: path,
+        [kind.durCol]: duration_seconds ? parseInt(duration_seconds, 10) : null,
         updated_at: new Date()
       })
       .eq('id', id)
@@ -609,14 +623,20 @@ router.post('/:id/video', authenticateToken, hasRole('teacher', 'admin', 'super_
       .single();
     if (updateError) throw updateError;
 
-    if (unit.video_url && unit.video_url !== path) {
-      await supabase.storage.from('course-materials').remove([unit.video_url]);
+    if (unit[kind.urlCol] && unit[kind.urlCol] !== path) {
+      await supabase.storage.from('course-materials').remove([unit[kind.urlCol]]);
     }
 
     res.json({
       success: true,
       message: 'Video attached to unit',
-      data: { unit: { ...updated, video_url: publicUrl(path) } }
+      data: {
+        unit: {
+          ...updated,
+          video_url: updated.video_url ? publicUrl(updated.video_url) : null,
+          practice_video_url: updated.practice_video_url ? publicUrl(updated.practice_video_url) : null
+        }
+      }
     });
   } catch (error) {
     console.error('Unit video attach error:', error);
@@ -629,14 +649,17 @@ router.post('/:id/video', authenticateToken, hasRole('teacher', 'admin', 'super_
  */
 router.delete('/:id/video', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), async (req, res) => {
   try {
+    const kind = videoKind(req.query?.kind ?? req.body?.kind);
+    if (!kind) return res.status(400).json({ success: false, error: "kind must be 'lesson' or 'practice'" });
+
     const { unit, error } = await loadOwnedUnit(req.params.id, req.user);
     if (error) return res.status(error.status).json({ success: false, error: error.message });
 
-    if (unit.video_url) await supabase.storage.from('course-materials').remove([unit.video_url]);
+    if (unit[kind.urlCol]) await supabase.storage.from('course-materials').remove([unit[kind.urlCol]]);
 
     const { data: updated, error: updateError } = await supabase
       .from('lesson_units')
-      .update({ video_url: null, duration_seconds: null, updated_at: new Date() })
+      .update({ [kind.urlCol]: null, [kind.durCol]: null, updated_at: new Date() })
       .eq('id', req.params.id)
       .select()
       .single();
@@ -720,7 +743,7 @@ router.get('/', optionalAuth, async (req, res) => {
 
     const { data: units, error } = await supabase
       .from('lesson_units')
-      .select('id, title, content, order_number, is_free, video_url, duration_seconds, updated_at')
+      .select('id, title, content, order_number, is_free, video_url, duration_seconds, practice_video_url, practice_duration_seconds, updated_at')
       .eq('lesson_id', lessonId)
       .order('order_number', { ascending: true });
     if (error) throw error;
@@ -748,6 +771,8 @@ router.get('/', optionalAuth, async (req, res) => {
             sections: unlocked && isHistoryCourse(chapter.courses) ? splitIntoSections(u.content) : null,
             video_url: unlocked && u.video_url ? publicUrl(u.video_url) : null,
             duration_seconds: unlocked ? u.duration_seconds : null,
+            practice_video_url: unlocked && u.practice_video_url ? publicUrl(u.practice_video_url) : null,
+            practice_duration_seconds: unlocked ? u.practice_duration_seconds : null,
             updated_at: u.updated_at
           };
         })
@@ -804,6 +829,8 @@ router.get('/:id', optionalAuth, async (req, res) => {
           is_free: unit.is_free,
           video_url: unit.video_url ? publicUrl(unit.video_url) : null,
           duration_seconds: unit.duration_seconds,
+          practice_video_url: unit.practice_video_url ? publicUrl(unit.practice_video_url) : null,
+          practice_duration_seconds: unit.practice_duration_seconds,
           updated_at: unit.updated_at,
           chapter: chapter ? { id: chapter.id, title: chapter.title } : null,
           course: course ? { id: course.id, title: course.title } : null
@@ -922,7 +949,17 @@ router.put('/:id', authenticateToken, hasRole('teacher', 'admin', 'super_admin')
       .single();
     if (error) throw error;
 
-    res.json({ success: true, message: 'Unit updated', data: { unit: updated } });
+    res.json({
+      success: true,
+      message: 'Unit updated',
+      data: {
+        unit: {
+          ...updated,
+          video_url: updated.video_url ? publicUrl(updated.video_url) : null,
+          practice_video_url: updated.practice_video_url ? publicUrl(updated.practice_video_url) : null
+        }
+      }
+    });
   } catch (error) {
     console.error('Unit update error:', error);
     res.status(500).json({ success: false, error: 'Failed to update unit: ' + error.message });
