@@ -11,7 +11,7 @@
 | # | Item | Status |
 |---|------|--------|
 | 1 | Open access (no sequential lock) | **Done in backend** (this change) |
-| 2 | Test-out / skip via a few hard questions | Partly existing (History); proposed for other subjects |
+| 2 | Skip a topic by passing its quiz | **Done in backend**; hard-question-only quiz and button still proposed |
 | 3 | EXP, streak, badges | **Already exist**; gold is new (proposed) |
 | 4 | Khmer stories library | Proposed (needs content from client) |
 
@@ -30,12 +30,19 @@ Client apps (Expo app in `RS-tutoring-`, web in `romduol-web`) already render `l
 
 Files changed: `src/routes/courses.routes.js`, `src/routes/lessons.routes.js`, `src/config/progression.js`, `.env.example`.
 
-## 2. Test-out (proposal)
-History courses already work this way: the unit quiz comes first, passing it skips the reading, and failing it opens the reading. With open access learners can also jump straight to any unit quiz in other subjects.
-Next step for other subjects: a "Skip this topic" button that serves 3-5 of the hardest questions.
-- Pass: mark the unit done (reuse the History logic in `utils/progress.js`), award reduced XP.
-- Fail: open the normal practice.
-- Open question: should skipped topics count toward chapter completion and badges? (Suggested: yes, with reduced XP.)
+## 2. Test-out (implemented, decision: skipped topics count)
+Decision: a skipped topic counts toward chapter completion and badges, with reduced XP.
+
+How it works, for every subject (it was History-only before):
+- A learner can open any unit's practice quiz directly (open access) and pass it.
+- Passing the quiz marks the unit done, and the path node shows `skipped: true`. Fail and nothing changes; the learner reads and practises as normal.
+- Chapter auto-complete (`utils/progress.js`) treats a passed unit quiz as the unit done, so the chapter, its chest and lesson XP still complete.
+- Badges and levels are driven by quiz passes, lesson completions and XP, so skipped topics count automatically.
+- Reduced XP: a skipped unit never earns the +5 `UNIT_COMPLETE` XP, only the quiz-pass XP (10-50). Reading then passing earns both.
+
+Not built yet: a dedicated "Skip this topic" button serving only 3-5 of the hardest questions. Today the skip is the topic's normal practice quiz. This is a client-app UI plus question-selection change.
+
+Files: `src/utils/progress.js`, `src/routes/lessons.routes.js`.
 
 ## 3. Incentives
 Already in the backend: XP (`utils/xp.js`, levels, quiz XP scaling), daily streaks (`utils/streak.js`), achievements/badges (`utils/achievements.js`), path chests, daily challenge bonuses, leaderboard.

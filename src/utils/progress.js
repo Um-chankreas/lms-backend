@@ -12,8 +12,10 @@ const { awardXp, XP_VALUES } = require('./xp');
  * a chapter with no units yet (those still use the manual POST
  * /api/lessons/:id/mark-complete).
  *
- * History courses are test-out (see GET /api/lessons/:id/path): a unit whose
- * quiz is passed counts as done even if its reading was skipped.
+ * Every course is test-out (see GET /api/lessons/:id/path): a unit whose
+ * quiz is passed counts as done even if its reading was skipped. A skipped
+ * unit earns no UNIT_COMPLETE XP (only the quiz-pass XP), so skipping pays
+ * less than reading then passing.
  *
  * Returns true if this call is what completed the chapter.
  */
@@ -59,12 +61,11 @@ async function checkChapterAutoComplete({ lessonId, studentId }) {
   }
 
   const { data: lessonRow } = await supabase
-    .from('lessons').select('course_id, courses(category)').eq('id', lessonId).maybeSingle();
-  const testOut = lessonRow?.courses?.category?.toLowerCase() === 'history';
+    .from('lessons').select('course_id').eq('id', lessonId).maybeSingle();
 
   const completedUnitIds = new Set((completions || []).map(c => c.unit_id));
   const unitDone = (unitId) => completedUnitIds.has(unitId)
-    || (testOut && passedQuizIds.has(canonicalQuizByUnit.get(unitId)));
+    || passedQuizIds.has(canonicalQuizByUnit.get(unitId));
   if (unitIds.some(id => !unitDone(id))) return false; // not every unit read (or tested out of) yet
 
   // The chapter's own end-of-lesson quiz (lesson_id set, no unit_id) — the

@@ -488,11 +488,14 @@ router.get('/:id/path', optionalAuth, async (req, res) => {
           return;
         }
 
+        // Test-out: passing the unit's quiz counts the unit as done even if
+        // its reading was skipped (mirrored in utils/progress.js).
+        const skippedByQuiz = !!quizId && passedQuizSet.has(quizId) && !completedUnitSet.has(unit.id);
         placeStep({
-          done: completedUnitSet.has(unit.id),
+          done: completedUnitSet.has(unit.id) || skippedByQuiz,
           scorable: false,
           score: null,
-          node: unitNode
+          node: skippedByQuiz ? { ...unitNode, skipped: true } : unitNode
         });
         if (quizId) {
           const score = bestScoreByQuiz.get(quizId) ?? null;
