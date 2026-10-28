@@ -2,7 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
-const { authenticateToken, isTeacher } = require('../middleware/auth');
+const { authenticateToken, hasRole } = require('../middleware/auth');
 const { hasCourseSubscription, subscribedCourseIds } = require('../utils/access');
 const { awardXp, XP_VALUES } = require('../utils/xp');
 const { evaluateAchievements } = require('../utils/achievements');
@@ -31,9 +31,16 @@ const { notifyLiveClassStarted } = require('../utils/notifyEvents');
 const JOIN_URL_BASE = (process.env.LIVE_CLASS_JOIN_URL_BASE || 'lms://live-class').replace(/\/$/, '');
 const joinUrlFor = (liveClassId) => `${JOIN_URL_BASE}/${liveClassId}`;
 
+// Admins and super admins can run any live class, so inside this file they act
+// as the teacher. `isTeacher` below lets all three roles through; ownership is
+// only enforced for real teachers.
+const isAdminRole = (role) => role === 'admin' || role === 'super_admin';
+const isTeacher = hasRole('teacher', 'admin', 'super_admin');
+const ownsClass = (liveClass, user) => isAdminRole(user.role) || liveClass?.teacher_id === user.userId;
+
 /**
  * Works out whether `user` is allowed to see / join `liveClass`:
- *  - the teacher who owns the class, or
+ *  - the teacher who owns the class (or any admin / super admin), or
  *  - a student with an active subscription FOR THIS COURSE, as long as the
  *    course still has live classes enabled by an admin (courses.live_enabled).
  * Returns { allowed, role, reason, code }.
@@ -47,8 +54,8 @@ async function resolveLiveClassAccess(liveClass, user) {
       : { allowed: false, reason: 'You do not own this live class' };
   }
 
-  if (user.role === 'admin') {
-    return { allowed: true, role: 'admin' };
+  if (isAdminRole(user.role)) {
+    return { allowed: true, role: 'teacher' };
   }
 
   if (user.role === 'student') {
@@ -106,7 +113,7 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
       .eq('id', course_id)
       .single();
 
-    if (course?.teacher_id !== req.user.userId) {
+    if (!isAdminRole(req.user.role) && course?.teacher_id !== req.user.userId) {
       return res.status(403).json({
         success: false,
         error: 'You can only create live classes for your own courses'
@@ -204,6 +211,8 @@ router.get('/my', authenticateToken, async (req, res) => {
 
     if (user.role === 'teacher') {
       query = query.eq('teacher_id', user.userId);
+    } else if (isAdminRole(user.role)) {
+      // Admins see every class, like the teacher view.
     } else {
       const { data: enrollments } = await supabase
         .from('course_enrollments')
@@ -256,7 +265,7 @@ router.get('/my', authenticateToken, async (req, res) => {
     const teacherById = Object.fromEntries((teachers || []).map(t => [t.id, t]));
 
     const result = (liveClasses || []).map(lc => {
-      const isTeacherView = user.role === 'teacher';
+      const isTeacherView = user.role === 'teacher' || isAdminRole(user.role);
       const gate = courseGate.get(lc.course_id) || { joinable: false, reason: 'payment_required' };
       const locked = !isTeacherView && !gate.joinable;
       return {
@@ -508,7 +517,8 @@ router.post('/:id/token', authenticateToken, async (req, res) => {
           id: uuidv4(),
           live_class_id: id,
           user_id: req.user.userId,
-          role: req.user.role,
+          // Admins run the class as its teacher, so the room shows them as one.
+          role: access.role === 'teacher' ? 'teacher' : req.user.role,
           joined_at: new Date()
         });
       await emitParticipantsChanged(id);
@@ -569,7 +579,7 @@ router.post('/:id/recorder-link', authenticateToken, isTeacher, async (req, res)
       .maybeSingle();
 
     if (!liveClass) return res.status(404).json({ success: false, error: 'Live class not found' });
-    if (liveClass.teacher_id !== req.user.userId) {
+    if (!ownsClass(liveClass, req.user)) {
       return res.status(403).json({ success: false, error: 'You do not own this live class' });
     }
 
@@ -653,7 +663,7 @@ router.put('/:id/recording', authenticateToken, isTeacher, async (req, res) => {
       .eq('id', id)
       .maybeSingle();
     if (!liveClass) return res.status(404).json({ success: false, error: 'Live class not found' });
-    if (liveClass.teacher_id !== req.user.userId) {
+    if (!ownsClass(liveClass, req.user)) {
       return res.status(403).json({ success: false, error: 'You do not own this live class' });
     }
 
@@ -696,7 +706,7 @@ router.put('/:id/start', authenticateToken, isTeacher, async (req, res) => {
       .eq('id', id)
       .single();
 
-    if (liveClass?.teacher_id !== req.user.userId) {
+    if (!ownsClass(liveClass, req.user)) {
       return res.status(403).json({
         success: false,
         error: 'Only the teacher can start this class'
@@ -757,7 +767,7 @@ router.put('/:id/end', authenticateToken, isTeacher, async (req, res) => {
       .eq('id', id)
       .single();
 
-    if (liveClass?.teacher_id !== req.user.userId) {
+    if (!ownsClass(liveClass, req.user)) {
       return res.status(403).json({
         success: false,
         error: 'Only the teacher can end this class'

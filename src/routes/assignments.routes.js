@@ -8,13 +8,16 @@ const { awardXp, XP_VALUES } = require('../utils/xp');
 const { evaluateAchievements } = require('../utils/achievements');
 const { v4: uuidv4 } = require('uuid');
 const { parseQuestionRows } = require('../utils/csvQuestions');
-const { notifyAssignmentPublished } = require('../utils/notifyEvents');
+const { notifyAssignmentPublished, notifyAssignmentReminder } = require('../utils/notifyEvents');
 
 // Teachers manage assignments for their own courses; admins and super admins
 // can manage assignments for any course.
 const STAFF_ROLES = ['teacher', 'admin', 'super_admin'];
 const isTeacher = hasRole(...STAFF_ROLES);
 const isStaff = (user) => STAFF_ROLES.includes(user?.role);
+// One manual reminder per assignment per this long, so a double tap (or an
+// impatient teacher) cannot spam the same students.
+const REMINDER_COOLDOWN_MS = 2 * 60 * 60 * 1000;
 const canManageCourse = (courseTeacherId, user) =>
   !!user && (['admin', 'super_admin'].includes(user.role) || courseTeacherId === user.userId);
 
@@ -579,18 +582,18 @@ router.get('/:id', authenticateToken, async (req, res) => {
       questions = revealAnswerKey
         ? (qs || [])
         : (qs || []).map(({ correct_answer, explanation, ...safe }) => safe);
+    }
 
-      if (isStaff(req.user)) {
-        const { data: enrollments } = await supabase
-          .from('course_enrollments')
-          .select('student_id, users(id, name, email, avatar_url)')
-          .eq('course_id', assignment.course_id);
-        const subByStudent = Object.fromEntries(submissions.map(s => [s.student_id, s]));
-        roster = (enrollments || []).map(e => ({
-          student: e.users,
-          submission: subByStudent[e.student_id] || null,
-        }));
-      }
+    if (isStaff(req.user)) {
+      const { data: enrollments } = await supabase
+        .from('course_enrollments')
+        .select('student_id, users(id, name, email, avatar_url)')
+        .eq('course_id', assignment.course_id);
+      const subByStudent = Object.fromEntries(submissions.map(s => [s.student_id, s]));
+      roster = (enrollments || []).map(e => ({
+        student: e.users,
+        submission: subByStudent[e.student_id] || null,
+      }));
     }
 
     res.json({
@@ -815,6 +818,59 @@ router.post('/:id/submit', authenticateToken, upload.single('file'), async (req,
       success: false,
       error: 'Failed to submit assignment: ' + error.message
     });
+  }
+});
+
+/**
+ * POST /api/assignments/:id/remind
+ * Push a reminder to every enrolled student who has not submitted yet
+ * (teacher of the course, admin or super admin).
+ */
+router.post('/:id/remind', authenticateToken, isTeacher, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data: assignment } = await supabase
+      .from('assignments')
+      .select('id, status, courses(teacher_id)')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (!assignment) {
+      return res.status(404).json({ success: false, error: 'Assignment not found' });
+    }
+    if (!canManageCourse(assignment.courses?.teacher_id, req.user)) {
+      return res.status(403).json({ success: false, error: 'You can only remind students in your courses' });
+    }
+    if (assignment.status !== 'published') {
+      return res.status(409).json({ success: false, error: 'Publish the assignment before reminding students' });
+    }
+
+    const { data: last } = await supabase
+      .from('notifications')
+      .select('created_at')
+      .eq('type', 'assignment_reminder')
+      .contains('data', { assignment_id: id })
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const waitMs = last ? REMINDER_COOLDOWN_MS - (Date.now() - new Date(last.created_at).getTime()) : 0;
+    if (waitMs > 0) {
+      return res.status(429).json({
+        success: false,
+        error: `A reminder was already sent recently. Try again in ${Math.ceil(waitMs / 60000)} minutes.`,
+        retry_after_minutes: Math.ceil(waitMs / 60000),
+      });
+    }
+
+    const { sent, pending } = await notifyAssignmentReminder(id);
+    res.json({
+      success: true,
+      message: pending === 0 ? 'Every student has already submitted' : `Reminder sent to ${sent} student${sent === 1 ? '' : 's'}`,
+      data: { sent, pending },
+    });
+  } catch (error) {
+    console.error('Assignment remind error:', error);
+    res.status(500).json({ success: false, error: 'Failed to send reminder: ' + error.message });
   }
 });
 

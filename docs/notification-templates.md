@@ -18,6 +18,15 @@ Sent to: every student enrolled in the course, when a teacher publishes an assig
   - `· Due …` is left out when there is no due date.
   - `courseTitle` falls back to `Your course`.
 
+### 1b. Assignment reminder — `assignment_reminder`
+Source: `src/utils/notificationCopy.js`, sent by `notifyAssignmentReminder` in `src/utils/notifyEvents.js`
+Sent to: students enrolled in the course who have not submitted, when a teacher (or admin) taps "Remind students" on the assignment. Limited to one send per assignment every 2 hours.
+
+- **Title:** `⏰ Reminder: {assignmentTitle}` (past due: `⏰ Still open: {assignmentTitle}`)
+- **Body:** `{courseTitle} · Due {dueDate} · You have not submitted yet. Finish it for {xp}+ XP`
+  - Past due: `{courseTitle} · Was due {overdueDate} · Submit it now so you do not fall behind`
+  - No due date: the `Due …` part is left out.
+
 ### 2. Live class started — `live_class_started`
 Source: `src/utils/notifyEvents.js` (`notifyLiveClassStarted`)
 Sent to: students with an active subscription for the course (skipped if live classes are disabled for the course).

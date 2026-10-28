@@ -10,10 +10,12 @@ const { v4: uuidv4 } = require('uuid');
 const { awardXp, XP_VALUES, xpForQuizScore, levelInfo } = require('../utils/xp');
 const { recordActivity } = require('../utils/streak');
 const { guestCanAccessStep, sendGuestWall } = require('../utils/guest');
-const { evaluateAchievements } = require('../utils/achievements');
+const { evaluateAchievements, grantBadge } = require('../utils/achievements');
+const { awardGold, getGold, GOLD_TEST_OUT } = require('../utils/gold');
 const { hasCourseAccess, ensureEnrolled } = require('../utils/access');
 const { checkChapterAutoComplete } = require('../utils/progress');
 const { normalizeQuestionType, parseQuestionRows } = require('../utils/csvQuestions');
+const { pickRandom, optionsFor, answersMatch } = require('../utils/quizGrading');
 
 // Teachers manage quizzes for their own courses; admins and super admins can
 // manage quizzes for any course.
@@ -29,16 +31,6 @@ const csvUpload = multer({
   limits: { fileSize: 2 * 1024 * 1024 }, // 2MB
 });
 
-// Picks up to n random items from arr without repeats
-function pickRandom(arr, n) {
-  const pool = [...arr];
-  const picked = [];
-  while (pool.length > 0 && picked.length < n) {
-    const idx = Math.floor(Math.random() * pool.length);
-    picked.push(pool.splice(idx, 1)[0]);
-  }
-  return picked;
-}
 
 // Pasted math symbols → the LaTeX command word a teacher would actually type
 // / that already sits in the stored $\sqrt{…}$ source, so a search using the
@@ -83,15 +75,6 @@ function toSearchPattern(term) {
 // this many per attempt. Teachers still see the full bank when building it.
 const QUIZ_TAKE_SIZE = 5;
 
-// An explanation that names option letters ("B, A, C each alter the split
-// ratio") only reads correctly against the order it was written for, so those
-// questions keep their authored option order. Everything else gets shuffled.
-const NAMES_OPTION_LETTERS = /(^|[^A-Za-z])[A-D]([^A-Za-z]|$)/;
-const optionsFor = (question, options) =>
-  Array.isArray(options) && options.length > 1
-    && !(question.explanation && NAMES_OPTION_LETTERS.test(question.explanation))
-    ? pickRandom(options, options.length)
-    : options;
 
 // Shared gate for the two student-facing "play" endpoints (per-question
 // /check and final /submit): the quiz must be published and the caller must
@@ -261,32 +244,6 @@ router.get('/questions/import/template', authenticateToken, isTeacher, (req, res
 // ── Grading helpers (LETTER_INDEX / pickCol / normalizeTier / parseQuestionRows
 // live in utils/csvQuestions.js, shared with assignments.routes.js) ────────
 
-// Khmer digits → Arabic, then strip spaces / thousands separators / a leading +.
-const KHMER_DIGITS = { '០': '0', '១': '1', '២': '2', '៣': '3', '៤': '4', '៥': '5', '៦': '6', '៧': '7', '៨': '8', '៩': '9' };
-const normNumber = (v) => String(v == null ? '' : v)
-  .replace(/[០-៩]/g, d => KHMER_DIGITS[d])
-  .replace(/[\s,]/g, '')
-  .replace(/^\+/, '')
-  .trim();
-
-/**
- * Whether a student's answer counts as correct. QCM is an exact match;
- * number_input tolerates Khmer digits, spaces, thousands separators and
- * equivalent numeric forms ("1955" == "1,955" == "1955.0").
- */
-const answersMatch = (studentAnswer, correctAnswer, questionType) => {
-  if (studentAnswer == null) return false;
-  if (questionType === 'number_input') {
-    const a = normNumber(studentAnswer);
-    const b = normNumber(correctAnswer);
-    if (!a) return false;
-    if (a === b) return true;
-    const na = Number(a);
-    const nb = Number(b);
-    return Number.isFinite(na) && Number.isFinite(nb) && na === nb;
-  }
-  return studentAnswer === correctAnswer;
-};
 
 /**
  * POST /api/quizzes/:id/questions/import
@@ -1530,6 +1487,25 @@ router.post('/:id/submit', optionalAuth, async (req, res) => {
     if (xpAwarded > 0) {
       await awardXp(req.user.userId, xpAwarded, 'quiz_pass', quiz.course_id || null);
     }
+
+    // Test-out: first pass of a unit's quiz without having read the unit.
+    // Bonus gold + the "Test-Out Pro" badge (the XP side is intentionally
+    // reduced — no UNIT_COMPLETE XP for a unit that was skipped).
+    let skippedUnit = false;
+    if (passed && !passedBefore && quiz.unit_id) {
+      const { data: read } = await supabase
+        .from('unit_completions')
+        .select('id')
+        .eq('unit_id', quiz.unit_id)
+        .eq('student_id', req.user.userId)
+        .limit(1)
+        .maybeSingle();
+      if (!read) {
+        skippedUnit = true;
+        await awardGold(req.user.userId, GOLD_TEST_OUT, 'test_out', quiz.course_id || null);
+        await grantBadge(req.user.userId, 'first_skip');
+      }
+    }
     await evaluateAchievements(req.user.userId);
     // Classmates hear about it (bell) and anyone just overtaken gets a nudge. Fire-and-forget.
     notifyFriendsQuizDone({
@@ -1576,6 +1552,8 @@ router.post('/:id/submit', optionalAuth, async (req, res) => {
         },
         review,
         xp_awarded: xpAwarded,
+        skipped_unit: skippedUnit,
+        gold: await getGold(req.user.userId),
         chapter_completed: chapterCompleted,
         streak,
         level: levelInfo(userXpRow?.xp || 0),

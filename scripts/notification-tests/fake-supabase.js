@@ -8,13 +8,14 @@ const cmp = (a, b) => { const x = toKey(a), y = toKey(b); return x < y ? -1 : x 
 
 class Q {
   constructor(table) { this.table = table; this.filters = []; this.op = 'select'; this.payload = null; this.orders = []; this.lim = null; this.rng = null; this.one = null; this.opts = {}; }
-  select() { return this; }
+  select() { this.selected = true; return this; }
   insert(rows) { this.op = 'insert'; this.payload = [].concat(rows); return this; }
   update(f) { this.op = 'update'; this.payload = f; return this; }
   upsert(row, opts) { this.op = 'upsert'; this.payload = [].concat(row); this.opts = opts || {}; return this; }
   eq(k, v) { this.filters.push(r => r[k] === v); return this; }
   neq(k, v) { this.filters.push(r => r[k] !== v); return this; }
   in(k, vs) { this.filters.push(r => vs.includes(r[k])); return this; }
+  not(k, op, v) { if (op === 'is') this.filters.push(r => (v === null ? r[k] != null : r[k] !== v)); return this; }
   is(k, v) { this.filters.push(r => (v === null ? r[k] == null : r[k] === v)); return this; }
   gte(k, v) { this.filters.push(r => r[k] != null && cmp(r[k], v) >= 0); return this; }
   gt(k, v) { this.filters.push(r => r[k] != null && cmp(r[k], v) > 0); return this; }
@@ -33,7 +34,7 @@ class Q {
       return { data: null, error: null };
     }
     let out = rows.filter(r => this.filters.every(f => f(r)));
-    if (this.op === 'update') { out.forEach(r => Object.assign(r, this.payload)); return { data: null, error: null }; }
+    if (this.op === 'update') { out.forEach(r => Object.assign(r, this.payload)); return { data: this.selected ? out.map(r => ({ ...r })) : null, error: null }; }
     this.orders.forEach(([k, asc]) => out.sort((a, b) => (asc ? 1 : -1) * cmp(a[k], b[k])));
     if (this.rng) out = out.slice(this.rng[0], this.rng[1] + 1);
     if (this.lim != null) out = out.slice(0, this.lim);

@@ -64,8 +64,8 @@ async function resolveAccess(liveClass, user) {
       ? { allowed: true, role: 'teacher' }
       : { allowed: false };
   }
-  if (user.role === 'admin') {
-    return { allowed: true, role: 'admin' };
+  if (user.role === 'admin' || user.role === 'super_admin') {
+    return { allowed: true, role: 'teacher' };
   }
   if (user.role === 'student') {
     const { data: course } = await supabase

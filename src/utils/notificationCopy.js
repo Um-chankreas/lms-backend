@@ -36,6 +36,31 @@ const T = {
     ],
   },
 
+  // Sent by hand: the teacher taps "Remind students" on an assignment, and only
+  // students who have not submitted get it. Variants run most to least specific.
+  assignment_reminder: {
+    kind: 'class',
+    pick: 'first',
+    defaults: { courseTitle: { en: 'Your course', km: 'វគ្គសិក្សារបស់អ្នក' } },
+    variants: [
+      {
+        id: 'overdue',
+        en: { title: '⏰ Still open: {assignmentTitle}', body: '{courseTitle} · Was due {overdueDate} · Submit it now so you do not fall behind' },
+        km: { title: '⏰ នៅមិនទាន់ធ្វើ៖ {assignmentTitle}', body: '{courseTitle} · ផុតកំណត់ {overdueDate} · សូមធ្វើឥឡូវនេះ កុំឲ្យយឺតជាងនេះ' },
+      },
+      {
+        id: 'due',
+        en: { title: '⏰ Reminder: {assignmentTitle}', body: '{courseTitle} · Due {dueDate} · You have not submitted yet. Finish it for {xp}+ XP' },
+        km: { title: '⏰ រំលឹក៖ {assignmentTitle}', body: '{courseTitle} · ផុតកំណត់ {dueDate} · អ្នកមិនទាន់បានដាក់ជូនទេ។ ធ្វើឲ្យចប់ ទទួលបាន {xp}+ XP' },
+      },
+      {
+        id: 'nodue',
+        en: { title: '⏰ Reminder: {assignmentTitle}', body: '{courseTitle} · You have not submitted yet. Finish it for {xp}+ XP' },
+        km: { title: '⏰ រំលឹក៖ {assignmentTitle}', body: '{courseTitle} · អ្នកមិនទាន់បានដាក់ជូនទេ។ ធ្វើឲ្យចប់ ទទួលបាន {xp}+ XP' },
+      },
+    ],
+  },
+
   live_class_started: {
     kind: 'class',
     pick: 'first',

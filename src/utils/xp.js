@@ -1,5 +1,6 @@
 const { v4: uuidv4 } = require('uuid');
 const supabase = require('../config/supabase');
+const { awardGold, GOLD_BY_REASON } = require('./gold');
 
 // Base XP awards. Quiz and assignment awards are computed (see helpers below).
 const XP_VALUES = {
@@ -126,6 +127,9 @@ async function awardXp(studentId, amount, reason = 'other', courseId = null) {
     .from('users')
     .update({ xp: currentXp + amount })
     .eq('id', studentId);
+
+  // Gold rides along with the XP event that earned it (see utils/gold.js).
+  await awardGold(studentId, GOLD_BY_REASON[reason] || 0, reason, courseId);
 }
 
 /**

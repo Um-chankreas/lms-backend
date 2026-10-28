@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
+const { getGold } = require('../utils/gold');
 const { authenticateToken, isStudent } = require('../middleware/auth');
 const { getStreak } = require('../utils/achievements');
 const { levelInfo, getXpBreakdown } = require('../utils/xp');
@@ -138,6 +139,7 @@ router.get('/', authenticateToken, isStudent, async (req, res) => {
         },
         summary: {
           xp: user.xp || 0,
+          gold: await getGold(studentId),
           level: levelInfo(user.xp || 0),
           day_streak: streak,
           complete_percentage: completePercentage

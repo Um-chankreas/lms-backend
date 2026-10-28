@@ -102,6 +102,56 @@ async function notifyAssignmentPublished(assignmentId) {
 }
 
 /**
+ * A teacher nudges the students who still have not handed in an assignment.
+ * Returns { sent, pending }: `pending` is how many enrolled students had no
+ * submission, `sent` how many of them actually got a notification (inactive
+ * accounts are skipped). Unlike the publish notice this reports back, because
+ * the teacher is waiting on the answer.
+ */
+async function notifyAssignmentReminder(assignmentId) {
+  const { data: assignment } = await supabase
+    .from('assignments')
+    .select('id, title, due_date, type, course_id, courses(title)')
+    .eq('id', assignmentId)
+    .maybeSingle();
+  if (!assignment) return { sent: 0, pending: 0 };
+
+  const [{ data: enrollments }, { data: subs }] = await Promise.all([
+    supabase.from('course_enrollments').select('student_id').eq('course_id', assignment.course_id),
+    supabase.from('assignment_submissions').select('student_id').eq('assignment_id', assignmentId),
+  ]);
+  const submitted = new Set((subs || []).map(s => s.student_id));
+  const pendingIds = [...new Set((enrollments || []).map(e => e.student_id))]
+    .filter(id => id && !submitted.has(id));
+
+  const overdue = !!assignment.due_date && new Date(assignment.due_date) < new Date();
+  const sent = await sendClass(
+    'assignment_reminder',
+    'assignment_reminder',
+    pendingIds,
+    (lang) => {
+      const day = assignment.due_date ? formatDay(assignment.due_date, lang) : null;
+      return {
+        assignmentTitle: assignment.title,
+        courseTitle: assignment.courses?.title || null,
+        dueDate: overdue ? null : day,
+        overdueDate: overdue ? day : null,
+        xp: XP_VALUES.ASSIGNMENT_ONTIME,
+      };
+    },
+    {
+      assignment_id: assignment.id,
+      assignment_title: assignment.title,
+      course_id: assignment.course_id,
+      course_title: assignment.courses?.title || null,
+      assignment_type: assignment.type,
+      due_date: assignment.due_date,
+    },
+  );
+  return { sent, pending: pendingIds.length };
+}
+
+/**
  * The teacher started a live class: tell every student who can actually join it
  * (see liveClassRecipients). Skipped when live classes are off for the course —
  * a "live now" nobody can open is just noise.
@@ -194,6 +244,7 @@ async function notifyClassScheduleReminder(schedule) {
 
 module.exports = {
   notifyAssignmentPublished,
+  notifyAssignmentReminder,
   notifyLiveClassStarted,
   notifyClassScheduleReminder,
   liveClassRecipients,
