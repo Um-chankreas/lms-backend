@@ -558,6 +558,131 @@ router.get('/:id/roster', authenticateToken, async (req, res) => {
 });
 
 /**
+ * Staff managing who is in a class. Owning teacher, or admin/super_admin.
+ * Returns the course row, or sends the error response and returns null.
+ */
+async function loadManagedCourse(req, res) {
+  const { data: course } = await supabase
+    .from('courses').select('id, teacher_id').eq('id', req.params.id).maybeSingle();
+  if (!course) {
+    res.status(404).json({ success: false, error: 'Course not found' });
+    return null;
+  }
+  const isOwnerTeacher = req.user.role === 'teacher' && course.teacher_id === req.user.userId;
+  const isAdminRole = req.user.role === 'admin' || req.user.role === 'super_admin';
+  if (!isOwnerTeacher && !isAdminRole) {
+    res.status(403).json({ success: false, error: 'You can only manage your own class' });
+    return null;
+  }
+  return course;
+}
+
+/**
+ * GET /api/courses/:id/student-candidates?q=
+ * Active students (matched by name / email / phone) who are not in this class
+ * yet — what the "Add students" picker searches.
+ */
+router.get('/:id/student-candidates', authenticateToken, async (req, res) => {
+  try {
+    const course = await loadManagedCourse(req, res);
+    if (!course) return res;
+
+    const q = String(req.query.q || '').replace(/[^\p{L}\p{N} @._+-]/gu, '').trim();
+    if (q.length < 2) return res.json({ success: true, data: { students: [] } });
+
+    const { data: enrolled } = await supabase
+      .from('course_enrollments').select('student_id').eq('course_id', course.id);
+    const inClass = new Set((enrolled || []).map(e => e.student_id));
+
+    const { data: found, error } = await supabase
+      .from('users')
+      .select('id, name, email, phone, avatar_url')
+      .eq('role', 'student')
+      .eq('is_active', true)
+      .or(`name.ilike.%${q}%,email.ilike.%${q}%,phone.ilike.%${q}%`)
+      .order('name', { ascending: true })
+      .limit(40);
+    if (error) throw error;
+
+    res.json({
+      success: true,
+      data: { students: (found || []).filter(u => !inClass.has(u.id)).slice(0, 20) }
+    });
+  } catch (error) {
+    console.error('Student candidates error:', error);
+    res.status(500).json({ success: false, error: 'Failed to search students: ' + error.message });
+  }
+});
+
+/**
+ * POST /api/courses/:id/students   body: { student_ids: [uuid, ...] }
+ * Add students to the class (they then get its live-class notifications).
+ * Students already in it are skipped.
+ */
+router.post('/:id/students', authenticateToken, async (req, res) => {
+  try {
+    const course = await loadManagedCourse(req, res);
+    if (!course) return res;
+
+    const wanted = [...new Set([].concat(req.body.student_ids || req.body.student_id || []).filter(Boolean))];
+    if (wanted.length === 0) {
+      return res.status(400).json({ success: false, error: '`student_ids` is required' });
+    }
+    if (wanted.length > 200) {
+      return res.status(400).json({ success: false, error: 'Add at most 200 students at a time' });
+    }
+
+    const [{ data: students }, { data: existing }] = await Promise.all([
+      supabase.from('users').select('id').eq('role', 'student').in('id', wanted),
+      supabase.from('course_enrollments').select('student_id').eq('course_id', course.id).in('student_id', wanted)
+    ]);
+    const already = new Set((existing || []).map(e => e.student_id));
+    const toAdd = (students || []).map(u => u.id).filter(id => !already.has(id));
+
+    if (toAdd.length) {
+      const now = new Date();
+      const { error } = await supabase.from('course_enrollments').insert(
+        toAdd.map(student_id => ({ id: uuidv4(), course_id: course.id, student_id, enrolled_at: now }))
+      );
+      if (error) throw error;
+    }
+
+    res.status(201).json({
+      success: true,
+      message: `${toAdd.length} student${toAdd.length === 1 ? '' : 's'} added`,
+      data: { added: toAdd.length, already_in_class: already.size }
+    });
+  } catch (error) {
+    console.error('Add students error:', error);
+    res.status(500).json({ success: false, error: 'Failed to add students: ' + error.message });
+  }
+});
+
+/**
+ * DELETE /api/courses/:id/students/:studentId
+ * Take a student out of the class. Their progress is kept; they stop getting
+ * its live-class notifications.
+ */
+router.delete('/:id/students/:studentId', authenticateToken, async (req, res) => {
+  try {
+    const course = await loadManagedCourse(req, res);
+    if (!course) return res;
+
+    const { error } = await supabase
+      .from('course_enrollments')
+      .delete()
+      .eq('course_id', course.id)
+      .eq('student_id', req.params.studentId);
+    if (error) throw error;
+
+    res.json({ success: true, message: 'Student removed from the class' });
+  } catch (error) {
+    console.error('Remove student error:', error);
+    res.status(500).json({ success: false, error: 'Failed to remove student: ' + error.message });
+  }
+});
+
+/**
  * GET /api/courses/:id/enroll
  * Enroll student in course
  */
