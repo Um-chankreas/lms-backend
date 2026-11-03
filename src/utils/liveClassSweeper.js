@@ -1,7 +1,7 @@
 const supabase = require('../config/supabase');
 const { endLiveClassRecord } = require('./liveClassEnd');
 const {
-  connectedCount, emitClassStatus, emitStageChanged, emitParticipantsChanged
+  connectedCount, staffConnected, emitClassStatus, emitStageChanged, emitParticipantsChanged
 } = require('../realtime/liveClassSocket');
 
 // A class can stay "active" in the database after it really ended: the
@@ -11,9 +11,11 @@ const {
 // approach as classScheduler.js.
 const POLL_MS = 60 * 1000;
 const EMPTY_GRACE_MS = 3 * 60 * 1000;          // nobody connected for this long -> abandoned
+const TEACHER_GONE_MS = 5 * 60 * 1000;         // teacher / admin gone this long -> end, students are not left waiting
 const MAX_LIVE_MS = 12 * 60 * 60 * 1000;       // no class legitimately runs longer than this
 
 const emptySince = new Map();                   // live_class_id -> ms first seen empty
+const staffGoneSince = new Map();               // live_class_id -> ms the teacher was first seen gone
 
 /** Nobody is in the room and no participant row is still open. */
 async function isRoomEmpty(liveClassId) {
@@ -32,6 +34,7 @@ async function isRoomEmpty(liveClassId) {
 async function closeClass(liveClassId) {
   const ended = await endLiveClassRecord(liveClassId);
   emptySince.delete(liveClassId);
+  staffGoneSince.delete(liveClassId);
   emitClassStatus(liveClassId, 'completed');
   await emitStageChanged(liveClassId);
   await emitParticipantsChanged(liveClassId);
@@ -46,6 +49,7 @@ async function sweepStaleClasses() {
   const now = Date.now();
   const ids = new Set((active || []).map(c => c.id));
   for (const id of emptySince.keys()) if (!ids.has(id)) emptySince.delete(id);
+  for (const id of staffGoneSince.keys()) if (!ids.has(id)) staffGoneSince.delete(id);
 
   for (const lc of active || []) {
     const age = lc.started_at ? now - new Date(lc.started_at).getTime() : 0;
@@ -53,6 +57,16 @@ async function sweepStaleClasses() {
       await closeClass(lc.id);
       continue;
     }
+    // The teacher's tab died but students are still connected: they would sit
+    // on "waiting for the teacher" forever, so end the class after a grace.
+    const staff = await staffConnected(lc.id);
+    if (staff === false) {
+      if (!staffGoneSince.has(lc.id)) staffGoneSince.set(lc.id, now);
+      if (now - staffGoneSince.get(lc.id) >= TEACHER_GONE_MS) { await closeClass(lc.id); continue; }
+    } else {
+      staffGoneSince.delete(lc.id);
+    }
+
     if (!(await isRoomEmpty(lc.id))) { emptySince.delete(lc.id); continue; }
     if (!emptySince.has(lc.id)) emptySince.set(lc.id, now);
     if (now - emptySince.get(lc.id) >= EMPTY_GRACE_MS) await closeClass(lc.id);

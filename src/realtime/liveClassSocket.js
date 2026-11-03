@@ -308,6 +308,13 @@ async function connectedCount(liveClassId) {
   return new Set(sockets.map(s => s.data?.user?.userId).filter(Boolean)).size;
 }
 
+/** Is a teacher / admin socket connected to the class room? (null if realtime is off) */
+async function staffConnected(liveClassId) {
+  if (!io) return null;
+  const sockets = await io.in(roomAll(liveClassId)).fetchSockets();
+  return sockets.some(s => s.data?.user && s.data.user.role !== 'student');
+}
+
 async function emitStageChanged(liveClassId) {
   if (!io) return;
   io.to(roomAll(liveClassId)).emit('stage:changed', {
@@ -364,5 +371,6 @@ module.exports = {
   emitHandUpdate,
   emitForceMute,
   emitClassStatus,
-  connectedCount
+  connectedCount,
+  staffConnected
 };
