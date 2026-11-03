@@ -17,13 +17,16 @@ const {
   emitHandLowered,
   emitHandUpdate,
   emitClassStatus,
-  emitForceMute
+  emitForceMute,
+  connectedCount
 } = require('../realtime/liveClassSocket');
 const { v4: uuidv4 } = require('uuid');
 const { openSession, closeUserSessions } = require('../utils/agoraUsage');
 const jwt = require('jsonwebtoken');
 const { JWT_SECRET, JWT_ALGORITHM } = require('../utils/jwt');
 const { endLiveClassRecord } = require('../utils/liveClassEnd');
+const { isAdminRole, canRunLiveClass } = require('../utils/liveClassAccess');
+const { isRoomEmpty, closeClass } = require('../utils/liveClassSweeper');
 const { notifyLiveClassStarted } = require('../utils/notifyEvents');
 
 // Mobile deep link the app opens to jump straight into a live class screen.
@@ -33,10 +36,8 @@ const joinUrlFor = (liveClassId) => `${JOIN_URL_BASE}/${liveClassId}`;
 
 // Admins and super admins can run any live class, so inside this file they act
 // as the teacher. `isTeacher` below lets all three roles through; ownership is
-// only enforced for real teachers.
-const isAdminRole = (role) => role === 'admin' || role === 'super_admin';
+// only enforced for real teachers (see utils/liveClassAccess.js).
 const isTeacher = hasRole('teacher', 'admin', 'super_admin');
-const ownsClass = (liveClass, user) => isAdminRole(user.role) || liveClass?.teacher_id === user.userId;
 
 /**
  * Works out whether `user` is allowed to see / join `liveClass`:
@@ -48,14 +49,10 @@ const ownsClass = (liveClass, user) => isAdminRole(user.role) || liveClass?.teac
 async function resolveLiveClassAccess(liveClass, user) {
   if (!user) return { allowed: false, reason: 'Authentication required' };
 
-  if (user.role === 'teacher') {
-    return liveClass.teacher_id === user.userId
+  if (user.role === 'teacher' || isAdminRole(user.role)) {
+    return await canRunLiveClass(liveClass, user)
       ? { allowed: true, role: 'teacher' }
       : { allowed: false, reason: 'You do not own this live class' };
-  }
-
-  if (isAdminRole(user.role)) {
-    return { allowed: true, role: 'teacher' };
   }
 
   if (user.role === 'student') {
@@ -131,7 +128,12 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
       .order('started_at', { ascending: false })
       .limit(1)
       .maybeSingle();
-    if (running) {
+    // ...unless that "running" session is a leftover nobody is in (the
+    // teacher's tab died without ending it). Close it so a fresh class can start.
+    const ranFor = running?.started_at ? Date.now() - new Date(running.started_at).getTime() : Infinity;
+    const stale = running && ranFor > 2 * 60 * 1000 && await isRoomEmpty(running.id);
+    if (stale) await closeClass(running.id);
+    if (running && !stale) {
       return res.json({
         success: true,
         reused: true,
@@ -191,6 +193,53 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
  * Optional ?status=active,scheduled filter (comma separated).
  * This is what the mobile app renders as the "Live classes" list.
  */
+/**
+ * GET /api/live-classes/active
+ * Every class currently marked live, for admins / super admins — so one that
+ * was never closed properly can be found and ended.
+ */
+router.get('/active', authenticateToken, async (req, res) => {
+  try {
+    if (!isAdminRole(req.user.role)) {
+      return res.status(403).json({ success: false, error: 'This action requires admin privileges' });
+    }
+    const { data: rows, error } = await supabase
+      .from('live_classes')
+      .select('id, title, course_id, teacher_id, started_at, courses(title)')
+      .eq('status', 'active')
+      .order('started_at', { ascending: false });
+    if (error) throw error;
+
+    const teacherIds = [...new Set((rows || []).map(r => r.teacher_id).filter(Boolean))];
+    const { data: teachers } = teacherIds.length
+      ? await supabase.from('users').select('id, name').in('id', teacherIds)
+      : { data: [] };
+    const tname = new Map((teachers || []).map(t => [t.id, t.name]));
+
+    const classes = await Promise.all((rows || []).map(async (r) => {
+      const connected = await connectedCount(r.id);
+      const { count } = await supabase
+        .from('live_class_participants')
+        .select('id', { count: 'exact', head: true })
+        .eq('live_class_id', r.id)
+        .is('left_at', null);
+      return {
+        id: r.id,
+        title: r.title,
+        course: r.courses?.title || null,
+        teacher: tname.get(r.teacher_id) || null,
+        started_at: r.started_at,
+        connected: connected ?? 0,
+        open_participants: count || 0,
+      };
+    }));
+    res.json({ success: true, data: { classes } });
+  } catch (error) {
+    console.error('Active live classes error:', error);
+    res.status(500).json({ success: false, error: 'Failed to load live classes' });
+  }
+});
+
 router.get('/my', authenticateToken, async (req, res) => {
   try {
     const user = req.user;
@@ -210,7 +259,13 @@ router.get('/my', authenticateToken, async (req, res) => {
     const courseGate = new Map();
 
     if (user.role === 'teacher') {
-      query = query.eq('teacher_id', user.userId);
+      // Classes they started, plus any session on one of their courses that
+      // someone else (another teacher, an admin) started.
+      const { data: ownCourses } = await supabase.from('courses').select('id').eq('teacher_id', user.userId);
+      const ownCourseIds = (ownCourses || []).map(c => c.id);
+      query = ownCourseIds.length
+        ? query.or(`teacher_id.eq.${user.userId},course_id.in.(${ownCourseIds.join(',')})`)
+        : query.eq('teacher_id', user.userId);
     } else if (isAdminRole(user.role)) {
       // Admins see every class, like the teacher view.
     } else {
@@ -574,12 +629,12 @@ router.post('/:id/recorder-link', authenticateToken, isTeacher, async (req, res)
     const { id } = req.params;
     const { data: liveClass } = await supabase
       .from('live_classes')
-      .select('id, teacher_id')
+      .select('id, teacher_id, course_id')
       .eq('id', id)
       .maybeSingle();
 
     if (!liveClass) return res.status(404).json({ success: false, error: 'Live class not found' });
-    if (!ownsClass(liveClass, req.user)) {
+    if (!(await canRunLiveClass(liveClass, req.user))) {
       return res.status(403).json({ success: false, error: 'You do not own this live class' });
     }
 
@@ -663,7 +718,7 @@ router.put('/:id/recording', authenticateToken, isTeacher, async (req, res) => {
       .eq('id', id)
       .maybeSingle();
     if (!liveClass) return res.status(404).json({ success: false, error: 'Live class not found' });
-    if (!ownsClass(liveClass, req.user)) {
+    if (!(await canRunLiveClass(liveClass, req.user))) {
       return res.status(403).json({ success: false, error: 'You do not own this live class' });
     }
 
@@ -702,11 +757,11 @@ router.put('/:id/start', authenticateToken, isTeacher, async (req, res) => {
 
     const { data: liveClass } = await supabase
       .from('live_classes')
-      .select('teacher_id, status, agora_account')
+      .select('teacher_id, course_id, status, agora_account')
       .eq('id', id)
       .single();
 
-    if (!ownsClass(liveClass, req.user)) {
+    if (!(await canRunLiveClass(liveClass, req.user))) {
       return res.status(403).json({
         success: false,
         error: 'Only the teacher can start this class'
@@ -763,11 +818,11 @@ router.put('/:id/end', authenticateToken, isTeacher, async (req, res) => {
 
     const { data: liveClass } = await supabase
       .from('live_classes')
-      .select('teacher_id')
+      .select('teacher_id, course_id')
       .eq('id', id)
       .single();
 
-    if (!ownsClass(liveClass, req.user)) {
+    if (!(await canRunLiveClass(liveClass, req.user))) {
       return res.status(403).json({
         success: false,
         error: 'Only the teacher can end this class'

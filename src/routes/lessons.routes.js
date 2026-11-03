@@ -419,6 +419,15 @@ router.get('/:id/path', optionalAuth, async (req, res) => {
       });
     }
 
+    // Units a passed skip test jumped over: they count as done but were never read, so the
+    // path flags them for the student to come back to.
+    const skipTestUnitSet = new Set();
+    if (studentId && !isGuest) {
+      const { data: skipAttempts } = await supabase.from('skip_test_attempts')
+        .select('unit_ids').eq('student_id', studentId).eq('lesson_id', id).eq('passed', true);
+      (skipAttempts || []).forEach(a => (a.unit_ids || []).forEach(u => skipTestUnitSet.add(u)));
+    }
+
     const nodes = [];
     let previousStepDone = true; // this lesson's own first step, gated separately by lessonReachable
     let currentAssigned = false;
@@ -479,7 +488,7 @@ router.get('/:id/path', optionalAuth, async (req, res) => {
             done: passed,
             scorable: false,
             score: null,
-            node: { ...unitNode, skipped: passed && !read }
+            node: { ...unitNode, skipped: (passed && !read) || skipTestUnitSet.has(unit.id) }
           });
           // Failed at least once: open the lesson for reading (not "current" —
           // the quiz still is).
@@ -490,7 +499,7 @@ router.get('/:id/path', optionalAuth, async (req, res) => {
 
         // Test-out: passing the unit's quiz counts the unit as done even if
         // its reading was skipped (mirrored in utils/progress.js).
-        const skippedByQuiz = !!quizId && passedQuizSet.has(quizId) && !completedUnitSet.has(unit.id);
+        const skippedByQuiz = (!!quizId && passedQuizSet.has(quizId) && !completedUnitSet.has(unit.id)) || skipTestUnitSet.has(unit.id);
         placeStep({
           done: completedUnitSet.has(unit.id) || skippedByQuiz,
           scorable: false,

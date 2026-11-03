@@ -9,6 +9,8 @@ const app = express();
 const { corsOrigin } = require('./config/cors');
 const { initLiveClassRealtime } = require('./realtime/liveClassSocket');
 const { startClassScheduler } = require('./utils/classScheduler');
+const { startAssignmentScheduler } = require('./utils/assignmentScheduler');
+const { startLiveClassSweeper } = require('./utils/liveClassSweeper');
 const { startDailyDigestScheduler } = require('./utils/dailyDigestScheduler');
 
 // Production sits behind one reverse proxy (Caddy). Trusting that single hop
@@ -121,6 +123,8 @@ initLiveClassRealtime(httpServer);
 // src/utils/classScheduler.js for why this is an in-process interval
 // rather than pg_cron/Edge Functions.
 startClassScheduler();
+startAssignmentScheduler();
+startLiveClassSweeper();
 
 // Fires the once-a-day "today's most active" shout-out + "come learn"
 // reminders — see src/utils/dailyDigestScheduler.js.

@@ -376,6 +376,78 @@ router.get('/unit/:unitId', authenticateToken, async (req, res) => {
 });
 
 /**
+ * GET /api/quizzes/unit/:unitId/stats
+ * Student results for a unit's practice quiz (staff only): how many of the
+ * enrolled students practised it, the average and passes (each student's best
+ * try), and the questions students get wrong most.
+ */
+router.get('/unit/:unitId/stats', authenticateToken, async (req, res) => {
+  try {
+    if (!isStaff(req.user)) return res.status(403).json({ success: false, error: 'Teachers only' });
+
+    const { data: quiz } = await supabase
+      .from('quizzes')
+      .select('id, course_id, pass_percentage')
+      .eq('unit_id', req.params.unitId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (!quiz) return res.json({ success: true, data: { stats: null } });
+
+    const [{ count: enrolled }, { data: subs }, { data: questions }] = await Promise.all([
+      supabase.from('course_enrollments').select('id', { count: 'exact', head: true }).eq('course_id', quiz.course_id),
+      supabase.from('quiz_submissions').select('student_id, score, passed, answers').eq('quiz_id', quiz.id),
+      supabase.from('quiz_questions').select('id, question, correct_answer, question_type, order_number').eq('quiz_id', quiz.id).order('order_number', { ascending: true }),
+    ]);
+
+    // Best try per student.
+    const best = new Map();
+    for (const sub of subs || []) {
+      const cur = best.get(sub.student_id);
+      if (!cur || (sub.score ?? 0) > (cur.score ?? 0)) best.set(sub.student_id, sub);
+    }
+    const bests = [...best.values()];
+    const scores = bests.map(b => Number(b.score ?? 0));
+    const passMark = Number(quiz.pass_percentage ?? 70);
+
+    // % correct per question over every attempt that served it.
+    const tally = {};
+    for (const sub of subs || []) {
+      const answers = typeof sub.answers === 'string' ? JSON.parse(sub.answers || '{}') : (sub.answers || {});
+      for (const q of questions || []) {
+        if (!(q.id in answers)) continue;
+        const t = (tally[q.id] ||= { seen: 0, right: 0 });
+        t.seen += 1;
+        if (answersMatch(answers[q.id], q.correct_answer, q.question_type)) t.right += 1;
+      }
+    }
+    const hardest = (questions || [])
+      .map((q, i) => ({ number: i + 1, question: q.question, ...(tally[q.id] || { seen: 0, right: 0 }) }))
+      .filter(q => q.seen >= 3)
+      .map(q => ({ number: q.number, question: q.question, attempts: q.seen, percent_correct: Math.round((q.right / q.seen) * 100) }))
+      .sort((a, b) => a.percent_correct - b.percent_correct)
+      .slice(0, 5);
+
+    res.json({
+      success: true,
+      data: {
+        stats: {
+          enrolled: enrolled || 0,
+          practised: bests.length,
+          average_percent: scores.length ? Math.round(scores.reduce((t, v) => t + v, 0) / scores.length) : null,
+          passed: bests.filter(b => Number(b.score ?? 0) >= passMark || b.passed).length,
+          pass_percentage: passMark,
+          hardest,
+        },
+      },
+    });
+  } catch (error) {
+    console.error('Unit quiz stats error:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch quiz stats: ' + error.message });
+  }
+});
+
+/**
  * POST /api/quizzes/import/units
  * Bulk-import a whole chapter's practice bank. multipart/form-data:
  *   file          the CSV (field name "file")

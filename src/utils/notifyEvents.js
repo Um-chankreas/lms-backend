@@ -108,7 +108,7 @@ async function notifyAssignmentPublished(assignmentId) {
  * accounts are skipped). Unlike the publish notice this reports back, because
  * the teacher is waiting on the answer.
  */
-async function notifyAssignmentReminder(assignmentId) {
+async function notifyAssignmentReminder(assignmentId, custom = null) {
   const { data: assignment } = await supabase
     .from('assignments')
     .select('id, title, due_date, type, course_id, courses(title)')
@@ -123,6 +123,24 @@ async function notifyAssignmentReminder(assignmentId) {
   const submitted = new Set((subs || []).map(s => s.student_id));
   const pendingIds = [...new Set((enrollments || []).map(e => e.student_id))]
     .filter(id => id && !submitted.has(id));
+
+  const data = {
+    assignment_id: assignment.id,
+    assignment_title: assignment.title,
+    course_id: assignment.course_id,
+    course_title: assignment.courses?.title || null,
+    assignment_type: assignment.type,
+    due_date: assignment.due_date,
+  };
+
+  // The teacher wrote the message: same text for everyone, no template.
+  if (custom?.title && custom?.body) {
+    const prefs = await userPrefs(pendingIds);
+    const rows = pendingIds
+      .filter(uid => prefs.get(uid)?.isActive)
+      .map(uid => ({ user_id: uid, type: 'assignment_reminder', title: custom.title, body: custom.body, data, kind: 'class' }));
+    return { sent: await createNotifications(rows), pending: pendingIds.length };
+  }
 
   const overdue = !!assignment.due_date && new Date(assignment.due_date) < new Date();
   const sent = await sendClass(
@@ -139,14 +157,7 @@ async function notifyAssignmentReminder(assignmentId) {
         xp: XP_VALUES.ASSIGNMENT_ONTIME,
       };
     },
-    {
-      assignment_id: assignment.id,
-      assignment_title: assignment.title,
-      course_id: assignment.course_id,
-      course_title: assignment.courses?.title || null,
-      assignment_type: assignment.type,
-      due_date: assignment.due_date,
-    },
+    data,
   );
   return { sent, pending: pendingIds.length };
 }

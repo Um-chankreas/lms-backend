@@ -18,7 +18,7 @@ const { v4: uuidv4 } = require('uuid');
  */
 router.post('/', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), async (req, res) => {
   try {
-    const { title, description, category, color, icon, cover_image, is_free } = req.body;
+    const { title, description, category, color, icon, cover_image, is_free, is_published } = req.body;
 
     // Validation
     if (!title) {
@@ -58,6 +58,7 @@ router.post('/', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), 
         cover_image: cover_image || null,    // NEW! Cover image
         code: classCode,                      // NEW! Auto-generated code
         is_free: typeof is_free === 'boolean' ? is_free : false,
+        is_published: typeof is_published === 'boolean' ? is_published : true,
         created_at: new Date()
       })
       .select()
@@ -87,7 +88,7 @@ router.post('/', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), 
  * GET /api/courses
  * Get all courses
  * - Teachers see their own courses
- * - Students and guests see all available courses
+ * - Students and guests see every class not hidden (is_published = false)
  */
 router.get('/', optionalAuth, async (req, res) => {
   try {
@@ -100,6 +101,9 @@ router.get('/', optionalAuth, async (req, res) => {
     // Teachers see only their courses
     if (req.user?.role === 'teacher') {
       query = query.eq('teacher_id', req.user.userId);
+    } else if (!['admin', 'super_admin'].includes(req.user?.role)) {
+      // Students and guests don't see classes staff have hidden.
+      query = query.neq('is_published', false);
     }
 
     const { data: courses, error } = await query.order('created_at', { ascending: false });
@@ -232,6 +236,25 @@ router.get('/:id', optionalAuth, async (req, res) => {
       });
     }
 
+    // Per-chapter numbers for the teacher's lesson list: how many units it has
+    // and what share of the enrolled students have finished it.
+    const statsByLesson = {};
+    if (['teacher', 'admin', 'super_admin'].includes(req.user?.role) && lessons.length > 0) {
+      const lessonIds = lessons.map(l => l.id);
+      const [{ data: unitRows }, { data: doneRows }] = await Promise.all([
+        supabase.from('lesson_units').select('lesson_id').in('lesson_id', lessonIds),
+        supabase.from('lesson_completions').select('lesson_id').in('lesson_id', lessonIds),
+      ]);
+      lessonIds.forEach(lid => { statsByLesson[lid] = { unit_count: 0, finished: 0 }; });
+      (unitRows || []).forEach(u => { statsByLesson[u.lesson_id].unit_count += 1; });
+      (doneRows || []).forEach(d => { statsByLesson[d.lesson_id].finished += 1; });
+      lessonIds.forEach((lid) => {
+        const st = statsByLesson[lid];
+        st.finished_percent = studentCount ? Math.min(100, Math.round((st.finished / studentCount) * 100)) : 0;
+        delete st.finished;
+      });
+    }
+
     const materialsBase = `${process.env.SUPABASE_URL}/storage/v1/object/public/course-materials/`;
     const lessonsWithAccess = lessons.map(lesson => {
       const unlocked = courseAccess || lesson.is_free;
@@ -245,6 +268,7 @@ router.get('/:id', optionalAuth, async (req, res) => {
         has_video: !!lesson.video_url,
         text_content: unlocked ? lesson.text_content : '',
         quizzes: quizzesByLesson[lesson.id] || [],
+        stats: statsByLesson[lesson.id] || null,
       };
     });
 
@@ -288,7 +312,7 @@ router.get('/:id', optionalAuth, async (req, res) => {
 router.put('/:id', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, description, category, color, icon, cover_image, code, is_free, teacher_id } = req.body;
+    const { title, description, category, color, icon, cover_image, code, is_free, is_published, teacher_id } = req.body;
 
     // Verify ownership — a teacher only touches their own; admin/super_admin
     // can edit any course.
@@ -325,6 +349,7 @@ router.put('/:id', authenticateToken, hasRole('teacher', 'admin', 'super_admin')
     if (cover_image !== undefined) updatePayload.cover_image = cover_image;
     if (code !== undefined) updatePayload.code = code;
     if (typeof is_free === 'boolean') updatePayload.is_free = is_free;
+    if (typeof is_published === 'boolean') updatePayload.is_published = is_published;
     // Reassigning the owning teacher is an admin-only capability.
     if (isAdminRole && teacher_id !== undefined) updatePayload.teacher_id = teacher_id;
 

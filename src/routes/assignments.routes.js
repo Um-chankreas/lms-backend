@@ -17,7 +17,10 @@ const isTeacher = hasRole(...STAFF_ROLES);
 const isStaff = (user) => STAFF_ROLES.includes(user?.role);
 // One manual reminder per assignment per this long, so a double tap (or an
 // impatient teacher) cannot spam the same students.
-const REMINDER_COOLDOWN_MS = 2 * 60 * 60 * 1000;
+const REMINDER_COOLDOWN_MS = 12 * 60 * 60 * 1000;
+// A scheduled assignment is invisible to students until opens_at passes.
+const isOpenNow = (a) => !a.opens_at || new Date(a.opens_at) <= new Date();
+const isFuture = (iso) => !!iso && new Date(iso) > new Date();
 const canManageCourse = (courseTeacherId, user) =>
   !!user && (['admin', 'super_admin'].includes(user.role) || courseTeacherId === user.userId);
 
@@ -40,7 +43,7 @@ const csvUpload = multer({
  */
 router.post('/', authenticateToken, isTeacher, async (req, res) => {
   try {
-    const { course_id, title, description, due_date, type, status, points } = req.body;
+    const { course_id, title, description, due_date, type, status, points, opens_at } = req.body;
 
     if (!course_id || !title) {
       return res.status(400).json({
@@ -79,6 +82,7 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
         title,
         description: description || '',
         due_date: due_date || null,
+        opens_at: opens_at || null,
         type: type === 'quiz' ? 'quiz' : 'file',
         points: pointsValue,
         status: isPublished ? 'published' : 'draft',
@@ -90,7 +94,7 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
 
     if (error) throw error;
 
-    if (isPublished) notifyAssignmentPublished(assignmentId); // best-effort, not awaited
+    if (isPublished && !isFuture(opens_at)) notifyAssignmentPublished(assignmentId); // best-effort, not awaited
 
     res.status(201).json({
       success: true,
@@ -112,7 +116,7 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
 async function loadOwnedAssignment(assignmentId, user) {
   const { data: assignment } = await supabase
     .from('assignments')
-    .select('id, type, status, course_id, courses(teacher_id)')
+    .select('id, type, status, course_id, opens_at, courses(teacher_id)')
     .eq('id', assignmentId)
     .single();
   if (!assignment) return { error: { status: 404, message: 'Assignment not found' } };
@@ -134,7 +138,7 @@ router.put('/:id', authenticateToken, isTeacher, async (req, res) => {
     const { error: ownError, assignment } = await loadOwnedAssignment(id, req.user);
     if (ownError) return res.status(ownError.status).json({ success: false, error: ownError.message });
 
-    const { title, description, due_date, status, points } = req.body;
+    const { title, description, due_date, status, points, closed, opens_at } = req.body;
     if (title !== undefined && !String(title).trim()) {
       return res.status(400).json({ success: false, error: 'Title is required' });
     }
@@ -146,7 +150,10 @@ router.put('/:id', authenticateToken, isTeacher, async (req, res) => {
     if (title !== undefined) updatePayload.title = String(title).trim();
     if (description !== undefined) updatePayload.description = description || '';
     if (due_date !== undefined) updatePayload.due_date = due_date || null;
+    if (opens_at !== undefined) updatePayload.opens_at = opens_at || null;
     if (points !== undefined) updatePayload.points = Math.round(Number(points));
+    // closed: true stops new submissions now; false reopens it.
+    if (closed !== undefined) updatePayload.closed_at = closed ? new Date() : null;
 
     const isPublishing = status === 'published' && assignment.status !== 'published';
     if (isPublishing) {
@@ -171,7 +178,8 @@ router.put('/:id', authenticateToken, isTeacher, async (req, res) => {
       .single();
     if (error) throw error;
 
-    if (isPublishing) notifyAssignmentPublished(id); // best-effort, not awaited
+    // A future opening time keeps publishing silent; assignmentScheduler notifies then.
+    if (isPublishing && !isFuture(opens_at !== undefined ? opens_at : assignment.opens_at)) notifyAssignmentPublished(id); // best-effort, not awaited
 
     res.json({ success: true, data: { assignment: updated } });
   } catch (error) {
@@ -437,7 +445,7 @@ router.get('/mine', authenticateToken, async (req, res) => {
       submissionByAssignment = Object.fromEntries((subs || []).map(s => [s.assignment_id, s]));
     }
 
-    const withMeta = (assignments || []).map(a => {
+    const withMeta = (assignments || []).filter(isOpenNow).map(a => {
       const s = submissionByAssignment[a.id] || null;
       return {
         ...a,
@@ -491,9 +499,42 @@ router.get('/course/:courseId', authenticateToken, async (req, res) => {
       .order('created_at', { ascending: false });
     if (!isOwner) query = query.eq('status', 'published');
 
-    const { data: assignments, error } = await query;
+    const { data: found, error } = await query;
 
     if (error) throw error;
+    const rows = isOwner ? found : found.filter(isOpenNow);
+
+    // Teachers also get per-assignment numbers for the list: how many of the
+    // enrolled students submitted and the average score (0-100).
+    let assignments = rows;
+    if (isOwner && rows.length > 0) {
+      const quizIds = rows.filter(a => a.type === 'quiz').map(a => a.id);
+      const [{ count: enrolled }, { data: subs }, { data: qrows }] = await Promise.all([
+        supabase.from('course_enrollments').select('student_id', { count: 'exact', head: true }).eq('course_id', courseId),
+        supabase.from('assignment_submissions').select('assignment_id, score, grade').in('assignment_id', rows.map(a => a.id)),
+        quizIds.length
+          ? supabase.from('assignment_questions').select('assignment_id, explanation').in('assignment_id', quizIds)
+          : Promise.resolve({ data: [] }),
+      ]);
+      const questionsBy = {};
+      for (const q of qrows || []) (questionsBy[q.assignment_id] ||= []).push(q);
+      const byAssignment = {};
+      for (const s of subs || []) (byAssignment[s.assignment_id] ||= []).push(s.score ?? s.grade);
+      assignments = rows.map((a) => {
+        const scores = (byAssignment[a.id] || []).filter(v => v !== null && v !== undefined);
+        const submitted = (byAssignment[a.id] || []).length;
+        return {
+          ...a,
+          stats: {
+            enrolled: enrolled || 0,
+            submitted,
+            question_count: (questionsBy[a.id] || []).length,
+            missing_explanations: (questionsBy[a.id] || []).filter(q => !String(q.explanation || '').trim()).length,
+            average_percent: scores.length ? Math.round(scores.reduce((t, v) => t + Number(v), 0) / scores.length) : null,
+          },
+        };
+      });
+    }
 
     res.json({
       success: true,
@@ -538,7 +579,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
 
     // A draft is invisible to everyone but its own teacher — hide its
     // existence entirely rather than a 403, same as a nonexistent id.
-    if (assignment.status !== 'published' && !isOwner) {
+    if ((assignment.status !== 'published' || !isOpenNow(assignment)) && !isOwner) {
       return res.status(404).json({ success: false, error: 'Assignment not found' });
     }
 
@@ -596,11 +637,24 @@ router.get('/:id', authenticateToken, async (req, res) => {
       }));
     }
 
+    let lastReminder = null;
+    if (isOwner) {
+      const { data: rem } = await supabase
+        .from('assignment_reminders')
+        .select('title, body, sent, pending, created_at')
+        .eq('assignment_id', id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      lastReminder = rem || null;
+    }
+
     res.json({
       success: true,
       data: {
         assignment: {
           ...assignment,
+          last_reminder: lastReminder,
           course: course || { id: assignment.course_id, title: null, color: null, icon: null },
           submission: submissions.find(s => s.student_id === req.user.userId) || null,
           submissions,
@@ -630,15 +684,18 @@ router.post('/:id/submit', authenticateToken, upload.single('file'), async (req,
     // Check if assignment exists
     const { data: assignment } = await supabase
       .from('assignments')
-      .select('id, course_id, due_date, type, status')
+      .select('id, course_id, due_date, type, status, closed_at, opens_at')
       .eq('id', id)
       .single();
 
-    if (!assignment || assignment.status !== 'published') {
+    if (!assignment || assignment.status !== 'published' || !isOpenNow(assignment)) {
       return res.status(404).json({
         success: false,
         error: 'Assignment not found'
       });
+    }
+    if (assignment.closed_at) {
+      return res.status(409).json({ success: false, error: 'This assignment has been closed by your teacher' });
     }
 
     if (assignment.type === 'quiz') {
@@ -829,6 +886,11 @@ router.post('/:id/submit', authenticateToken, upload.single('file'), async (req,
 router.post('/:id/remind', authenticateToken, isTeacher, async (req, res) => {
   try {
     const { id } = req.params;
+    const customTitle = String(req.body?.title || '').trim().slice(0, 120);
+    const customBody = String(req.body?.body || '').trim().slice(0, 500);
+    if (!!customTitle !== !!customBody) {
+      return res.status(400).json({ success: false, error: 'A custom reminder needs both a title and a message' });
+    }
     const { data: assignment } = await supabase
       .from('assignments')
       .select('id, status, courses(teacher_id)')
@@ -846,10 +908,9 @@ router.post('/:id/remind', authenticateToken, isTeacher, async (req, res) => {
     }
 
     const { data: last } = await supabase
-      .from('notifications')
+      .from('assignment_reminders')
       .select('created_at')
-      .eq('type', 'assignment_reminder')
-      .contains('data', { assignment_id: id })
+      .eq('assignment_id', id)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -862,15 +923,106 @@ router.post('/:id/remind', authenticateToken, isTeacher, async (req, res) => {
       });
     }
 
-    const { sent, pending } = await notifyAssignmentReminder(id);
+    const custom = customTitle ? { title: customTitle, body: customBody } : null;
+    const { sent, pending } = await notifyAssignmentReminder(id, custom);
+    if (pending > 0) {
+      const { error: logError } = await supabase.from('assignment_reminders').insert({
+        assignment_id: id,
+        sent_by: req.user.userId,
+        title: customTitle || '(standard reminder)',
+        body: customBody || '(standard reminder text, in each student\'s language)',
+        sent,
+        pending,
+      });
+      if (logError) console.warn('assignment_reminders log failed:', logError.message);
+    }
     res.json({
       success: true,
       message: pending === 0 ? 'Every student has already submitted' : `Reminder sent to ${sent} student${sent === 1 ? '' : 's'}`,
-      data: { sent, pending },
+      data: { sent, pending, reminded_at: new Date().toISOString() },
     });
   } catch (error) {
     console.error('Assignment remind error:', error);
     res.status(500).json({ success: false, error: 'Failed to send reminder: ' + error.message });
+  }
+});
+
+/**
+ * DELETE /api/assignments/:id
+ * Remove an assignment with its questions, submissions and reminder log
+ * (Teacher of the course, admin or super admin).
+ */
+router.delete('/:id', authenticateToken, isTeacher, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { error: ownError } = await loadOwnedAssignment(id, req.user);
+    if (ownError) return res.status(ownError.status).json({ success: false, error: ownError.message });
+
+    // Children first, in case the foreign keys are not ON DELETE CASCADE.
+    for (const table of ['assignment_reminders', 'assignment_submissions', 'assignment_questions']) {
+      const { error } = await supabase.from(table).delete().eq('assignment_id', id);
+      if (error) throw error;
+    }
+    const { error } = await supabase.from('assignments').delete().eq('id', id);
+    if (error) throw error;
+    res.json({ success: true, message: 'Assignment deleted' });
+  } catch (error) {
+    console.error('Delete assignment error:', error);
+    res.status(500).json({ success: false, error: 'Failed to delete assignment: ' + error.message });
+  }
+});
+
+/**
+ * POST /api/assignments/:id/duplicate   { course_id? }
+ * Copy an assignment and its questions into a course (default: the same one)
+ * as a draft, so it can be reused in other classes. The caller must manage
+ * both the source and the target course.
+ */
+router.post('/:id/duplicate', authenticateToken, isTeacher, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { error: ownError } = await loadOwnedAssignment(id, req.user);
+    if (ownError) return res.status(ownError.status).json({ success: false, error: ownError.message });
+
+    const { data: source } = await supabase.from('assignments').select('*').eq('id', id).single();
+    const targetCourseId = req.body?.course_id || source.course_id;
+    if (targetCourseId !== source.course_id) {
+      const { data: target } = await supabase.from('courses').select('teacher_id').eq('id', targetCourseId).maybeSingle();
+      if (!target) return res.status(404).json({ success: false, error: 'Target course not found' });
+      if (!canManageCourse(target.teacher_id, req.user)) {
+        return res.status(403).json({ success: false, error: 'You can only copy into your own courses' });
+      }
+    }
+
+    const { data: copy, error } = await supabase
+      .from('assignments')
+      .insert({
+        id: uuidv4(),
+        course_id: targetCourseId,
+        title: targetCourseId === source.course_id ? `${source.title} (copy)` : source.title,
+        description: source.description,
+        due_date: null,
+        type: source.type,
+        points: source.points,
+        status: 'draft',
+      })
+      .select()
+      .single();
+    if (error) throw error;
+
+    if (source.type === 'quiz') {
+      const { data: qs } = await supabase.from('assignment_questions').select('*').eq('assignment_id', id).order('order_number', { ascending: true });
+      if (qs?.length) {
+        const { error: qError } = await supabase.from('assignment_questions').insert(
+          qs.map(({ id: _id, created_at: _c, ...q }) => ({ ...q, id: uuidv4(), assignment_id: copy.id }))
+        );
+        if (qError) throw qError;
+      }
+    }
+    res.status(201).json({ success: true, data: { assignment: copy } });
+  } catch (error) {
+    console.error('Duplicate assignment error:', error);
+    res.status(500).json({ success: false, error: 'Failed to duplicate assignment: ' + error.message });
   }
 });
 

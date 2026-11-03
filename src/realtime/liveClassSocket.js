@@ -1,5 +1,6 @@
 const { Server } = require('socket.io');
 const supabase = require('../config/supabase');
+const { canRunLiveClass } = require('../utils/liveClassAccess');
 const { verifyToken } = require('../utils/jwt');
 const { corsOrigin } = require('../config/cors');
 const { generateAgoraUid } = require('../utils/agoraUid');
@@ -59,13 +60,8 @@ async function loadLiveClass(id) {
 // a circular require on the routes file.
 async function resolveAccess(liveClass, user) {
   if (!user) return { allowed: false };
-  if (user.role === 'teacher') {
-    return liveClass.teacher_id === user.userId
-      ? { allowed: true, role: 'teacher' }
-      : { allowed: false };
-  }
-  if (user.role === 'admin' || user.role === 'super_admin') {
-    return { allowed: true, role: 'teacher' };
+  if (user.role === 'teacher' || user.role === 'admin' || user.role === 'super_admin') {
+    return await canRunLiveClass(liveClass, user) ? { allowed: true, role: 'teacher' } : { allowed: false };
   }
   if (user.role === 'student') {
     const { data: course } = await supabase
@@ -305,6 +301,13 @@ async function markLeftIfGone(liveClassId, userId) {
 
 // ---- emit helpers, called by the REST routes after a successful write ----
 
+/** How many distinct users have a live socket in the class room right now (null if realtime is off). */
+async function connectedCount(liveClassId) {
+  if (!io) return null;
+  const sockets = await io.in(roomAll(liveClassId)).fetchSockets();
+  return new Set(sockets.map(s => s.data?.user?.userId).filter(Boolean)).size;
+}
+
 async function emitStageChanged(liveClassId) {
   if (!io) return;
   io.to(roomAll(liveClassId)).emit('stage:changed', {
@@ -360,5 +363,6 @@ module.exports = {
   emitHandLowered,
   emitHandUpdate,
   emitForceMute,
-  emitClassStatus
+  emitClassStatus,
+  connectedCount
 };

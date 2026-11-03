@@ -748,6 +748,18 @@ router.get('/', optionalAuth, async (req, res) => {
       .order('order_number', { ascending: true });
     if (error) throw error;
 
+    // Staff also see how many practice questions each unit has (sidebar subtitle).
+    const questionCounts = {};
+    if (req.user && ['teacher', 'admin', 'super_admin'].includes(req.user.role) && (units || []).length > 0) {
+      const { data: quizRows } = await supabase
+        .from('quizzes')
+        .select('unit_id, quiz_questions(count)')
+        .in('unit_id', units.map(u => u.id));
+      (quizRows || []).forEach((q) => {
+        questionCounts[q.unit_id] = (questionCounts[q.unit_id] || 0) + (q.quiz_questions?.[0]?.count || 0);
+      });
+    }
+
     res.json({
       success: true,
       data: {
@@ -773,6 +785,7 @@ router.get('/', optionalAuth, async (req, res) => {
             duration_seconds: unlocked ? u.duration_seconds : null,
             practice_video_url: unlocked && u.practice_video_url ? publicUrl(u.practice_video_url) : null,
             practice_duration_seconds: unlocked ? u.practice_duration_seconds : null,
+            question_count: questionCounts[u.id] ?? null,
             updated_at: u.updated_at
           };
         })
