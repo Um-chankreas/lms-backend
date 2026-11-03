@@ -163,8 +163,8 @@ async function notifyAssignmentReminder(assignmentId, custom = null) {
 }
 
 /**
- * The teacher started a live class: tell every student who can actually join it
- * (see liveClassRecipients). Skipped when live classes are off for the course —
+ * The teacher started a live class: tell every student of that class who can
+ * actually join it (see liveClassRecipients — enrolled students only). Skipped when live classes are off for the course —
  * a "live now" nobody can open is just noise.
  */
 async function notifyLiveClassStarted(liveClassId) {
@@ -175,6 +175,11 @@ async function notifyLiveClassStarted(liveClassId) {
       .eq('id', liveClassId)
       .maybeSingle();
     if (!lc || lc.courses?.live_enabled === false) return;
+
+    // A class hidden from students (test class, still being built) notifies no one.
+    // Separate query so a database without sql/062 yet keeps notifying.
+    const { data: vis } = await supabase.from('courses').select('is_published').eq('id', lc.course_id).maybeSingle();
+    if (vis && vis.is_published === false) return;
 
     const [recipients, { data: teacher }] = await Promise.all([
       liveClassRecipients(lc.course_id),
