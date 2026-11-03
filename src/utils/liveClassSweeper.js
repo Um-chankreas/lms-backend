@@ -30,6 +30,26 @@ async function isRoomEmpty(liveClassId) {
   return !(open && open.length);
 }
 
+/**
+ * The teacher / admin counts as present when their socket is in the room OR
+ * their participant row is still open. The row is closed by an explicit leave
+ * or by the socket-disconnect check, so an open one means they never went
+ * away — which keeps a presenter whose realtime socket is flaky from having
+ * their class ended under them.
+ */
+async function isStaffPresent(liveClassId) {
+  const sockets = await staffConnected(liveClassId);
+  if (sockets !== false) return true;               // connected, or realtime is off
+  const { data: rows } = await supabase
+    .from('live_class_participants')
+    .select('id')
+    .eq('live_class_id', liveClassId)
+    .in('role', ['teacher', 'admin', 'super_admin'])
+    .is('left_at', null)
+    .limit(1);
+  return !!(rows && rows.length);
+}
+
 /** End a class and tell anyone still looking at it. */
 async function closeClass(liveClassId) {
   const ended = await endLiveClassRecord(liveClassId);
@@ -59,8 +79,7 @@ async function sweepStaleClasses() {
     }
     // The teacher's tab died but students are still connected: they would sit
     // on "waiting for the teacher" forever, so end the class after a grace.
-    const staff = await staffConnected(lc.id);
-    if (staff === false) {
+    if (!(await isStaffPresent(lc.id))) {
       if (!staffGoneSince.has(lc.id)) staffGoneSince.set(lc.id, now);
       if (now - staffGoneSince.get(lc.id) >= TEACHER_GONE_MS) { await closeClass(lc.id); continue; }
     } else {
