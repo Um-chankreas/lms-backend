@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const supabase = require('../config/supabase');
+const { loadSettings } = require('../utils/appSettings');
 
 /**
  * GET /api/app-version?platform=ios|android        (public — no login needed)
@@ -37,23 +37,6 @@ const toBuild = (v) => {
   const n = parseInt(v, 10);
   return Number.isFinite(n) ? n : null;
 };
-
-// app_settings rows, cached briefly so launch checks don't each hit the database.
-let settingsCache = { at: 0, map: {} };
-async function loadSettings() {
-  if (Date.now() - settingsCache.at < 30000) return settingsCache.map;
-  try {
-    const { data, error } = await supabase.from('app_settings').select('key, value');
-    if (error) throw error;
-    const map = {};
-    for (const r of data || []) if (r.value && String(r.value).trim()) map[r.key] = String(r.value).trim();
-    settingsCache = { at: Date.now(), map };
-  } catch (e) {
-    // Table missing (migration 066 not run) or a blip: use the environment only.
-    settingsCache = { at: Date.now(), map: settingsCache.map };
-  }
-  return settingsCache.map;
-}
 
 router.get('/', async (req, res) => {
   const platform = String(req.query.platform || '').toLowerCase() === 'ios' ? 'IOS' : 'ANDROID';
