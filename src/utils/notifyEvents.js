@@ -1,4 +1,5 @@
 const supabase = require('../config/supabase');
+const tg = require('./telegram');
 const { createNotifications, userPrefs } = require('./notifications');
 const { XP_VALUES } = require('./xp');
 const { todayYmd, LIVE_REQUIRES_SUBSCRIPTION } = require('./access');
@@ -228,7 +229,7 @@ async function notifyClassScheduleReminder(schedule) {
       // The teacher's own live class for this slot, if they already created one.
       supabase
         .from('live_classes')
-        .select('title, scheduled_at')
+        .select('id, title, scheduled_at')
         .eq('course_id', schedule.course_id)
         .eq('status', 'scheduled')
         .gte('scheduled_at', new Date().toISOString())
@@ -253,6 +254,20 @@ async function notifyClassScheduleReminder(schedule) {
         start_time: schedule.start_time,
       },
     );
+
+    // Same reminder on Telegram for students who connected it. classScheduler already claimed
+    // this occurrence, so this runs once per class.
+    const reachable = await tg.reachableStudents(recipients);
+    if (reachable.length > 0) {
+      const text =
+        `<b>⏰ ថ្នាក់រៀនផ្ទាល់ជិតចាប់ផ្តើម</b>\n` +
+        `<b>${tg.escapeHtml(liveClassTitle || course.title)}</b>\n` +
+        (liveClassTitle ? `${tg.escapeHtml(course.title)}\n` : '') +
+        (time ? `🕒 ${time}\n` : '') +
+        `\nLive class starting soon.`;
+      const button = planned?.[0]?.id ? { text: tg.JOIN_LABEL, url: tg.joinUrl(planned[0].id) } : null;
+      await tg.sendToStudents(reachable, () => ({ text, button }));
+    }
   } catch (e) {
     console.warn('notifyClassScheduleReminder failed:', e.message);
   }

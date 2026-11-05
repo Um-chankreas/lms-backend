@@ -10,6 +10,7 @@ const { corsOrigin } = require('./config/cors');
 const { initLiveClassRealtime } = require('./realtime/liveClassSocket');
 const { startClassScheduler } = require('./utils/classScheduler');
 const { startAssignmentScheduler } = require('./utils/assignmentScheduler');
+const { startTelegramReminderScheduler } = require('./utils/telegramReminderScheduler');
 const { startLiveClassSweeper } = require('./utils/liveClassSweeper');
 const { startDailyDigestScheduler } = require('./utils/dailyDigestScheduler');
 
@@ -73,6 +74,23 @@ app.use('/api/app-version', require('./routes/appVersion.routes'));
 app.use('/api/bacii', require('./routes/bacii.routes'));
 app.use('/api/stories', require('./routes/stories.routes'));
 app.use('/api/skip-tests', require('./routes/skipTests.routes'));
+app.use('/api/telegram', require('./routes/telegram.routes'));
+
+// The "Join class" button in a Telegram reminder. Telegram buttons only open http(s)
+// links, so this page hands the student on to the app's own learnquest:// link.
+app.get('/open/live-class/:id', (req, res) => {
+  const id = String(req.params.id);
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return res.status(404).send('Not found');
+  const link = `learnquest://live-class/${id}`;
+  res.set('Cache-Control', 'no-store').type('html').send(
+    `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
+    `<title>Romduol Scholars</title><meta http-equiv="refresh" content="0;url=${link}"></head>` +
+    `<body style="font-family:sans-serif;text-align:center;padding:48px 20px"><h2>Romduol Scholars</h2>` +
+    `<p>កំពុងបើកកម្មវិធី... / Opening the app...</p>` +
+    `<p><a href="${link}" style="display:inline-block;background:#006A3A;color:#fff;padding:14px 28px;border-radius:12px;text-decoration:none;font-weight:bold">បើកថ្នាក់ / Open class</a></p>` +
+    `<script>location.href=${JSON.stringify(link)}</script></body></html>`
+  );
+});
 
 // ============ Health Check ============
 app.get('/', (req, res) => {
@@ -124,6 +142,7 @@ initLiveClassRealtime(httpServer);
 // rather than pg_cron/Edge Functions.
 startClassScheduler();
 startAssignmentScheduler();
+startTelegramReminderScheduler();
 startLiveClassSweeper();
 
 // Fires the once-a-day "today's most active" shout-out + "come learn"

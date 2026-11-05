@@ -179,4 +179,82 @@ router.get('/activity', authenticateToken, isStudent, async (req, res) => {
   }
 });
 
+const PROVINCE_MAX = 60;
+const SCHOOL_MAX = 80;
+const VISIBILITY = ['teachers', 'friends', 'nobody'];
+
+/**
+ * GET /api/profile/private
+ * The student's own private details: school, province and Telegram state. Only the
+ * student can read this; teachers get the Telegram username through
+ * GET /api/telegram/students/:id/contact, and only if the student allows it.
+ */
+router.get('/private', authenticateToken, isStudent, async (req, res) => {
+  try {
+    const { data: row, error } = await supabase
+      .from('student_private').select('*').eq('user_id', req.user.userId).maybeSingle();
+    // Migration 064 not run yet: behave as "nothing saved" rather than failing the screen.
+    if (error && !/student_private/.test(error.message || '')) throw error;
+    const r = row || {};
+    res.json({
+      success: true,
+      data: {
+        school: r.school || null,
+        province: r.province || null,
+        telegram: {
+          connected: !!r.telegram_chat_id,
+          username: r.telegram_username || null,
+          first_name: r.telegram_first_name || null,
+          blocked: !!r.telegram_blocked_at,
+          reminders: r.telegram_reminders !== false,
+          visibility: r.telegram_visibility || 'teachers',
+          xp_awarded: !!r.telegram_xp_awarded,
+          linked_at: r.telegram_linked_at || null
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Profile private error:', error);
+    res.status(500).json({ success: false, error: 'Failed to load private details' });
+  }
+});
+
+/**
+ * PUT /api/profile/private   { school?, province?, telegram_reminders?, telegram_visibility? }
+ * Only these fields can be set from the app. The Telegram ids and username are written
+ * by the bot webhook alone, so a student can never claim someone else's chat.
+ */
+router.put('/private', authenticateToken, isStudent, async (req, res) => {
+  try {
+    const { school, province, telegram_reminders, telegram_visibility } = req.body || {};
+    const updates = { user_id: req.user.userId, updated_at: new Date().toISOString() };
+
+    if (school !== undefined) {
+      const v = String(school ?? '').trim();
+      if (v.length > SCHOOL_MAX) return res.status(400).json({ success: false, error: 'School name is too long' });
+      updates.school = v || null;
+    }
+    if (province !== undefined) {
+      const v = String(province ?? '').trim();
+      if (v.length > PROVINCE_MAX) return res.status(400).json({ success: false, error: 'Invalid province' });
+      updates.province = v || null;
+    }
+    if (telegram_reminders !== undefined) {
+      if (typeof telegram_reminders !== 'boolean') return res.status(400).json({ success: false, error: 'Invalid telegram_reminders' });
+      updates.telegram_reminders = telegram_reminders;
+    }
+    if (telegram_visibility !== undefined) {
+      if (!VISIBILITY.includes(telegram_visibility)) return res.status(400).json({ success: false, error: 'Invalid telegram_visibility' });
+      updates.telegram_visibility = telegram_visibility;
+    }
+
+    const { error } = await supabase.from('student_private').upsert(updates, { onConflict: 'user_id' });
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Profile private update error:', error);
+    res.status(500).json({ success: false, error: 'Failed to save private details' });
+  }
+});
+
 module.exports = router;
