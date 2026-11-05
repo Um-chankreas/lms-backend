@@ -257,4 +257,43 @@ router.put('/private', authenticateToken, isStudent, async (req, res) => {
   }
 });
 
+/**
+ * GET /api/profile/tour
+ * Has this student finished (or skipped) the guided tour? Saved per account, so a
+ * new phone or a reinstall doesn't show it again. Students only: teachers never see it.
+ */
+router.get('/tour', authenticateToken, isStudent, async (req, res) => {
+  try {
+    const { data: row, error } = await supabase
+      .from('student_private').select('tour_completed_at').eq('user_id', req.user.userId).maybeSingle();
+    if (error) throw error;
+    res.json({ success: true, data: { tour_completed_at: row?.tour_completed_at || null } });
+  } catch (error) {
+    console.error('Tour status error:', error);
+    res.status(500).json({ success: false, error: 'Failed to load tour status' });
+  }
+});
+
+/**
+ * POST /api/profile/tour
+ * Mark the tour done. Keeps the first completion time if it was already set.
+ */
+router.post('/tour', authenticateToken, isStudent, async (req, res) => {
+  try {
+    const { data: row, error: readErr } = await supabase
+      .from('student_private').select('tour_completed_at').eq('user_id', req.user.userId).maybeSingle();
+    if (readErr) throw readErr;
+    if (row?.tour_completed_at) return res.json({ success: true, data: { tour_completed_at: row.tour_completed_at } });
+    const now = new Date().toISOString();
+    const { error } = await supabase
+      .from('student_private')
+      .upsert({ user_id: req.user.userId, tour_completed_at: now, updated_at: now }, { onConflict: 'user_id' });
+    if (error) throw error;
+    res.json({ success: true, data: { tour_completed_at: now } });
+  } catch (error) {
+    console.error('Tour save error:', error);
+    res.status(500).json({ success: false, error: 'Failed to save tour status' });
+  }
+});
+
 module.exports = router;

@@ -64,6 +64,7 @@ app.use('/api/permissions', require('./routes/permissions.routes'));
 app.use('/api/dashboard', require('./routes/dashboard.routes'));
 app.use('/api/leaderboard', require('./routes/leaderboard.routes'));
 app.use('/api/profile', require('./routes/profile.routes'));
+app.use('/api/devices', require('./routes/devices.routes'));
 app.use('/api/admin/agora-accounts', require('./routes/agoraAccounts.routes'));
 app.use('/api/admin/agora-usage', require('./routes/agoraUsage.routes'));
 app.use('/api/admin', require('./routes/admin.routes'));

@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const supabase = require('../config/supabase');
 
 /**
  * GET /api/app-version?platform=ios|android        (public — no login needed)
@@ -19,6 +20,11 @@ const router = express.Router();
  *   APP_STORE_URL_IOS      / APP_STORE_URL_ANDROID        where the Update button goes
  *   APP_RELEASE_NOTES                                    optional one-liner shown in the prompt
  *
+ * The same values can be set in the app_settings table (keys min_app_version,
+ * latest_app_version, min_build, latest_build, store_url_android, store_url_ios),
+ * which wins over the environment and needs no restart. Empty rows fall back to
+ * the variables above.
+ *
  * Each name also works without the _IOS/_ANDROID suffix (one value for both
  * platforms); the platform-specific one wins. Unset values come back null and
  * the app simply shows nothing — so a missing variable looks like "the update
@@ -32,16 +38,35 @@ const toBuild = (v) => {
   return Number.isFinite(n) ? n : null;
 };
 
-router.get('/', (req, res) => {
+// app_settings rows, cached briefly so launch checks don't each hit the database.
+let settingsCache = { at: 0, map: {} };
+async function loadSettings() {
+  if (Date.now() - settingsCache.at < 30000) return settingsCache.map;
+  try {
+    const { data, error } = await supabase.from('app_settings').select('key, value');
+    if (error) throw error;
+    const map = {};
+    for (const r of data || []) if (r.value && String(r.value).trim()) map[r.key] = String(r.value).trim();
+    settingsCache = { at: Date.now(), map };
+  } catch (e) {
+    // Table missing (migration 066 not run) or a blip: use the environment only.
+    settingsCache = { at: Date.now(), map: settingsCache.map };
+  }
+  return settingsCache.map;
+}
+
+router.get('/', async (req, res) => {
   const platform = String(req.query.platform || '').toLowerCase() === 'ios' ? 'IOS' : 'ANDROID';
+  const s = await loadSettings();
+  const pick = (key, envName) => s[key] || read(envName, platform);
   res.json({
     success: true,
     data: {
-      latest_version: read('APP_LATEST_VERSION', platform),
-      min_supported_version: read('APP_MIN_VERSION', platform),
-      latest_build: toBuild(read('APP_LATEST_BUILD', platform)),
-      min_build: toBuild(read('APP_MIN_BUILD', platform)),
-      store_url: read('APP_STORE_URL', platform),
+      latest_version: pick('latest_app_version', 'APP_LATEST_VERSION'),
+      min_supported_version: pick('min_app_version', 'APP_MIN_VERSION'),
+      latest_build: toBuild(pick('latest_build', 'APP_LATEST_BUILD')),
+      min_build: toBuild(pick('min_build', 'APP_MIN_BUILD')),
+      store_url: s[platform === 'IOS' ? 'store_url_ios' : 'store_url_android'] || read('APP_STORE_URL', platform),
       release_notes: (process.env.APP_RELEASE_NOTES || '').trim() || null
     }
   });
