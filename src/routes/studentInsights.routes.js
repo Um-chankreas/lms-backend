@@ -376,6 +376,7 @@ router.get('/overview', async (req, res) => {
       let q = supabase
         .from('courses')
         .select('id, title, color, icon, teacher_id')
+        .eq('is_test', false) // test classes stay off the dashboard
         .order('id', { ascending: true });
       if (req.staffRole !== 'admin') q = q.eq('teacher_id', req.user.userId);
       return q;
@@ -495,6 +496,7 @@ async function loadRosters(req, courseFilter, fresh) {
       let q = supabase
         .from('courses')
         .select('id, title, color, icon, teacher_id')
+        .eq('is_test', false) // test classes stay off the dashboard
         .order('id', { ascending: true });
       if (req.staffRole !== 'admin') q = q.eq('teacher_id', req.user.userId);
       if (courseFilter) q = q.eq('id', courseFilter);
@@ -804,7 +806,7 @@ const ymdOf = (ms) => new Date(ms).toISOString().slice(0, 10);
 async function loadLiveReportInput(req) {
   const courseFilter = courseFilterOf(req);
   const courses = await fetchAllRows(() => {
-    let q = supabase.from('courses').select('id, title, category').order('id', { ascending: true });
+    let q = supabase.from('courses').select('id, title, category').eq('is_test', false).order('id', { ascending: true });
     if (req.staffRole !== 'admin') q = q.eq('teacher_id', req.user.userId);
     if (courseFilter) q = q.eq('id', courseFilter);
     return q;

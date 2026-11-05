@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { loadSettings } = require('../utils/appSettings');
+const { ensureIosStoreVersion } = require('../utils/iosStoreVersion');
 
 /**
  * GET /api/app-version?platform=ios|android        (public — no login needed)
@@ -25,6 +26,11 @@ const { loadSettings } = require('../utils/appSettings');
  * which wins over the environment and needs no restart. Empty rows fall back to
  * the variables above.
  *
+ * iOS: "latest" is read from the App Store itself (Apple's public lookup, checked at most once a day,
+ * see utils/iosStoreVersion.js), so nothing needs setting when Apple approves a
+ * release. The minimum still comes from app_settings / env. If the lookup is unavailable,
+ * iOS falls back to the latest values above. IOS_STORE_SYNC=0 turns the lookup off.
+ *
  * Each name also works without the _IOS/_ANDROID suffix (one value for both
  * platforms); the platform-specific one wins. Unset values come back null and
  * the app simply shows nothing — so a missing variable looks like "the update
@@ -42,14 +48,17 @@ router.get('/', async (req, res) => {
   const platform = String(req.query.platform || '').toLowerCase() === 'ios' ? 'IOS' : 'ANDROID';
   const s = await loadSettings();
   const pick = (key, envName) => s[key] || read(envName, platform);
+  // iOS: the App Store's own version wins for "latest" (build number and link too).
+  let ios = null;
+  if (platform === 'IOS') ios = await ensureIosStoreVersion();
   res.json({
     success: true,
     data: {
-      latest_version: pick('latest_app_version', 'APP_LATEST_VERSION'),
+      latest_version: ios?.version || pick('latest_app_version', 'APP_LATEST_VERSION'),
       min_supported_version: pick('min_app_version', 'APP_MIN_VERSION'),
-      latest_build: toBuild(pick('latest_build', 'APP_LATEST_BUILD')),
+      latest_build: ios ? null : toBuild(pick('latest_build', 'APP_LATEST_BUILD')),
       min_build: toBuild(pick('min_build', 'APP_MIN_BUILD')),
-      store_url: s[platform === 'IOS' ? 'store_url_ios' : 'store_url_android'] || read('APP_STORE_URL', platform),
+      store_url: s[platform === 'IOS' ? 'store_url_ios' : 'store_url_android'] || (ios?.url) || read('APP_STORE_URL', platform),
       release_notes: (process.env.APP_RELEASE_NOTES || '').trim() || null
     }
   });
