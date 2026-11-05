@@ -34,6 +34,14 @@ const NO_CODE =
 const BAD_CODE =
   'តំណនេះផុតកំណត់ ឬត្រូវបានប្រើរួចហើយ។ សូមចុច «ភ្ជាប់ Telegram» ក្នុងកម្មវិធីម្តងទៀត។\n\n' +
   'This link has expired or was already used. Tap “Connect Telegram” in the app again.';
+const SHARE_LABEL = '📱 ចែករំលែកលេខទូរស័ព្ទ / Share my phone number';
+const SHARE_HINT =
+  '\n\nបើចង់ ចុចប៊ូតុងខាងក្រោមដើម្បីចែករំលែកលេខទូរស័ព្ទរបស់អ្នក (មិនបង្ខំ)។ មានតែគ្រូរបស់អ្នកទេដែលអាចឃើញ។\n' +
+  'Optional: tap the button below to share your phone number. Only your teachers can see it.';
+const SHARE_THANKS =
+  'អរគុណ! បានទទួលលេខទូរស័ព្ទរបស់អ្នកហើយ។\n\nThank you! We saved your phone number.';
+const SHARE_OWN_ONLY =
+  'សូមចុចប៊ូតុងដើម្បីចែករំលែកលេខទូរស័ព្ទផ្ទាល់ខ្លួនរបស់អ្នក។\n\nPlease use the button to share your own phone number.';
 const STOPPED =
   'បានបិទការរំលឹក។ អ្នកអាចបើកវាវិញបានក្នុងកម្មវិធី។\n\nReminders are off. You can turn them back on in the app.';
 const NOT_LINKED =
@@ -101,7 +109,7 @@ async function handleStart(msg, code) {
   await supabase.from('student_private')
     .update({
       telegram_chat_id: null, telegram_user_id: null, telegram_username: null,
-      telegram_first_name: null, telegram_linked_at: null, telegram_blocked_at: null
+      telegram_first_name: null, telegram_linked_at: null, telegram_blocked_at: null, telegram_phone: null
     })
     .eq('telegram_user_id', from.id)
     .neq('user_id', userId);
@@ -121,7 +129,25 @@ async function handleStart(msg, code) {
     return tg.sendMessage(chatId, BAD_CODE);
   }
   await awardLinkXpOnce(userId);
-  return tg.sendMessage(chatId, WELCOME);
+  // A one-tap, optional "share my number" button: Telegram only hands a bot a phone number the user sends.
+  return tg.sendMessage(chatId, WELCOME + SHARE_HINT, {
+    reply_markup: { keyboard: [[{ text: SHARE_LABEL, request_contact: true }]], resize_keyboard: true, one_time_keyboard: true }
+  });
+}
+
+/** The student tapped "Share my phone number". Only their own contact counts. */
+async function handleContact(msg) {
+  const chatId = msg.chat.id;
+  const contact = msg.contact;
+  if (!contact?.phone_number || contact.user_id !== msg.from?.id) return tg.sendMessage(chatId, SHARE_OWN_ONLY);
+  const phone = String(contact.phone_number).startsWith('+') ? contact.phone_number : `+${contact.phone_number}`;
+  const { data } = await supabase.from('student_private')
+    .update({ telegram_phone: phone, updated_at: new Date().toISOString() })
+    .eq('telegram_chat_id', chatId)
+    .eq('telegram_user_id', msg.from.id)
+    .select('user_id');
+  if (!data || data.length === 0) return tg.sendMessage(chatId, NOT_LINKED);
+  return tg.sendMessage(chatId, SHARE_THANKS, { reply_markup: { remove_keyboard: true } });
 }
 
 async function handleStop(msg) {
@@ -137,7 +163,9 @@ router.post('/webhook', async (req, res) => {
   res.sendStatus(200);   // answer Telegram first; the work below can take a moment
   try {
     const msg = req.body?.message;
-    if (!msg || msg.chat?.type !== 'private' || typeof msg.text !== 'string') return;
+    if (!msg || msg.chat?.type !== 'private') return;
+    if (msg.contact) return await handleContact(msg);
+    if (typeof msg.text !== 'string') return;
     const [command, arg] = msg.text.trim().split(/\s+/);
     const name = command.split('@')[0].toLowerCase();
     if (name === '/start') await handleStart(msg, arg);
@@ -152,7 +180,7 @@ router.delete('/link', authenticateToken, isStudent, async (req, res) => {
     const { error } = await supabase.from('student_private')
       .update({
         telegram_chat_id: null, telegram_user_id: null, telegram_username: null,
-        telegram_first_name: null, telegram_linked_at: null, telegram_blocked_at: null,
+        telegram_first_name: null, telegram_linked_at: null, telegram_blocked_at: null, telegram_phone: null,
         updated_at: new Date().toISOString()
       })
       .eq('user_id', req.user.userId);
@@ -179,10 +207,10 @@ router.get('/students/:id/contact', authenticateToken, hasRole('teacher', 'admin
       }
     }
     const { data: row } = await supabase.from('student_private')
-      .select('telegram_username, telegram_visibility, telegram_chat_id')
+      .select('telegram_username, telegram_phone, telegram_visibility, telegram_chat_id')
       .eq('user_id', studentId).maybeSingle();
     const visible = row && row.telegram_chat_id && ['teachers', 'friends'].includes(row.telegram_visibility);
-    res.json({ success: true, data: { username: visible ? row.telegram_username : null } });
+    res.json({ success: true, data: { username: visible ? row.telegram_username : null, phone: visible ? row.telegram_phone : null } });
   } catch (error) {
     console.error('Telegram contact error:', error);
     res.status(500).json({ success: false, error: 'Could not load contact' });

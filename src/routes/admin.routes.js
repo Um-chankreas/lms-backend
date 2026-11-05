@@ -189,10 +189,33 @@ router.get('/students', async (req, res) => {
 
     const summaries = await subscriptionSummaries(students.map(s => s.id));
 
+    // Telegram: who has connected it, and the @username only when the student allows staff to
+    // see it (sql/064: telegram_visibility teachers|friends). Quietly empty until that migration runs.
+    const telegram = new Map();
+    if (students.length > 0) {
+      const ids = students.map(s => s.id);
+      let { data: tg, error: tgError } = await supabase
+        .from('student_private')
+        .select('user_id, telegram_username, telegram_phone, telegram_chat_id, telegram_visibility')
+        .in('user_id', ids);
+      // sql/065 (telegram_phone) not run yet: still show the username.
+      if (tgError && /telegram_phone/.test(tgError.message || '')) {
+        ({ data: tg } = await supabase
+          .from('student_private')
+          .select('user_id, telegram_username, telegram_chat_id, telegram_visibility')
+          .in('user_id', ids));
+      }
+      (tg || []).forEach(r => {
+        if (!r.telegram_chat_id) return;
+        const visible = ['teachers', 'friends'].includes(r.telegram_visibility);
+        telegram.set(r.user_id, { connected: true, username: visible ? r.telegram_username : null, phone: visible ? r.telegram_phone : null });
+      });
+    }
+
     res.json({
       success: true,
       data: {
-        students: students.map(s => publicUser(s, summaries.get(s.id))),
+        students: students.map(s => ({ ...publicUser(s, summaries.get(s.id)), telegram: telegram.get(s.id) || { connected: false, username: null, phone: null } })),
         pagination: { page, limit, total, total_pages: Math.ceil(total / limit) }
       }
     });
