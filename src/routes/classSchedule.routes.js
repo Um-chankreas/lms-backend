@@ -1,9 +1,14 @@
 const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
-const { authenticateToken, isTeacher } = require('../middleware/auth');
+const { authenticateToken, hasRole } = require('../middleware/auth');
 const { requireFeature } = require('../utils/permissions');
 const { v4: uuidv4 } = require('uuid');
+
+// Teachers manage the schedules of their own courses; admins and super admins
+// manage every course's (the "Schedule" page lists all courses for them).
+const isTeacher = hasRole('teacher', 'admin', 'super_admin');
+const isAdminRole = (role) => role === 'admin' || role === 'super_admin';
 
 // Recurring weekly schedule slots for a course's live classes (see
 // sql/039_class_schedules.sql). Distinct from live_classes: a schedule is a
@@ -39,17 +44,25 @@ function validateSchedulePayload({ days_of_week, start_time, end_time, timezone 
   return null;
 }
 
-async function loadOwnedCourse(courseId, teacherId) {
+async function loadOwnedCourse(courseId, user) {
   const { data: course } = await supabase
     .from('courses')
     .select('id, teacher_id, title')
     .eq('id', courseId)
     .maybeSingle();
   if (!course) return { error: { status: 404, message: 'Course not found' } };
-  if (course.teacher_id !== teacherId) {
+  if (!isAdminRole(user.role) && course.teacher_id !== user.userId) {
     return { error: { status: 403, message: 'You can only manage schedules for your own courses' } };
   }
   return { course };
+}
+
+/** Admins always; a teacher when they own the slot or the course it belongs to. */
+async function canManageSchedule(schedule, user) {
+  if (isAdminRole(user.role)) return true;
+  if (schedule.teacher_id === user.userId) return true;
+  const { data: course } = await supabase.from('courses').select('teacher_id').eq('id', schedule.course_id).maybeSingle();
+  return course?.teacher_id === user.userId;
 }
 
 const present = (row) => ({
@@ -96,11 +109,9 @@ router.get('/course/:courseId', authenticateToken, async (req, res) => {
  */
 router.get('/mine', authenticateToken, isTeacher, async (req, res) => {
   try {
-    const { data: schedules, error } = await supabase
-      .from('class_schedules')
-      .select('*')
-      .eq('teacher_id', req.user.userId)
-      .eq('is_active', true);
+    let query = supabase.from('class_schedules').select('*').eq('is_active', true);
+    if (!isAdminRole(req.user.role)) query = query.eq('teacher_id', req.user.userId);
+    const { data: schedules, error } = await query;
     if (error) throw error;
 
     res.json({ success: true, data: { schedules: (schedules || []).map(present) } });
@@ -122,7 +133,7 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
     const validationError = validateSchedulePayload({ days_of_week, start_time, end_time, timezone });
     if (validationError) return res.status(400).json({ success: false, error: validationError });
 
-    const { error: ownError } = await loadOwnedCourse(course_id, req.user.userId);
+    const { course, error: ownError } = await loadOwnedCourse(course_id, req.user);
     if (ownError) return res.status(ownError.status).json({ success: false, error: ownError.message });
 
     const { data: created, error } = await supabase
@@ -130,7 +141,7 @@ router.post('/', authenticateToken, isTeacher, async (req, res) => {
       .insert({
         id: uuidv4(),
         course_id,
-        teacher_id: req.user.userId,
+        teacher_id: course.teacher_id,   // the course's teacher, even when an admin sets it up
         days_of_week,
         start_time,
         end_time,
@@ -161,7 +172,7 @@ router.put('/:id', authenticateToken, isTeacher, async (req, res) => {
       .eq('id', id)
       .maybeSingle();
     if (!existing) return res.status(404).json({ success: false, error: 'Schedule not found' });
-    if (existing.teacher_id !== req.user.userId) {
+    if (!(await canManageSchedule(existing, req.user))) {
       return res.status(403).json({ success: false, error: 'You do not own this schedule' });
     }
 
@@ -200,11 +211,11 @@ router.delete('/:id', authenticateToken, isTeacher, async (req, res) => {
     const { id } = req.params;
     const { data: existing } = await supabase
       .from('class_schedules')
-      .select('id, teacher_id')
+      .select('id, teacher_id, course_id')
       .eq('id', id)
       .maybeSingle();
     if (!existing) return res.status(404).json({ success: false, error: 'Schedule not found' });
-    if (existing.teacher_id !== req.user.userId) {
+    if (!(await canManageSchedule(existing, req.user))) {
       return res.status(403).json({ success: false, error: 'You do not own this schedule' });
     }
 

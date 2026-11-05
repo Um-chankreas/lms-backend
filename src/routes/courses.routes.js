@@ -94,7 +94,7 @@ router.get('/', optionalAuth, async (req, res) => {
   try {
     let query = supabase
       .from('courses')
-      .select('*, course_enrollments(count), students:course_enrollments(enrolled_at, users(id, name, avatar_url))')
+      .select('*, course_enrollments(count), lessons(count), students:course_enrollments(enrolled_at, users(id, name, avatar_url))')
       .order('enrolled_at', { ascending: true, referencedTable: 'students' })
       .limit(2, { referencedTable: 'students' });
 
@@ -112,9 +112,10 @@ router.get('/', optionalAuth, async (req, res) => {
 
     // Flatten the embedded aggregates: a total student_count plus a short
     // preview list of up to 2 students.
-    const coursesWithCounts = (courses || []).map(({ course_enrollments, students, ...course }) => ({
+    const coursesWithCounts = (courses || []).map(({ course_enrollments, lessons, students, ...course }) => ({
       ...course,
       student_count: course_enrollments?.[0]?.count || 0,
+      lessons_count: lessons?.[0]?.count || 0,
       students: (students || []).map(s => s.users).filter(Boolean)
     }));
 
@@ -128,6 +129,119 @@ router.get('/', optionalAuth, async (req, res) => {
       success: false,
       error: 'Failed to fetch courses: ' + error.message
     });
+  }
+});
+
+/**
+ * GET /api/courses/overview
+ * What the "My Classes" side column shows a teacher (admins see every class):
+ *   schedule   what happens in the next 7 days (Cambodia time): recurring live
+ *              slots, one-off scheduled live classes and assignment deadlines
+ *   attention  things worth a look: assignments due today, practice questions
+ *              with no explanation, classes with no lessons yet
+ * Must stay above `/:id`, or "overview" would be read as a course id.
+ */
+const TZ = 'Asia/Phnom_Penh';
+const ymdOf = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(d);
+// Cambodia has no daylight saving, so the offset is always +07:00.
+const instantOf = (ymd, hhmm) => new Date(`${ymd}T${String(hhmm).slice(0, 5)}:00+07:00`);
+const dowOf = (ymd) => new Date(`${ymd}T12:00:00+07:00`).getUTCDay();
+const timeOf = (d) => new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(d);
+
+router.get('/overview', authenticateToken, hasRole('teacher', 'admin', 'super_admin'), async (req, res) => {
+  try {
+    const isAdminUser = ['admin', 'super_admin'].includes(req.user.role);
+    let courseQuery = supabase.from('courses').select('id, title, category, teacher_id, course_enrollments(count), lessons(count)');
+    if (!isAdminUser) courseQuery = courseQuery.eq('teacher_id', req.user.userId);
+    const { data: courseRows, error: courseError } = await courseQuery;
+    if (courseError) throw courseError;
+
+    const courses = (courseRows || []).map(c => ({
+      id: c.id, title: c.title, category: c.category,
+      students: c.course_enrollments?.[0]?.count || 0,
+      lessons: c.lessons?.[0]?.count || 0,
+    }));
+    const courseById = Object.fromEntries(courses.map(c => [c.id, c]));
+    const courseIds = courses.map(c => c.id);
+    if (courseIds.length === 0) return res.json({ success: true, data: { schedule: [], attention: [] } });
+
+    const now = new Date();
+    const today = ymdOf(now);
+    const days = Array.from({ length: 7 }, (_, i) => ymdOf(new Date(now.getTime() + i * 24 * 3600e3)));
+    const windowEnd = new Date(now.getTime() + 7 * 24 * 3600e3);
+
+    const [{ data: slots }, { data: liveRows }, { data: assignmentRows }] = await Promise.all([
+      supabase.from('class_schedules').select('id, course_id, days_of_week, start_time, end_time').eq('is_active', true).in('course_id', courseIds),
+      supabase.from('live_classes').select('id, course_id, title, scheduled_at').eq('status', 'scheduled').in('course_id', courseIds)
+        .gte('scheduled_at', new Date(now.getTime() - 30 * 60e3).toISOString()).lte('scheduled_at', windowEnd.toISOString()),
+      supabase.from('assignments').select('id, course_id, title, due_date, closed_at').eq('status', 'published').in('course_id', courseIds)
+        .not('due_date', 'is', null).gte('due_date', now.toISOString()).lte('due_date', windowEnd.toISOString()),
+    ]);
+
+    const items = [];
+    for (const ymd of days) {
+      for (const slot of slots || []) {
+        if (!(slot.days_of_week || []).includes(dowOf(ymd))) continue;
+        const start = instantOf(ymd, slot.start_time);
+        const end = instantOf(ymd, slot.end_time);
+        if (end < now) continue; // already over today
+        const course = courseById[slot.course_id];
+        items.push({ kind: 'live', id: `${slot.id}:${ymd}`, at: start.toISOString(), time: timeOf(start), course_id: slot.course_id, title: course?.title || 'Live class', category: course?.category || null, can_start: Math.abs(start - now) < 60 * 60e3 || (start <= now && end >= now) });
+      }
+    }
+    for (const lc of liveRows || []) {
+      const start = new Date(lc.scheduled_at);
+      items.push({ kind: 'live', id: lc.id, live_class_id: lc.id, at: start.toISOString(), time: timeOf(start), course_id: lc.course_id, title: lc.title, category: courseById[lc.course_id]?.category || null, can_start: Math.abs(start - now) < 60 * 60e3 });
+    }
+    for (const a of (assignmentRows || []).filter(a => !a.closed_at)) {
+      const due = new Date(a.due_date);
+      items.push({ kind: 'assignment', id: a.id, at: due.toISOString(), time: timeOf(due), course_id: a.course_id, title: a.title, category: courseById[a.course_id]?.category || null });
+    }
+    items.sort((x, y) => new Date(x.at) - new Date(y.at));
+    const schedule = items.map(i => ({ ...i, date: ymdOf(new Date(i.at)) }));
+
+    // ── needs attention ──
+    const attention = [];
+
+    // 1. assignments due today
+    const dueToday = (assignmentRows || []).filter(a => !a.closed_at && ymdOf(new Date(a.due_date)) === today);
+    if (dueToday.length) {
+      const { data: subs } = await supabase.from('assignment_submissions').select('assignment_id').in('assignment_id', dueToday.map(a => a.id));
+      const submittedBy = {};
+      (subs || []).forEach(s => { submittedBy[s.assignment_id] = (submittedBy[s.assignment_id] || 0) + 1; });
+      for (const a of dueToday) {
+        attention.push({ type: 'assignment_due', tone: 'amber', title: `${a.title} due today ${timeOf(new Date(a.due_date))}`, detail: `${submittedBy[a.id] || 0} of ${courseById[a.course_id]?.students || 0} submitted`, course_id: a.course_id, assignment_id: a.id });
+      }
+    }
+
+    // 2. practice questions with no explanation, grouped by unit
+    const { data: quizRows } = await supabase.from('quizzes').select('id, course_id, lesson_id, unit_id').in('course_id', courseIds).not('unit_id', 'is', null);
+    if (quizRows?.length) {
+      const quizById = Object.fromEntries(quizRows.map(q => [q.id, q]));
+      const { data: bare } = await supabase.from('quiz_questions').select('quiz_id').in('quiz_id', quizRows.map(q => q.id)).or('explanation.is.null,explanation.eq.');
+      const perUnit = {};
+      (bare || []).forEach(r => { const q = quizById[r.quiz_id]; if (q) perUnit[q.unit_id] = (perUnit[q.unit_id] || 0) + 1; });
+      const worst = Object.entries(perUnit).sort((a, b) => b[1] - a[1]).slice(0, 2);
+      if (worst.length) {
+        const unitIds = worst.map(([id]) => id);
+        const { data: unitRows } = await supabase.from('lesson_units').select('id, title, lesson_id, lessons(title)').in('id', unitIds);
+        const unitById = Object.fromEntries((unitRows || []).map(u => [u.id, u]));
+        for (const [unitId, count] of worst) {
+          const u = unitById[unitId];
+          attention.push({ type: 'missing_explanations', tone: 'slate', title: `${count} question${count === 1 ? '' : 's'} without explanation`, detail: [u?.lessons?.title, u?.title].filter(Boolean).join(' · '), lesson_id: u?.lesson_id, unit_id: unitId });
+        }
+      }
+    }
+
+    // 3. classes with no lessons
+    for (const c of courses.filter(c => c.lessons === 0)) {
+      attention.push({ type: 'no_lessons', tone: 'slate', title: `${c.title} has no lessons`, detail: c.students > 0 ? `${c.students} student${c.students === 1 ? ' is' : 's are'} waiting` : 'Add a lesson to get started', course_id: c.id });
+    }
+
+    res.json({ success: true, data: { schedule, attention, today } });
+  } catch (error) {
+    console.error('Courses overview error:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch overview: ' + error.message });
   }
 });
 

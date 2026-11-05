@@ -16,6 +16,14 @@ const fontkit = require('@pdf-lib/fontkit');
 const STATUS_LABEL = {
   on_track: 'On track', behind: 'Behind', inactive: 'Inactive', not_started: 'Not started', completed: 'Completed',
 };
+// 90 -> "1 h 30 min", 120 -> "2 h", 45 -> "45 min".
+const hm = (min) => {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  if (!h) return `${m} min`;
+  return m ? `${h} h ${m} min` : `${h} h`;
+};
+
 const dateOnly = (v) => (v ? new Date(v).toISOString().slice(0, 10) : '');
 
 // A file/sheet-safe version of a class title (keeps Khmer and other Unicode).
@@ -41,12 +49,14 @@ const csvCell = (v) => {
 };
 
 function buildCsv(rows, { includeContacts = false } = {}) {
-  const head = ['Student', ...(includeContacts ? ['Email', 'Phone'] : []), 'Class', 'Current lesson', 'Progress %', 'Avg quiz %', 'Quizzes taken', 'Last active', 'Days inactive', 'Status'];
+  const head = ['Student', ...(includeContacts ? ['Email', 'Phone'] : []), 'Class', 'Current lesson', 'Progress %', 'Avg quiz %', 'Quizzes taken', 'Live time (min)', 'Class live time (min)', 'Live classes joined', 'Live classes held', 'Registered', 'Last active', 'Days inactive', 'Status'];
   const lines = [head.map(csvCell).join(',')];
   rows.forEach(r => {
     lines.push([
       r.name, ...(includeContacts ? [r.email, r.phone] : []), r.course_title, lessonLabel(r), r.progress, r.avg_quiz,
-      `${r.quizzes_attempted}/${r.quizzes_total}`, dateOnly(r.last_active), r.days_inactive, STATUS_LABEL[r.status] || r.status,
+      `${r.quizzes_attempted}/${r.quizzes_total}`,
+      r.live_eligible ? r.live_minutes : '', r.live_eligible ? r.live_held_minutes : '', r.live_eligible ? r.live_attended : '', r.live_eligible ?? '', dateOnly(r.registered_at),
+      dateOnly(r.last_active), r.days_inactive, STATUS_LABEL[r.status] || r.status,
     ].map(csvCell).join(','));
   });
   // BOM so Excel opens the UTF-8 (Khmer) text correctly.
@@ -145,6 +155,9 @@ async function buildPdf(groups, { title = 'Student performance', description = '
     { key: 'progress', label: 'Progress', w: 60, right: true },
     { key: 'avg', label: 'Avg quiz', w: 58, right: true },
     { key: 'quizzes', label: 'Quizzes', w: 58, right: true },
+    { key: 'liveTime', label: 'Live time / class total', w: 92, right: true },
+    { key: 'liveJoined', label: 'Joined live', w: 56, right: true },
+    { key: 'registered', label: 'Registered', w: 64 },
     { key: 'last', label: 'Last active', w: 80 },
     { key: 'status', label: 'Status', w: 70 },
   ];
@@ -164,6 +177,9 @@ async function buildPdf(groups, { title = 'Student performance', description = '
       case 'progress': return `${r.progress}%`;
       case 'avg': return r.avg_quiz != null ? `${r.avg_quiz}%` : '—';
       case 'quizzes': return `${r.quizzes_attempted}/${r.quizzes_total}`;
+      case 'liveTime': return !r.live_eligible ? '—' : `${r.live_attended ? hm(r.live_minutes) : 'Never'} / ${Math.round(r.live_held_minutes / 6) / 10} h`;
+      case 'liveJoined': return r.live_eligible ? `${r.live_attended}` : '—';
+      case 'registered': return dateOnly(r.registered_at) || '—';
       case 'last': return r.days_inactive == null ? '—' : r.days_inactive === 0 ? 'Today' : r.days_inactive === 1 ? 'Yesterday' : `${r.days_inactive} days ago`;
       case 'status': return STATUS_LABEL[r.status] || r.status;
       default: return '';

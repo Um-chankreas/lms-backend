@@ -8,6 +8,8 @@ const { isSubscriptionActive } = require('../utils/access');
 const { buildStudentTableWorkbook } = require('../utils/dashboardReport');
 const { buildCsv, buildCsvZip, buildPdf, safeName } = require('../utils/studentTableExport');
 const { courseProgress, fetchAllRows, fetchAllIn, toMs, toIso } = require('../utils/studentProgress');
+const { buildLiveReport } = require('../utils/liveReport');
+const { createNotifications, userPrefs } = require('../utils/notifications');
 
 // Student progress insights for the web portal (admins + teachers). Teachers
 // only ever see their own courses: a class roster for a course they own, and a
@@ -144,7 +146,7 @@ router.use(authenticateToken, isStaff);
  * The class roster for one course (see GET /courses/:courseId/students):
  * { course, lessons, summary, students }. Shared with GET /overview.
  */
-async function buildRoster(course) {
+async function buildRoster(course, opts) {
   const courseId = course.id;
 
   const enrollments = await fetchAllRows(() => supabase
@@ -154,12 +156,16 @@ async function buildRoster(course) {
     .order('id', { ascending: true }));
   const enrolledAt = earliestEnrollment(enrollments, 'student_id');
 
-  const users = await fetchAllIn([...enrolledAt.keys()], chunk => supabase
-    .from('users')
-    .select('id, name, email, phone, avatar_url, is_active, xp')
-    .in('id', chunk)
-    .eq('role', 'student')
-    .order('id', { ascending: true }));
+  // Test / team accounts stay out of the roster unless asked for.
+  const includeTest = !!(opts && opts.includeTest === true);
+  const users = await fetchAllIn([...enrolledAt.keys()], chunk => {
+    const q = supabase
+      .from('users')
+      .select('id, name, email, phone, avatar_url, is_active, xp, created_at')
+      .in('id', chunk)
+      .eq('role', 'student');
+    return (includeTest ? q : q.eq('is_test', false)).order('id', { ascending: true });
+  });
   const studentIds = users.map(u => u.id);
   const studentSet = new Set(studentIds);
 
@@ -257,7 +263,8 @@ async function buildRoster(course) {
         email: u.email || null,
         phone: u.phone || null,
         avatar_url: u.avatar_url || null,
-        is_active: u.is_active !== false
+        is_active: u.is_active !== false,
+        created_at: toIso(u.created_at)
       },
       enrolled_at: toIso(enrolledAt.get(u.id)),
       progress: progressSummary,
@@ -348,7 +355,7 @@ router.get('/courses/:courseId/students', async (req, res) => {
       return res.status(403).json({ success: false, error: 'You can only view students in your own courses' });
     }
 
-    const roster = await buildRoster(course);
+    const roster = await buildRoster(course, { includeTest: req.query.include_test === '1' });
     res.json({ success: true, data: roster });
   } catch (error) {
     console.error('Insights course roster error:', error);
@@ -522,6 +529,7 @@ function rosterRows(rosters) {
     phone: st.student.phone,
     avatar_url: st.student.avatar_url,
     is_active: st.student.is_active,
+    registered_at: st.student.created_at || null,
     course_id: r.course.id,
     course_title: r.course.title || '',
     progress: st.progress.percentage,
@@ -540,7 +548,39 @@ function rosterRows(rosters) {
   return rows;
 }
 
-const loadTableRows = async (req, courseFilter, fresh) => (await loadRosters(req, courseFilter, fresh)).rows;
+// Live-class time per student per class, merged into every table row. Cached
+// for a minute like the rosters; a failure leaves the live columns empty
+// instead of breaking the whole table.
+const liveTableCache = new Map();
+async function loadLiveByStudentCourse(req, courseFilter, fresh) {
+  const key = `${req.staffRole}:${req.user.userId}:${courseFilter || 'all'}`;
+  const hit = liveTableCache.get(key);
+  if (hit && !fresh && Date.now() - hit.at < TABLE_TTL_MS) return hit.data;
+  const report = buildLiveReport(await loadLiveReportInput(req));
+  const map = new Map();
+  report.students.forEach(s => Object.entries(s.by_course).forEach(([courseId, v]) => map.set(`${s.student_id}|${courseId}`, v)));
+  liveTableCache.set(key, { at: Date.now(), data: map });
+  return map;
+}
+
+const loadTableRows = async (req, courseFilter, fresh) => {
+  const [{ rows }, live] = await Promise.all([
+    loadRosters(req, courseFilter, fresh),
+    loadLiveByStudentCourse(req, courseFilter, fresh).catch((e) => { console.warn('live table data failed:', e.message); return new Map(); }),
+  ]);
+  // New objects, so the cached roster rows are never mutated.
+  return rows.map(r => {
+    const v = live.get(`${r.student_id}|${r.course_id}`);
+    return {
+      ...r,
+      live_minutes: v ? v.minutes : null,
+      live_attended: v ? v.attended : null,
+      live_eligible: v ? v.eligible : null,
+      live_last: v ? v.last_attended : null,
+      live_held_minutes: v ? v.held_minutes : null,
+    };
+  });
+};
 
 // Filter + sort the cached rows according to the query string.
 function queryTable(rows, query) {
@@ -548,6 +588,10 @@ function queryTable(rows, query) {
   const status = TABLE_STATUSES.includes(query.status) ? query.status : null;
   let out = rows;
   if (status) out = out.filter(r => r.status === status);
+  // ?live=never: students who attended none of the live classes they could have joined;
+  // ?live=joined: students who attended at least one.
+  if (query.live === 'never') out = out.filter(r => r.live_eligible > 0 && r.live_attended === 0);
+  if (query.live === 'joined') out = out.filter(r => r.live_attended > 0);
   // Last-active date range (UTC days, inclusive). Students who were never
   // active have no date, so any date range leaves them out.
   const ymd = /^\d{4}-\d{2}-\d{2}$/;
@@ -576,6 +620,9 @@ function queryTable(rows, query) {
     // Smaller days_inactive = more recent; never active sorts as oldest.
     last_active: (a, b) => (b.days_inactive ?? Infinity) - (a.days_inactive ?? Infinity),
     status: (a, b) => TABLE_STATUSES.indexOf(a.status) - TABLE_STATUSES.indexOf(b.status),
+    live_time: (a, b) => (a.live_minutes ?? -1) - (b.live_minutes ?? -1),
+    live_classes: (a, b) => (a.live_attended ?? -1) - (b.live_attended ?? -1) || (a.live_minutes ?? -1) - (b.live_minutes ?? -1),
+    registered: (a, b) => String(a.registered_at || '').localeCompare(String(b.registered_at || '')),
   };
   const key = sorts[query.sort] ? query.sort : 'progress';
   const dir = query.dir === 'asc' || (!query.dir && key === 'name') ? 1 : -1;
@@ -606,6 +653,7 @@ router.get('/students-table', async (req, res) => {
     const base = queryTable(all, noStatus);
     const status_counts = Object.fromEntries(TABLE_STATUSES.map(s => [s, 0]));
     base.forEach(r => { status_counts[r.status] += 1; });
+    const never_joined_live = queryTable(all, { ...noStatus, live: '' }).filter(r => r.live_eligible > 0 && r.live_attended === 0).length;
 
     const filtered = queryTable(all, req.query);
     const limit = Math.min(TABLE_MAX_LIMIT, Math.max(1, parseInt(req.query.limit, 10) || 10));
@@ -621,6 +669,7 @@ router.get('/students-table', async (req, res) => {
         rows,
         pagination: { page, limit, total, total_pages: totalPages },
         status_counts,
+        never_joined_live,
         generated_at: new Date().toISOString(),
       },
     });
@@ -750,6 +799,99 @@ function scoreSpread(people) {
 
 const pct = (num, den) => (den ? Math.round((num / den) * 100) : null);
 const ymdOf = (ms) => new Date(ms).toISOString().slice(0, 10);
+
+/** Rows the live-class report is built from, for the classes this caller may see. */
+async function loadLiveReportInput(req) {
+  const courseFilter = courseFilterOf(req);
+  const courses = await fetchAllRows(() => {
+    let q = supabase.from('courses').select('id, title, category').order('id', { ascending: true });
+    if (req.staffRole !== 'admin') q = q.eq('teacher_id', req.user.userId);
+    if (courseFilter) q = q.eq('id', courseFilter);
+    return q;
+  });
+  const courseIds = courses.map(c => c.id);
+  if (!courseIds.length) return { courses, enrollments: [], students: [], classes: [], participants: [] };
+
+  const [enrollments, classes] = await Promise.all([
+    fetchAllIn(courseIds, chunk => supabase.from('course_enrollments')
+      .select('id, course_id, student_id, enrolled_at').in('course_id', chunk).order('id', { ascending: true })),
+    fetchAllIn(courseIds, chunk => supabase.from('live_classes')
+      .select('id, course_id, status, started_at, ended_at').in('course_id', chunk).order('id', { ascending: true })),
+  ]);
+  const [students, participants] = await Promise.all([
+    // Active, real students only — test / team accounts stay out of the numbers.
+    fetchAllIn(enrollments.map(e => e.student_id), chunk => supabase.from('users')
+      .select('id, name, avatar_url').in('id', chunk).eq('role', 'student').eq('is_active', true).eq('is_test', false)
+      .order('id', { ascending: true })),
+    fetchAllIn(classes.filter(c => c.started_at).map(c => c.id), chunk => supabase.from('live_class_participants')
+      .select('id, live_class_id, user_id, joined_at, left_at').eq('role', 'student').in('live_class_id', chunk)
+      .order('id', { ascending: true })),
+  ]);
+  return { courses, enrollments, students, classes, participants };
+}
+
+/**
+ * GET /api/insights/live-report?course_id=
+ * The dashboard's Live classes report: live hours against the goal, how many
+ * students are reached, and time spent in live classes per student.
+ */
+router.get('/live-report', async (req, res) => {
+  try {
+    const report = buildLiveReport(await loadLiveReportInput(req));
+    res.json({ success: true, data: report });
+  } catch (error) {
+    console.error('Insights live report error:', error);
+    res.status(500).json({ success: false, error: 'Failed to load the live class report: ' + error.message });
+  }
+});
+
+// Nudging the same group twice in a row is noise: one reminder per caller and
+// scope every few hours.
+const REMIND_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+const lastRemind = new Map();
+
+const NUDGE = {
+  en: { title: 'Join our live class 🎥', body: 'Live classes help you learn faster and you can ask your teacher questions. Join the next one — we would love to see you there!' },
+  km: { title: 'ចូលរួមថ្នាក់រៀនផ្ទាល់ 🎥', body: 'ថ្នាក់រៀនផ្ទាល់ជួយឱ្យអ្នករៀនបានលឿន ហើយអាចសួរលោកគ្រូអ្នកគ្រូបាន។ សូមចូលរួមថ្នាក់បន្ទាប់!' },
+};
+
+/**
+ * POST /api/insights/live-report/remind   body: { course_id? }
+ * Push a friendly nudge to every student who never attended a live class
+ * they could have joined.
+ */
+router.post('/live-report/remind', async (req, res) => {
+  try {
+    const scope = `${req.user.userId}:${courseFilterOf(req) || 'all'}`;
+    const last = lastRemind.get(scope);
+    if (last && Date.now() - last < REMIND_COOLDOWN_MS) {
+      const wait = Math.ceil((REMIND_COOLDOWN_MS - (Date.now() - last)) / 60000);
+      return res.status(429).json({ success: false, error: `You already sent this reminder recently. Try again in ${wait} minutes.`, retry_after_minutes: wait });
+    }
+
+    const report = buildLiveReport(await loadLiveReportInput(req));
+    const targets = report.students.filter(s => s.classes_eligible > 0 && s.classes_attended === 0).map(s => s.student_id);
+    if (!targets.length) return res.json({ success: true, data: { sent: 0, pending: 0 } });
+
+    const prefs = await userPrefs(targets);
+    const rows = targets
+      .filter(id => prefs.get(id)?.isActive)
+      .map(id => ({
+        user_id: id,
+        type: 'live_class_nudge',
+        title: NUDGE[prefs.get(id).language].title,
+        body: NUDGE[prefs.get(id).language].body,
+        data: { course_id: courseFilterOf(req) },
+        kind: 'class',
+      }));
+    const sent = await createNotifications(rows);
+    lastRemind.set(scope, Date.now());
+    res.json({ success: true, data: { sent, pending: targets.length } });
+  } catch (error) {
+    console.error('Insights live report remind error:', error);
+    res.status(500).json({ success: false, error: 'Failed to send the reminder: ' + error.message });
+  }
+});
 
 /**
  * GET /api/insights/learning-overview   (&course_id=<uuid>, &fresh=1)

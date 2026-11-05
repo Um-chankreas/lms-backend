@@ -45,6 +45,7 @@ const publicUser = (u, summary) => ({
   avatar_url: u.avatar_url || null,
   xp: u.xp || 0,
   is_active: u.is_active !== false,
+  is_test: u.is_test === true,
   ...(summary ? { subscription_summary: summary, is_paid: summary.active > 0 } : {}),
   created_at: u.created_at
 });
@@ -135,7 +136,7 @@ router.get('/students', async (req, res) => {
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
     const from = (page - 1) * limit;
 
-    const COLS = 'id, name, email, phone, avatar_url, xp, is_active, created_at';
+    const COLS = 'id, name, email, phone, avatar_url, xp, is_active, is_test, created_at';
     // id as a tiebreaker keeps paging stable across equal created_at values.
     const filtered = (select, opts) => {
       let q = supabase
@@ -145,6 +146,8 @@ router.get('/students', async (req, res) => {
         .order('created_at', { ascending: false })
         .order('id', { ascending: true });
       if (!includeInactive) q = q.eq('is_active', true);
+      if (req.query.hide_test === '1') q = q.eq('is_test', false);
+      if (req.query.only_test === '1') q = q.eq('is_test', true);
       if (search) {
         // Keep only characters safe inside a PostgREST or() filter expression.
         const esc = search.replace(/[^a-zA-Z0-9 @._+-]/g, '').trim();
@@ -343,6 +346,7 @@ router.patch('/students/:id', async (req, res) => {
     const updates = {};
     if (name !== undefined) updates.name = name;
     if (typeof req.body.is_active === 'boolean') updates.is_active = req.body.is_active;
+    if (typeof req.body.is_test === 'boolean') updates.is_test = req.body.is_test;
 
     if (email !== undefined) {
       if (email === null || email === '') {
@@ -919,8 +923,16 @@ async function buildAnalytics(req) {
   // `.in()` with an empty list isn't valid PostgREST, so a teacher with no
   // students filters on an id that can't exist and gets all-zero stats.
   const NONE = ['00000000-0000-0000-0000-000000000000'];
-  const byStudent = (q, col = 'student_id') =>
-    scopeStudentIds ? q.in(col, scopeStudentIds.length ? scopeStudentIds : NONE) : q;
+  // Test / team accounts are left out of the numbers unless ?include_test=1.
+  let testIds = [];
+  if (req.query.include_test !== '1') {
+    const { data: testers } = await supabase.from('users').select('id').eq('role', 'student').eq('is_test', true);
+    testIds = (testers || []).map(t => t.id);
+  }
+  const byStudent = (q, col = 'student_id') => {
+    const scoped = scopeStudentIds ? q.in(col, scopeStudentIds.length ? scopeStudentIds : NONE) : q;
+    return testIds.length ? scoped.not(col, 'in', `(${testIds.join(',')})`) : scoped;
+  };
   const byCourse = (q) =>
     scopeCourseIds ? q.in('course_id', scopeCourseIds.length ? scopeCourseIds : NONE) : q;
 
