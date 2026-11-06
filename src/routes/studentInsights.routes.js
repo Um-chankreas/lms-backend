@@ -164,7 +164,10 @@ async function buildRoster(course, opts) {
       .select('id, name, email, phone, avatar_url, is_active, xp, created_at')
       .in('id', chunk)
       .eq('role', 'student');
-    return (includeTest ? q : q.eq('is_test', false)).order('id', { ascending: true });
+    let query = includeTest ? q : q.eq('is_test', false);
+    // The class page also hides deactivated accounts (they are not really in the class).
+    if (opts && opts.excludeDeactivated === true) query = query.eq('is_active', true);
+    return query.order('id', { ascending: true });
   });
   const studentIds = users.map(u => u.id);
   const studentSet = new Set(studentIds);
@@ -355,7 +358,10 @@ router.get('/courses/:courseId/students', async (req, res) => {
       return res.status(403).json({ success: false, error: 'You can only view students in your own courses' });
     }
 
-    const roster = await buildRoster(course, { includeTest: req.query.include_test === '1' });
+    const roster = await buildRoster(course, {
+      includeTest: req.query.include_test === '1',
+      excludeDeactivated: req.query.include_deactivated !== '1',
+    });
     res.json({ success: true, data: roster });
   } catch (error) {
     console.error('Insights course roster error:', error);
