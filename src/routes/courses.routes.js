@@ -249,6 +249,70 @@ router.get('/overview', authenticateToken, hasRole('teacher', 'admin', 'super_ad
  * GET /api/courses/:id
  * Get course details with lessons
  */
+// Wrong-code lookups per user, so a class code (6 letters/digits) can't be guessed by hammering this.
+const codeMisses = new Map(); // userId -> { n, resetAt }
+const CODE_MISS_LIMIT = 15;
+const CODE_MISS_WINDOW_MS = 10 * 60 * 1000;
+
+/**
+ * GET /api/courses/by-code/:code
+ * What a class invite link (https://web.romduolscholars.com/open/join/<CODE>) shows before the
+ * student joins: the class, its teacher and size, and whether they are already in. Joining itself
+ * is the normal POST /api/courses/:id/enroll. Hidden (unpublished) classes can't be joined by code.
+ */
+router.get('/by-code/:code', authenticateToken, async (req, res) => {
+  try {
+    const code = String(req.params.code || '').trim();
+    if (!/^[A-Za-z0-9]{4,12}$/.test(code)) {
+      return res.status(404).json({ success: false, code: 'CODE_NOT_FOUND', error: 'Class code not found' });
+    }
+
+    const now = Date.now();
+    const miss = codeMisses.get(req.user.userId);
+    if (miss && miss.resetAt > now && miss.n >= CODE_MISS_LIMIT) {
+      return res.status(429).json({ success: false, error: 'Too many tries. Please wait a few minutes.' });
+    }
+
+    const { data: course, error } = await supabase
+      .from('courses')
+      .select('id, title, category, color, icon, cover_image, code, is_published, teacher:users!courses_teacher_id_fkey(name), course_enrollments(count)')
+      .ilike('code', code)
+      .maybeSingle();
+    if (error) throw error;
+
+    if (!course || course.is_published === false) {
+      const m = miss && miss.resetAt > now ? miss : { n: 0, resetAt: now + CODE_MISS_WINDOW_MS };
+      m.n += 1;
+      codeMisses.set(req.user.userId, m);
+      return res.status(404).json({ success: false, code: 'CODE_NOT_FOUND', error: 'Class code not found' });
+    }
+
+    const { data: mine } = await supabase
+      .from('course_enrollments').select('id')
+      .eq('course_id', course.id).eq('student_id', req.user.userId).maybeSingle();
+
+    res.json({
+      success: true,
+      data: {
+        course: {
+          id: course.id,
+          title: course.title,
+          category: course.category,
+          color: course.color,
+          icon: course.icon,
+          cover_image: course.cover_image,
+          teacher_name: course.teacher?.name || null,
+          student_count: course.course_enrollments?.[0]?.count || 0,
+          already_enrolled: !!mine
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Course by code error:', error);
+    res.status(500).json({ success: false, error: 'Failed to look up the class code' });
+  }
+});
+
 router.get('/:id', optionalAuth, async (req, res) => {
   try {
     const { id } = req.params;
