@@ -10,6 +10,7 @@ const { buildCsv, buildCsvZip, buildPdf, safeName } = require('../utils/studentT
 const { courseProgress, fetchAllRows, fetchAllIn, toMs, toIso } = require('../utils/studentProgress');
 const { buildLiveReport } = require('../utils/liveReport');
 const { createNotifications, userPrefs } = require('../utils/notifications');
+const tg = require('../utils/telegram');
 
 // Student progress insights for the web portal (admins + teachers). Teachers
 // only ever see their own courses: a class roster for a course they own, and a
@@ -576,11 +577,21 @@ const loadTableRows = async (req, courseFilter, fresh) => {
     loadRosters(req, courseFilter, fresh),
     loadLiveByStudentCourse(req, courseFilter, fresh).catch((e) => { console.warn('live table data failed:', e.message); return new Map(); }),
   ]);
+  // Which students a message can reach on Telegram (linked, reminders on, bot not blocked).
+  let telegramIds = new Set();
+  try {
+    const ids = [...new Set(rows.map(r => r.student_id))];
+    const reachable = [];
+    for (let i = 0; i < ids.length; i += 150) reachable.push(...await tg.reachableStudents(ids.slice(i, i + 150)));
+    telegramIds = new Set(reachable.map(x => x.user_id));
+  } catch (e) { console.warn('telegram flags failed:', e.message); }
+
   // New objects, so the cached roster rows are never mutated.
   return rows.map(r => {
     const v = live.get(`${r.student_id}|${r.course_id}`);
     return {
       ...r,
+      has_telegram: telegramIds.has(r.student_id),
       live_minutes: v ? v.minutes : null,
       live_attended: v ? v.attended : null,
       live_eligible: v ? v.eligible : null,
@@ -1502,6 +1513,115 @@ router.get('/students/:studentId', async (req, res) => {
   } catch (error) {
     console.error('Insights student profile error:', error);
     res.status(500).json({ success: false, error: 'Failed to load student profile: ' + error.message });
+  }
+});
+
+// ── Messaging students ─────────────────────────────────────────────────────
+
+const PP_OFFSET = '+07:00'; // Cambodia has no daylight saving
+const ppDay = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Phnom_Penh' }).format(d);
+
+/** Course ids the viewer may message students in (admin: every non-test class). */
+async function messageableCourseIds(req) {
+  let q = supabase.from('courses').select('id, title, teacher_id').eq('is_test', false);
+  if (req.staffRole !== 'admin') q = q.eq('teacher_id', req.user.userId);
+  const { data } = await q;
+  return data || [];
+}
+
+/**
+ * GET /api/insights/live-missed-today
+ * The latest live class held today (Cambodia time) in the viewer's classes and
+ * the enrolled students who never joined it, with how each can be reached.
+ * -> { live_class: {...}|null, missed: [{ student_id, name, avatar_url, channel: 'telegram'|'app' }],
+ *      telegram: n, app: n }
+ */
+router.get('/live-missed-today', async (req, res) => {
+  try {
+    const courses = await messageableCourseIds(req);
+    const courseIds = courses.map(c => c.id);
+    const empty = { live_class: null, missed: [], telegram: 0, app: 0 };
+    if (courseIds.length === 0) return res.json({ success: true, data: empty });
+
+    const day = ppDay(new Date());
+    const from = new Date(`${day}T00:00:00${PP_OFFSET}`);
+    const to = new Date(from.getTime() + DAY_MS);
+    const { data: classes } = await supabase
+      .from('live_classes')
+      .select('id, title, course_id, status, started_at, scheduled_at')
+      .in('course_id', courseIds)
+      .in('status', ['completed', 'active'])
+      .gte('started_at', from.toISOString()).lt('started_at', to.toISOString())
+      .order('started_at', { ascending: false });
+    const lc = (classes || [])[0];
+    if (!lc) return res.json({ success: true, data: empty });
+
+    const [{ data: enrolled }, { data: joined }] = await Promise.all([
+      supabase.from('course_enrollments').select('student_id').eq('course_id', lc.course_id),
+      supabase.from('live_class_participants').select('user_id').eq('live_class_id', lc.id).eq('role', 'student'),
+    ]);
+    const joinedSet = new Set((joined || []).map(j => j.user_id));
+    const candidateIds = [...new Set((enrolled || []).map(e => e.student_id))].filter(id => id && !joinedSet.has(id));
+    const users = await fetchAllIn(candidateIds, chunk => supabase
+      .from('users').select('id, name, avatar_url').in('id', chunk)
+      .eq('role', 'student').eq('is_active', true).eq('is_test', false));
+    const reachable = new Set((await tg.reachableStudents(users.map(u => u.id))).map(x => x.user_id));
+
+    const missed = users.map(u => ({ student_id: u.id, name: u.name || '', avatar_url: u.avatar_url || null, channel: reachable.has(u.id) ? 'telegram' : 'app' }));
+    const course = courses.find(c => c.id === lc.course_id);
+    res.json({
+      success: true,
+      data: {
+        live_class: { id: lc.id, title: lc.title, course_id: lc.course_id, course_title: course?.title || '', at: lc.started_at || lc.scheduled_at, status: lc.status },
+        missed,
+        telegram: missed.filter(m => m.channel === 'telegram').length,
+        app: missed.filter(m => m.channel === 'app').length,
+      },
+    });
+  } catch (error) {
+    console.error('Insights live-missed-today error:', error);
+    res.status(500).json({ success: false, error: 'Failed to load who missed the live class: ' + error.message });
+  }
+});
+
+/**
+ * POST /api/insights/message-students   { student_ids: [uuid], message: string }
+ * Sends the same message to each student: on Telegram when they have linked it,
+ * otherwise as an in-app notification. Teachers can only reach students in their
+ * own classes. -> { telegram, app, skipped }
+ */
+router.post('/message-students', async (req, res) => {
+  try {
+    const message = String(req.body?.message || '').trim().slice(0, 500);
+    const ids = [...new Set((Array.isArray(req.body?.student_ids) ? req.body.student_ids : []).filter(id => UUID_REGEX.test(String(id))))];
+    if (!message) return res.status(400).json({ success: false, error: 'Write a message first' });
+    if (ids.length === 0) return res.status(400).json({ success: false, error: 'Choose at least one student' });
+    if (ids.length > 300) return res.status(400).json({ success: false, error: 'Too many students at once (max 300)' });
+
+    // Only students in classes the sender is allowed to message.
+    const courses = await messageableCourseIds(req);
+    const courseIds = courses.map(c => c.id);
+    const enrollments = courseIds.length
+      ? await fetchAllIn(ids, chunk => supabase.from('course_enrollments').select('student_id').in('student_id', chunk).in('course_id', courseIds))
+      : [];
+    const allowedSet = new Set(enrollments.map(e => e.student_id));
+    const allowed = ids.filter(id => allowedSet.has(id));
+    const active = await fetchAllIn(allowed, chunk => supabase.from('users').select('id').in('id', chunk).eq('role', 'student').eq('is_active', true));
+    const targets = active.map(u => u.id);
+
+    const reachable = await tg.reachableStudents(targets);
+    const delivered = new Set(await tg.sendToStudents(reachable, () => ({ text: `📢 ${tg.escapeHtml(message)}` })));
+    // Everyone Telegram did not reach (not linked, blocked, or a failed send) gets an app notification.
+    const fallback = targets.filter(id => !delivered.has(id));
+    const appCount = await createNotifications(fallback.map(id => ({
+      user_id: id, type: 'teacher_message', title: '📢 Message from your teacher', body: message,
+      data: { from: req.user.userId }, kind: 'class',
+    })));
+
+    res.json({ success: true, data: { telegram: delivered.size, app: appCount, skipped: ids.length - targets.length } });
+  } catch (error) {
+    console.error('Insights message-students error:', error);
+    res.status(500).json({ success: false, error: 'Failed to send the message: ' + error.message });
   }
 });
 
