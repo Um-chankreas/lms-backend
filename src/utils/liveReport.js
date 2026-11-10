@@ -17,9 +17,31 @@ const toIso = (ts) => { const ms = toMs(ts); return ms == null ? null : new Date
 const MIN = 60 * 1000;
 const ATTEND_MINUTES = 15;        // a student "attended" a class after this long in it
 const MIN_CLASS_MINUTES = 5;      // shorter sessions are accidental starts, not classes
+const GRACE_MINUTES = Number(process.env.LIVE_SCHEDULE_GRACE_MIN) || 60;  // a class may start/run this long outside its scheduled time and still count
+const PP_MS = 7 * 60 * MIN;       // Cambodia is UTC+7, no daylight saving
 const GOAL_HOURS = Number(process.env.LIVE_HOURS_GOAL) || 100;
 const REGULAR = 0.75;             // joins at least this share of the classes they could
 const SOMETIMES = 0.4;
+
+/**
+ * Time a student was in a session, as first join to last leave within each
+ * class of it. The join/leave records are often cut short (a dropped
+ * connection closes the record while the student is still watching and nothing
+ * reopens it), so adding up only the recorded stretches badly under-counts
+ * people who were there. Intervals are [from, to, classId].
+ */
+function presenceMinutes(intervals) {
+  const byClass = new Map();
+  for (const [a, b, classId] of intervals) {
+    if (b <= a) continue;
+    const cur = byClass.get(classId);
+    if (!cur) byClass.set(classId, [a, b]);
+    else { cur[0] = Math.min(cur[0], a); cur[1] = Math.max(cur[1], b); }
+  }
+  let total = 0;
+  byClass.forEach(([a, b]) => { total += b - a; });
+  return total / MIN;
+}
 
 /** Total minutes covered by [start, end] intervals, overlaps counted once. */
 function unionMinutes(intervals) {
@@ -40,6 +62,22 @@ function unionMinutes(intervals) {
   return total / MIN;
 }
 
+
+/**
+ * Scheduled windows for a course on the Cambodia calendar day of `ms`:
+ * [{ from, to }] in epoch ms, from the course's active schedules.
+ */
+function windowsOn(schedules, ms) {
+  const local = new Date(ms + PP_MS);
+  const dayStart = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()) - PP_MS;
+  const weekday = local.getUTCDay();   // 0 = Sunday, like class_schedules.days_of_week
+  const at = (t) => { const [h, m] = String(t).split(':').map(Number); return dayStart + ((h || 0) * 60 + (m || 0)) * MIN; };
+  return schedules
+    .filter(sc => (sc.days_of_week || []).includes(weekday))
+    .map(sc => ({ from: at(sc.start_time), to: at(sc.end_time) }));
+}
+const dayKeyPP = (ms) => new Date(ms + PP_MS).toISOString().slice(0, 10);
+
 const round1 = (n) => Math.round(n * 10) / 10;
 const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
 
@@ -49,35 +87,69 @@ const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
  * students:     [{ id, name, avatar_url }]   (active, non-test)
  * classes:      [{ id, course_id, status, started_at, ended_at }]
  * participants: [{ live_class_id, user_id, joined_at, left_at }]   (students only)
+ * schedules:    [{ course_id, days_of_week, start_time, end_time }]   (active class schedules)
+ *
+ * What counts as "a live class": one session per course per Cambodia day.
+ *  - Several classes the same day (the class dropped and the teacher started a
+ *    new one) are ONE session; a student's time adds up across all of them.
+ *  - When the course has a schedule, a session only counts if it overlaps a
+ *    scheduled window (plus/minus GRACE_MINUTES). Test classes outside the
+ *    schedule, or on days with no class, are ignored. No schedule: every
+ *    class of 5+ minutes counts, still merged per day.
  */
-function buildLiveReport({ courses, enrollments, students, classes, participants, now = Date.now(), goalHours = GOAL_HOURS }) {
+function buildLiveReport({ courses, enrollments, students, classes, participants, schedules = [], now = Date.now(), goalHours = GOAL_HOURS }) {
   const studentById = new Map(students.map(s => [s.id, s]));
   const courseById = new Map(courses.map(c => [c.id, c]));
 
-  // Held classes with their real length.
-  const held = [];
+  // Real classes (long enough), then merged into sessions: course + Cambodia day.
+  const schedulesBy = new Map();
+  schedules.forEach(sc => {
+    if (!schedulesBy.has(sc.course_id)) schedulesBy.set(sc.course_id, []);
+    schedulesBy.get(sc.course_id).push(sc);
+  });
+  const bounds = new Map();      // class id -> [start, end]
+  const sessionsByKey = new Map();
   for (const c of classes) {
     const start = toMs(c.started_at);
     if (start == null || !courseById.has(c.course_id)) continue;
     const end = toMs(c.ended_at) ?? (c.status === 'active' ? now : null);
-    if (end == null) continue;
-    const minutes = (end - start) / MIN;
-    if (minutes < MIN_CLASS_MINUTES) continue;
-    held.push({ id: c.id, course_id: c.course_id, start, end, minutes });
+    if (end == null || (end - start) / MIN < MIN_CLASS_MINUTES) continue;
+    // With a schedule, a class only counts when it overlaps a scheduled window
+    // (plus/minus the grace). A test at 10 am, or a class on a day off, is ignored.
+    const sc = schedulesBy.get(c.course_id);
+    if (sc && sc.length) {
+      const grace = GRACE_MINUTES * MIN;
+      if (!windowsOn(sc, start).some(w => start < w.to + grace && end > w.from - grace)) continue;
+    }
+    const key = `${c.course_id}|${dayKeyPP(start)}`;
+    if (!sessionsByKey.has(key)) sessionsByKey.set(key, { id: c.id, course_id: c.course_id, start, end, classIds: [], spans: [] });
+    const ses = sessionsByKey.get(key);
+    ses.classIds.push(c.id);
+    ses.spans.push([start, end]);
+    ses.start = Math.min(ses.start, start);
+    ses.end = Math.max(ses.end, end);
+    bounds.set(c.id, [start, end]);
+  }
+  const held = [];
+  const heldByClassId = new Map();   // any class id -> its session
+  for (const ses of sessionsByKey.values()) {
+    ses.minutes = unionMinutes(ses.spans);   // real teaching time, restarts and gaps included once
+    held.push(ses);
+    ses.classIds.forEach(id => heldByClassId.set(id, ses));
   }
   held.sort((a, b) => a.start - b.start);
-  const heldById = new Map(held.map(c => [c.id, c]));
 
-  // Minutes each student spent in each class (clipped to the class window).
-  const intervals = new Map();   // `${classId}|${userId}` -> [[a,b]...]
+  // Minutes each student spent in each session (every class of it, clipped to that class).
+  const intervals = new Map();   // `${sessionId}|${userId}` -> [[a,b]...]
   for (const p of participants) {
-    const cls = heldById.get(p.live_class_id);
-    if (!cls || !studentById.has(p.user_id)) continue;
-    const a = Math.max(toMs(p.joined_at) ?? cls.start, cls.start);
-    const b = Math.min(toMs(p.left_at) ?? cls.end, cls.end);
-    const key = `${cls.id}|${p.user_id}`;
+    const ses = heldByClassId.get(p.live_class_id);
+    if (!ses || !studentById.has(p.user_id)) continue;
+    const [cs, ce] = bounds.get(p.live_class_id);
+    const a = Math.max(toMs(p.joined_at) ?? cs, cs);
+    const b = Math.min(toMs(p.left_at) ?? ce, ce);
+    const key = `${ses.id}|${p.user_id}`;
     if (!intervals.has(key)) intervals.set(key, []);
-    intervals.get(key).push([a, b]);
+    intervals.get(key).push([a, b, p.live_class_id]);
   }
 
   // Who is in which course, since when.
@@ -116,17 +188,20 @@ function buildLiveReport({ courses, enrollments, students, classes, participants
       eligible += 1;
       const a = acc(studentId);
       a.eligible += 1;
-      const pc = a.perCourse[cls.course_id] || (a.perCourse[cls.course_id] = { minutes: 0, attended: 0, eligible: 0, held: 0, last: null });
+      const pc = a.perCourse[cls.course_id] || (a.perCourse[cls.course_id] = { minutes: 0, attended: 0, eligible: 0, held: 0, missRun: 0, lastSession: null, last: null });
       pc.eligible += 1;
+      pc.lastSession = cls.start;
+      pc.missRun += 1;   // reset below when they attend; what is left is the run of most recent misses
       pc.held += cls.minutes;
       a.eligibleMinutes += cls.minutes;
-      const mins = unionMinutes(intervals.get(`${cls.id}|${studentId}`) || []);
+      const mins = presenceMinutes(intervals.get(`${cls.id}|${studentId}`) || []);
       a.minutes += mins;
       a.byCourse[cls.course_id] = (a.byCourse[cls.course_id] || 0) + mins;
       pc.minutes += mins;
       if (mins >= threshold) {
         a.attended += 1;
         pc.attended += 1;
+        pc.missRun = 0;
         if (pc.last == null || cls.start > pc.last) pc.last = cls.start;
         attendees += 1;
         stays.push(mins);
@@ -159,7 +234,7 @@ function buildLiveReport({ courses, enrollments, students, classes, participants
       classes_eligible: a.eligible,
       minutes: Math.round(a.minutes),
       minutes_by_course: Object.fromEntries(Object.entries(a.byCourse).map(([k, v]) => [k, Math.round(v)])),
-      by_course: Object.fromEntries(Object.entries(a.perCourse).map(([k, v]) => [k, { minutes: Math.round(v.minutes), attended: v.attended, eligible: v.eligible, held_minutes: Math.round(v.held), last_attended: v.last == null ? null : toIso(v.last) }])),
+      by_course: Object.fromEntries(Object.entries(a.perCourse).map(([k, v]) => [k, { minutes: Math.round(v.minutes), attended: v.attended, eligible: v.eligible, held_minutes: Math.round(v.held), missed_in_a_row: v.missRun, last_session_at: v.lastSession == null ? null : toIso(v.lastSession), last_attended: v.last == null ? null : toIso(v.last) }])),
       share_of_live_time: a.eligibleMinutes ? Math.round((a.minutes / a.eligibleMinutes) * 100) : 0,
       last_attended: a.last == null ? null : toIso(a.last),
     });

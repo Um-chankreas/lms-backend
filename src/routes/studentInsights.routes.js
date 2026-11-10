@@ -550,6 +550,9 @@ function rosterRows(rosters) {
     avg_quiz: st.quizzes.avg_score,
     quizzes_attempted: st.quizzes.attempted,
     quizzes_total: st.quizzes.total,
+    assignments_total: st.assignments.total,
+    assignments_missing: st.assignments.missing,
+    assignments_avg: st.assignments.avg_pct,
     last_active: st.activity.last_active,
     days_inactive: st.activity.days_inactive,
     status: st.status,
@@ -597,6 +600,8 @@ const loadTableRows = async (req, courseFilter, fresh) => {
       live_eligible: v ? v.eligible : null,
       live_last: v ? v.last_attended : null,
       live_held_minutes: v ? v.held_minutes : null,
+      live_missed_run: v ? v.missed_in_a_row : null,
+      live_last_session: v ? v.last_session_at : null,
     };
   });
 };
@@ -829,13 +834,15 @@ async function loadLiveReportInput(req) {
     return q;
   });
   const courseIds = courses.map(c => c.id);
-  if (!courseIds.length) return { courses, enrollments: [], students: [], classes: [], participants: [] };
+  if (!courseIds.length) return { courses, enrollments: [], students: [], classes: [], participants: [], schedules: [] };
 
-  const [enrollments, classes] = await Promise.all([
+  const [enrollments, classes, schedules] = await Promise.all([
     fetchAllIn(courseIds, chunk => supabase.from('course_enrollments')
       .select('id, course_id, student_id, enrolled_at').in('course_id', chunk).order('id', { ascending: true })),
     fetchAllIn(courseIds, chunk => supabase.from('live_classes')
       .select('id, course_id, status, started_at, ended_at').in('course_id', chunk).order('id', { ascending: true })),
+    fetchAllIn(courseIds, chunk => supabase.from('class_schedules')
+      .select('id, course_id, days_of_week, start_time, end_time').eq('is_active', true).in('course_id', chunk).order('id', { ascending: true })),
   ]);
   const [students, participants] = await Promise.all([
     // Active, real students only — test / team accounts stay out of the numbers.
@@ -846,7 +853,7 @@ async function loadLiveReportInput(req) {
       .select('id, live_class_id, user_id, joined_at, left_at').eq('role', 'student').in('live_class_id', chunk)
       .order('id', { ascending: true })),
   ]);
-  return { courses, enrollments, students, classes, participants };
+  return { courses, enrollments, students, classes, participants, schedules };
 }
 
 /**
@@ -1622,6 +1629,195 @@ router.post('/message-students', async (req, res) => {
   } catch (error) {
     console.error('Insights message-students error:', error);
     res.status(500).json({ success: false, error: 'Failed to send the message: ' + error.message });
+  }
+});
+
+// ── Follow-up page: who needs help, why, and what to do next ───────────────
+// Flags are worked out from the same rows as the students table. A student in
+// several classes is one row; each flag names its class when there is more than one.
+const FOLLOW_DAYS = 7;            // "Followed up" lasts this long, then they come back if still flagged
+const FOLLOW_KINDS = ['note', 'message', 'praise', 'done', 'reopen'];
+
+const LIVE_STALE_DAYS = 14;       // a class with no session for this long is not "missed" any more
+const PRACTICE_DAYS = 14;         // window for "does daily practice"
+const PRACTICE_LOW = 3;           // fewer practice days than this in the window = little practice
+
+// Why a student may be scoring low, from what the data shows: not joining the
+// live classes, and not doing the daily challenge. `practiceDays` = days with a
+// finished daily challenge in the last PRACTICE_DAYS (null when unknown).
+function quizCauses(row, practiceDays) {
+  const causes = [];
+  if (row.live_eligible > 0 && row.live_attended != null) {
+    if (row.live_attended === 0) causes.push({ type: 'live', text: `Has never joined a live class (${row.live_eligible} held)` });
+    else if (row.live_eligible >= 3 && row.live_attended / row.live_eligible < 0.5) causes.push({ type: 'live', text: `Rarely joins live classes (${row.live_attended} of ${row.live_eligible})` });
+  }
+  if (practiceDays != null && practiceDays < PRACTICE_LOW) {
+    causes.push({ type: 'practice', text: practiceDays === 0 ? `No daily practice in the last ${PRACTICE_DAYS} days` : `Little daily practice (${practiceDays} of the last ${PRACTICE_DAYS} days)` });
+  }
+  return causes;
+}
+
+function flagsFor(rows, practiceDays = null) {
+  const multi = rows.length > 1;
+  const issues = [];
+  const wins = [];
+  rows.forEach(r => {
+    const where = multi ? ` (${r.course_title})` : '';
+    if (r.status === 'inactive') issues.push({ type: 'idle', text: `Inactive ${r.days_inactive == null ? 'for a long time' : r.days_inactive + ' days'}${where}`, course_id: r.course_id });
+    else if (r.status === 'not_started') issues.push({ type: 'idle', text: `Has not started${where}`, course_id: r.course_id });
+    if (r.status === 'behind') issues.push({ type: 'slow', text: `Behind the class${r.current_lesson_title ? ' · on ' + r.current_lesson_title : ''} (${r.progress}%)${where}`, course_id: r.course_id });
+    if (r.avg_quiz != null && r.quizzes_attempted >= 2 && r.avg_quiz < 50) issues.push({ type: 'quiz', text: `Quiz average ${r.avg_quiz}%${where}`, course_id: r.course_id, causes: quizCauses(r, practiceDays) });
+    // Missed class = the last 2 live classes (class days) in a row, while the class is still running
+    // (its latest session is within 2 weeks).
+    const lastSessionMs = toMs(r.live_last_session);
+    if (r.live_missed_run >= 2 && lastSessionMs != null && Date.now() - lastSessionMs <= LIVE_STALE_DAYS * DAY_MS) {
+      issues.push({ type: 'live', text: `Missed the last ${r.live_missed_run} live classes in a row${where}`, course_id: r.course_id });
+    }
+    // Joins the live classes but does not study: no lesson started, or no quiz taken.
+    if (r.live_attended >= 3 && r.live_eligible > 0 && r.live_attended / r.live_eligible >= 0.5 && (r.progress === 0 || r.quizzes_attempted === 0)) {
+      const what = r.progress === 0 && r.quizzes_attempted === 0 ? 'has not started a lesson or taken a quiz' : r.progress === 0 ? 'has not started a lesson' : 'has not taken a quiz';
+      issues.push({ type: 'passive', text: `Joins live classes (${r.live_attended} of ${r.live_eligible}) but ${what}${where}`, course_id: r.course_id });
+    }
+    // Not handed in past the deadline, and handed in but scored low, are different problems.
+    if (r.assignments_missing > 0) issues.push({ type: 'missing', text: `Missing ${r.assignments_missing} assignment${r.assignments_missing === 1 ? '' : 's'}${where}`, course_id: r.course_id });
+    if (r.assignments_avg != null && r.assignments_avg < 70) issues.push({ type: 'assign', text: `Assignments average ${r.assignments_avg}%${where}`, course_id: r.course_id });
+
+    if (r.status === 'completed') wins.push(`Finished the class${where}`);
+    if (r.avg_quiz != null && r.quizzes_attempted >= 2 && r.avg_quiz >= 80) wins.push(`Quiz average ${r.avg_quiz}%${where}`);
+    if (r.live_eligible >= 3 && r.live_attended != null && r.live_attended / r.live_eligible >= 0.85) wins.push(`Joined ${r.live_attended} of ${r.live_eligible} live classes${where}`);
+    if (r.assignments_total > 0 && r.assignments_missing === 0 && r.assignments_avg != null && r.assignments_avg >= 85) wins.push(`Assignments average ${r.assignments_avg}%${where}`);
+  });
+  return { issues, wins };
+}
+
+/** Course ids the viewer may follow up students in (admin: all non-test classes). */
+async function canFollowUp(req, studentId) {
+  const courses = await messageableCourseIds(req);
+  if (!courses.length) return false;
+  const { data } = await supabase.from('course_enrollments').select('id').eq('student_id', studentId).in('course_id', courses.map(c => c.id)).limit(1);
+  return !!(data && data.length);
+}
+
+/**
+ * GET /api/insights/follow-up?course_id=
+ * -> { students: [{ student_id, name, avatar_url, classes:[{id,title}], days_inactive, has_telegram,
+ *      issues:[{type,text}], wins:[text], last_contact:{at,by,kind,text}|null, followed_up }],
+ *      counts: { slow, quiz, live, passive, missing, assign, idle, good, todo, followed_up } }
+ */
+router.get('/follow-up', async (req, res) => {
+  try {
+    const all = await loadTableRows(req, courseFilterOf(req), req.query.fresh === '1');
+    const byStudent = groupBy(all.filter(r => r.is_active !== false), 'student_id');
+    const ids = [...byStudent.keys()];
+    const logs = ids.length ? await fetchAllIn(ids, chunk => supabase
+      .from('student_followups').select('id, student_id, author_name, kind, text, created_at').in('student_id', chunk).order('created_at', { ascending: false })) : [];
+    const logBy = groupBy(logs, 'student_id');
+    const now = Date.now();
+
+    // Whose own Telegram the teacher can open straight from here: linked, the student lets
+    // teachers see it, and there is a username or a phone to open a chat with.
+    // (The username / number itself is fetched on click, never put in this list.)
+    const canOpenTg = new Set();
+    try {
+      const priv = await fetchAllIn(ids, chunk => supabase.from('student_private')
+        .select('user_id, telegram_username, telegram_phone, telegram_visibility, telegram_chat_id')
+        .in('user_id', chunk).order('user_id', { ascending: true }));
+      priv.forEach(p => {
+        if (p.telegram_chat_id && ['teachers', 'friends'].includes(p.telegram_visibility) && (p.telegram_username || p.telegram_phone)) canOpenTg.add(p.user_id);
+      });
+    } catch (e) { console.warn('telegram contact flags failed:', e.message); }
+
+    // Daily practice in the last two weeks, only for students who need the "why" of a low quiz score.
+    const lowQuizIds = ids.filter(id => byStudent.get(id).some(r => r.avg_quiz != null && r.quizzes_attempted >= 2 && r.avg_quiz < 50));
+    const sinceDay = dayKey(now - (PRACTICE_DAYS - 1) * DAY_MS);
+    const practiceRows = lowQuizIds.length ? await fetchAllIn(lowQuizIds, chunk => supabase
+      .from('daily_challenges').select('id, student_id, challenge_date, status')
+      .in('student_id', chunk).gte('challenge_date', sinceDay).in('status', ['COMPLETED', 'RETAKEN'])
+      .order('id', { ascending: true })).catch(() => null) : [];
+    const practiceDaysBy = new Map();
+    (practiceRows || []).forEach(r => {
+      if (!practiceDaysBy.has(r.student_id)) practiceDaysBy.set(r.student_id, new Set());
+      practiceDaysBy.get(r.student_id).add(r.challenge_date);
+    });
+
+    const students = ids.map(id => {
+      const rows = byStudent.get(id);
+      const first = rows[0];
+      const { issues, wins } = flagsFor(rows, practiceRows ? (practiceDaysBy.get(id)?.size || 0) : null);
+      const log = logBy.get(id) || [];            // newest first
+      const lastDone = log.find(l => l.kind === 'done' || l.kind === 'reopen');
+      const followed = !!lastDone && lastDone.kind === 'done' && now - toMs(lastDone.created_at) < FOLLOW_DAYS * DAY_MS;
+      const contact = log.find(l => l.kind !== 'reopen');
+      const idle = rows.map(r => r.days_inactive).filter(v => v != null);
+      return {
+        student_id: id,
+        name: first.name || '',
+        avatar_url: first.avatar_url,
+        classes: rows.map(r => ({ id: r.course_id, title: r.course_title })),
+        days_inactive: idle.length ? Math.min(...idle) : null,
+        has_telegram: !!first.has_telegram,
+        can_open_telegram: canOpenTg.has(id),
+        registered_at: first.registered_at || null,
+        // Live time across all their classes: time spent vs the live teaching held since they enrolled.
+        live: (() => {
+          const withLive = rows.filter(r => r.live_eligible > 0);
+          if (!withLive.length) return null;
+          return {
+            minutes: withLive.reduce((n, r) => n + (r.live_minutes || 0), 0),
+            held_minutes: withLive.reduce((n, r) => n + (r.live_held_minutes || 0), 0),
+            attended: withLive.reduce((n, r) => n + (r.live_attended || 0), 0),
+            eligible: withLive.reduce((n, r) => n + r.live_eligible, 0),
+          };
+        })(),
+        issues: issues.filter((i, n, a) => a.findIndex(x => x.text === i.text) === n),
+        wins: [...new Set(wins)],
+        last_contact: contact ? { at: toIso(contact.created_at), by: contact.author_name || null, kind: contact.kind, text: contact.text || null } : null,
+        followed_up: followed,
+      };
+    });
+
+    const needs = students.filter(s => s.issues.length && !s.followed_up);
+    const counts = { todo: needs.length, followed_up: students.filter(s => s.followed_up).length, good: students.filter(s => !s.issues.length && s.wins.length).length };
+    ['slow', 'quiz', 'live', 'passive', 'missing', 'assign', 'idle'].forEach(k => { counts[k] = needs.filter(s => s.issues.some(i => i.type === k)).length; });
+    res.json({ success: true, data: { students, counts, total: students.length } });
+  } catch (error) {
+    console.error('Insights follow-up error:', error);
+    res.status(500).json({ success: false, error: 'Failed to load follow-up: ' + error.message });
+  }
+});
+
+/** GET /api/insights/follow-up/:studentId/notes -> { notes: [{ id, kind, text, author, at }] } newest first */
+router.get('/follow-up/:studentId/notes', async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    if (!UUID_REGEX.test(studentId) || !(await canFollowUp(req, studentId))) return res.status(404).json({ success: false, error: 'Student not found' });
+    const { data, error } = await supabase.from('student_followups')
+      .select('id, kind, text, author_name, created_at').eq('student_id', studentId).order('created_at', { ascending: false }).limit(100);
+    if (error) throw error;
+    res.json({ success: true, data: { notes: (data || []).map(n => ({ id: n.id, kind: n.kind, text: n.text, author: n.author_name, at: toIso(n.created_at) })) } });
+  } catch (error) {
+    console.error('Insights follow-up notes error:', error);
+    res.status(500).json({ success: false, error: 'Failed to load notes: ' + error.message });
+  }
+});
+
+/** POST /api/insights/follow-up/:studentId/notes { kind: note|message|praise|done|reopen, text } */
+router.post('/follow-up/:studentId/notes', async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    const kind = FOLLOW_KINDS.includes(req.body?.kind) ? req.body.kind : 'note';
+    const text = String(req.body?.text || '').trim().slice(0, 1000);
+    if (!UUID_REGEX.test(studentId) || !(await canFollowUp(req, studentId))) return res.status(404).json({ success: false, error: 'Student not found' });
+    if (kind === 'note' && !text) return res.status(400).json({ success: false, error: 'Write a note first' });
+    const { data: me } = await supabase.from('users').select('name').eq('id', req.user.userId).maybeSingle();
+    const { data, error } = await supabase.from('student_followups')
+      .insert({ student_id: studentId, author_id: req.user.userId, author_name: me?.name || null, kind, text: text || null })
+      .select('id, kind, text, author_name, created_at').single();
+    if (error) throw error;
+    res.status(201).json({ success: true, data: { note: { id: data.id, kind: data.kind, text: data.text, author: data.author_name, at: toIso(data.created_at) } } });
+  } catch (error) {
+    console.error('Insights follow-up add note error:', error);
+    res.status(500).json({ success: false, error: 'Failed to save: ' + error.message });
   }
 });
 

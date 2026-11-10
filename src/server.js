@@ -56,6 +56,7 @@ app.use('/api/past-papers', require('./routes/pastPapers.routes'));
 app.use('/api/library', require('./routes/library.routes'));
 app.use('/api/formulas', require('./routes/formulas.routes'));
 app.use('/api/video-tools', require('./routes/videoTools.routes'));
+app.use('/api/latex-tools', require('./routes/latexTools.routes'));
 app.use('/api/quizzes', require('./routes/quizzes.routes'));
 app.use('/api/assignments', require('./routes/assignments.routes'));
 app.use('/api/live-classes', require('./routes/liveClass.routes'));

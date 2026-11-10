@@ -551,10 +551,8 @@ router.post('/:id/token', authenticateToken, async (req, res) => {
       .maybeSingle();
 
     if (openRow) {
-      await supabase
-        .from('live_class_participants')
-        .update({ joined_at: new Date() })
-        .eq('id', openRow.id);
+      // Already in the room (a token renewal or a reconnect): keep the original
+      // join time. Resetting it here made long stays look like a few minutes.
     } else {
       // First time this user joins this class ever? (No row at all — an open
       // row was ruled out above, so check for any closed one.)

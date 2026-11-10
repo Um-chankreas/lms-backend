@@ -1,5 +1,6 @@
 const { Server } = require('socket.io');
 const supabase = require('../config/supabase');
+const { v4: uuidv4 } = require('uuid');
 const { canRunLiveClass } = require('../utils/liveClassAccess');
 const { verifyToken } = require('../utils/jwt');
 const { corsOrigin } = require('../config/cors');
@@ -229,6 +230,7 @@ function initLiveClassRealtime(httpServer) {
         } else {
           socket.join(roomUser(liveClassId, socket.user.userId));
           state.hand = await getHandStatus(liveClassId, socket.user.userId);
+          await ensureOpenParticipant(liveClass, socket.user.userId);
           ack?.({ ok: true, role: 'student', state });
         }
       } catch (err) {
@@ -257,6 +259,32 @@ function initLiveClassRealtime(httpServer) {
   return io;
 }
 
+
+/**
+ * A student whose connection dropped for a few seconds had their attendance
+ * record closed (see markLeftIfGone) and nothing reopened it when they
+ * reconnected, so the rest of their time in the class went unrecorded. Being
+ * subscribed to a running class is proof they are in it: reopen the record.
+ */
+async function ensureOpenParticipant(liveClass, userId) {
+  if (liveClass.status !== 'active') return;
+  try {
+    const { data: open } = await supabase
+      .from('live_class_participants')
+      .select('id')
+      .eq('live_class_id', liveClass.id)
+      .eq('user_id', userId)
+      .is('left_at', null)
+      .limit(1);
+    if (open && open.length) return;
+    await supabase.from('live_class_participants').insert({
+      id: uuidv4(), live_class_id: liveClass.id, user_id: userId, role: 'student', joined_at: new Date()
+    });
+    await emitParticipantsChanged(liveClass.id);
+  } catch (err) {
+    console.warn('ensureOpenParticipant failed:', err.message);
+  }
+}
 
 const LEAVE_GRACE_MS = 8000;
 
