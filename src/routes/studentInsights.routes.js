@@ -1758,6 +1758,7 @@ router.get('/follow-up', async (req, res) => {
         has_telegram: !!first.has_telegram,
         can_open_telegram: canOpenTg.has(id),
         registered_at: first.registered_at || null,
+        phone: first.phone || null,
         // Live time across all their classes: time spent vs the live teaching held since they enrolled.
         live: (() => {
           const withLive = rows.filter(r => r.live_eligible > 0);
