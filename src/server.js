@@ -72,6 +72,7 @@ app.use('/api/admin', require('./routes/admin.routes'));
 app.use('/api/insights', require('./routes/studentInsights.routes'));
 app.use('/api/notifications', require('./routes/notifications.routes'));
 app.use('/api/daily-challenge', require('./routes/dailyChallenge.routes'));
+app.use('/api/blitz', require('./routes/blitz.routes'));
 app.use('/api/app-version', require('./routes/appVersion.routes'));
 app.use('/api/bacii', require('./routes/bacii.routes'));
 app.use('/api/stories', require('./routes/stories.routes'));

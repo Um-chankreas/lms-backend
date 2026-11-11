@@ -1723,7 +1723,7 @@ router.get('/follow-up', async (req, res) => {
         .select('user_id, telegram_username, telegram_phone, telegram_visibility, telegram_chat_id')
         .in('user_id', chunk).order('user_id', { ascending: true }));
       priv.forEach(p => {
-        if (p.telegram_chat_id && ['teachers', 'friends'].includes(p.telegram_visibility) && (p.telegram_username || p.telegram_phone)) canOpenTg.add(p.user_id);
+        if (['teachers', 'friends'].includes(p.telegram_visibility) && (p.telegram_username || p.telegram_phone)) canOpenTg.add(p.user_id); // bot-linked or saved by hand
       });
     } catch (e) { console.warn('telegram contact flags failed:', e.message); }
 

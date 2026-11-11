@@ -209,7 +209,8 @@ router.get('/students/:id/contact', authenticateToken, hasRole('teacher', 'admin
     const { data: row } = await supabase.from('student_private')
       .select('telegram_username, telegram_phone, telegram_visibility, telegram_chat_id')
       .eq('user_id', studentId).maybeSingle();
-    const visible = row && row.telegram_chat_id && ['teachers', 'friends'].includes(row.telegram_visibility);
+    // A contact counts when the student linked the bot OR a username/phone was saved for them by hand.
+    const visible = row && (row.telegram_chat_id || row.telegram_username || row.telegram_phone) && ['teachers', 'friends'].includes(row.telegram_visibility);
     res.json({ success: true, data: { username: visible ? row.telegram_username : null, phone: visible ? row.telegram_phone : null } });
   } catch (error) {
     console.error('Telegram contact error:', error);
