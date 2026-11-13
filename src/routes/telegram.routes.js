@@ -5,6 +5,10 @@ const supabase = require('../config/supabase');
 const { authenticateToken, isStudent, hasRole } = require('../middleware/auth');
 const { awardXp } = require('../utils/xp');
 const tg = require('../utils/telegram');
+const bcrypt = require('bcryptjs');
+const { v4: uuidv4 } = require('uuid');
+const { rateLimit } = require('express-rate-limit');
+const { generateToken } = require('../utils/jwt');
 const { makeBot, supabaseStore } = require('../utils/telegramFollowUpBot');
 const { createNotification } = require('../utils/notifications');
 const { LINK_BASE } = require('../utils/followUpMessageService');
@@ -92,6 +96,181 @@ router.post('/link-code', authenticateToken, isStudent, async (req, res) => {
   }
 });
 
+
+// ---------------------------------------------------------------------------
+// Sign in / sign up with Telegram
+//
+//   POST /api/telegram/login/start  { device }  -> { url, token, expiresAt }
+//   POST /api/telegram/login/poll   { token }   -> { status, user?, token? }
+//
+// The app opens `url` (the bot), the student taps Start and then "Yes, sign me
+// in" in Telegram, and the app polls until it can collect a normal login
+// token. The confirm step names the device that asked, so a student who was
+// sent someone else's link can see it is not their phone and tap No.
+// ---------------------------------------------------------------------------
+const LOGIN_TTL_MS = 5 * 60 * 1000;
+const sha256 = (v) => crypto.createHash('sha256').update(v).digest('hex');
+const loginStartLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, limit: 60, standardHeaders: 'draft-8', legacyHeaders: false,
+  message: { success: false, error: 'Too many sign-in attempts. Please try again later.' }
+});
+const loginPollLimiter = rateLimit({
+  windowMs: 60 * 1000, limit: 60, standardHeaders: 'draft-8', legacyHeaders: false,
+  keyGenerator: (req) => sha256(String(req.body?.token || req.ip)).slice(0, 24),
+  message: { success: false, error: 'Slow down.' }
+});
+
+router.post('/login/start', loginStartLimiter, async (req, res) => {
+  try {
+    if (!tg.enabled()) {
+      return res.status(503).json({ success: false, error: 'Telegram sign-in is not set up yet' });
+    }
+    const clean = (v) => String(v || '').replace(/[^\p{L}\p{N} ._-]/gu, '').trim().slice(0, 40);
+    const device = [clean(req.body?.device?.model), clean(req.body?.device?.platform)].filter(Boolean).join(' · ') || null;
+
+    const ref = crypto.randomBytes(16).toString('base64url');
+    const token = crypto.randomBytes(32).toString('base64url');
+    const expiresAt = new Date(Date.now() + LOGIN_TTL_MS);
+    const { error } = await supabase.from('telegram_login_requests').insert({
+      ref, token_hash: sha256(token), device_label: device, expires_at: expiresAt.toISOString()
+    });
+    if (error) throw error;
+    // Housekeeping: drop requests that expired a while ago.
+    supabase.from('telegram_login_requests').delete().lt('expires_at', new Date(Date.now() - 3600 * 1000).toISOString()).then(() => {}, () => {});
+
+    res.json({
+      success: true,
+      data: { url: `https://t.me/${tg.botUsername()}?start=login_${ref}`, token, expiresAt: expiresAt.toISOString() }
+    });
+  } catch (error) {
+    console.error('Telegram login start error:', error);
+    res.status(500).json({ success: false, error: 'Could not start Telegram sign-in' });
+  }
+});
+
+/** Find the student behind a Telegram account, or create one. Returns { user, isNew }. */
+async function userForTelegram(row) {
+  const { data: priv } = await supabase.from('student_private')
+    .select('user_id').eq('telegram_user_id', row.telegram_user_id).maybeSingle();
+  if (priv?.user_id) {
+    const { data: user } = await supabase.from('users').select('*').eq('id', priv.user_id).maybeSingle();
+    if (user) return { user, isNew: false };
+  }
+  const name = [row.telegram_first_name, row.telegram_last_name].filter(Boolean).join(' ').trim()
+    || row.telegram_username || 'Student';
+  const { data: user, error } = await supabase.from('users').insert({
+    id: uuidv4(),
+    name: name.slice(0, 100),
+    email: null,
+    phone: null,
+    password: await bcrypt.hash(uuidv4() + uuidv4(), 10),   // nobody knows it; they sign in with Telegram
+    role: 'student',
+    created_at: new Date()
+  }).select().single();
+  if (error) throw error;
+  const { error: privError } = await supabase.from('student_private').upsert({
+    user_id: user.id,
+    telegram_chat_id: row.telegram_chat_id,
+    telegram_user_id: row.telegram_user_id,
+    telegram_username: row.telegram_username,
+    telegram_first_name: row.telegram_first_name,
+    telegram_linked_at: new Date().toISOString(),
+    telegram_blocked_at: null,
+    updated_at: new Date().toISOString()
+  }, { onConflict: 'user_id' });
+  if (privError) throw privError;
+  await awardLinkXpOnce(user.id);
+  return { user, isNew: true };
+}
+
+router.post('/login/poll', loginPollLimiter, async (req, res) => {
+  try {
+    const token = String(req.body?.token || '');
+    if (!token || token.length > 200) return res.status(400).json({ success: false, error: 'Missing token' });
+
+    const { data: row } = await supabase.from('telegram_login_requests')
+      .select('*').eq('token_hash', sha256(token)).maybeSingle();
+    if (!row || row.consumed_at || new Date(row.expires_at) <= new Date()) {
+      return res.json({ success: true, data: { status: 'expired' } });
+    }
+    if (row.status === 'denied') return res.json({ success: true, data: { status: 'denied' } });
+    if (row.status !== 'approved') return res.json({ success: true, data: { status: row.status } });
+
+    // Collect once: a second poll (or a copy of the token) gets nothing.
+    const { data: claimed } = await supabase.from('telegram_login_requests')
+      .update({ consumed_at: new Date().toISOString() })
+      .eq('ref', row.ref).is('consumed_at', null).select('ref');
+    if (!claimed?.length) return res.json({ success: true, data: { status: 'expired' } });
+
+    const { sanitizeUser, accountLoginGate, reactivateIfSelfDeactivated } = require('./auth.routes').helpers;
+    const { user, isNew } = await userForTelegram(row);
+    if (user.role !== 'student') {
+      return res.status(403).json({ success: false, error: 'Telegram sign-in is for student accounts only' });
+    }
+    const gate = accountLoginGate(user);
+    if (gate) return res.status(gate.status).json(gate.body);
+    await reactivateIfSelfDeactivated(user);
+
+    res.json({
+      success: true,
+      data: { status: 'approved', user: sanitizeUser(user), token: generateToken(user.id, user.role), is_new: isNew }
+    });
+  } catch (error) {
+    console.error('Telegram login poll error:', error);
+    res.status(500).json({ success: false, error: 'Telegram sign-in failed' });
+  }
+});
+
+/** /start login_<ref>: ask the person to confirm which device is signing in. */
+async function handleLoginStart(msg, ref) {
+  const chatId = msg.chat.id;
+  const from = msg.from || {};
+  const { data: rows } = await supabase.from('telegram_login_requests')
+    .update({
+      status: 'awaiting',
+      telegram_user_id: from.id,
+      telegram_chat_id: chatId,
+      telegram_username: from.username || null,
+      telegram_first_name: from.first_name || null,
+      telegram_last_name: from.last_name || null
+    })
+    .eq('ref', ref).eq('status', 'pending').is('consumed_at', null)
+    .gt('expires_at', new Date().toISOString())
+    .select('device_label');
+  if (!rows?.length) {
+    return tg.sendPlain(chatId,
+      'តំណនេះផុតកំណត់ ឬត្រូវបានប្រើរួចហើយ។ សូមព្យាយាមម្តងទៀតក្នុងកម្មវិធី។\n\nThis sign-in link expired or was already used. Please try again in the app.');
+  }
+  const device = rows[0].device_label || 'unknown device';
+  return tg.sendPlain(chatId,
+    `ចូលគណនី Romduol Scholars នៅលើ ${device}?\nចុច «បាទ/ចាស» តែបើអ្នកទើបតែចុចចូលដោយ Telegram នៅលើទូរស័ព្ទរបស់អ្នក។\n\n` +
+    `Sign in to Romduol Scholars on ${device}?\nOnly tap “Yes” if you just started this on your own phone.`,
+    { reply_markup: { inline_keyboard: [[
+      { text: '✅ បាទ/ចាស · Yes, sign me in', callback_data: `tl:ok:${ref}` },
+      { text: '❌ ទេ · No', callback_data: `tl:no:${ref}` }
+    ]] } });
+}
+
+async function handleLoginCallback(cb) {
+  const [, action, ref] = String(cb.data).split(':');
+  const msg = cb.message;
+  const ok = action === 'ok';
+  const { data: rows } = await supabase.from('telegram_login_requests')
+    .update({ status: ok ? 'approved' : 'denied' })
+    .eq('ref', ref).eq('status', 'awaiting')
+    .eq('telegram_user_id', cb.from?.id)          // only the person who tapped Start can confirm
+    .gt('expires_at', new Date().toISOString())
+    .select('ref');
+  await tg.answerCallback(cb.id);
+  if (!msg) return;
+  const text = !rows?.length
+    ? 'តំណនេះផុតកំណត់។ សូមព្យាយាមម្តងទៀតក្នុងកម្មវិធី។\nThis sign-in expired. Please try again in the app.'
+    : ok
+      ? '✅ រួចរាល់! សូមត្រឡប់ទៅកម្មវិធី Romduol Scholars។\nDone! Go back to the Romduol Scholars app.'
+      : '❌ បានបដិសេធការចូលគណនី។\nSign-in cancelled.';
+  return tg.editMessage(msg.chat.id, msg.message_id, text, { reply_markup: { inline_keyboard: [] } });
+}
+
 const secretOk = (given) => {
   const want = process.env.TELEGRAM_WEBHOOK_SECRET || '';
   if (!want || typeof given !== 'string') return false;
@@ -102,6 +281,7 @@ const secretOk = (given) => {
 async function handleStart(msg, code) {
   const chatId = msg.chat.id;
   if (!code) return tg.sendMessage(chatId, NO_CODE);
+  if (code.startsWith('login_')) return handleLoginStart(msg, code.slice(6));
 
   // Claim the code atomically so a double tap can't link twice.
   const { data: claimed } = await supabase
@@ -175,7 +355,9 @@ router.post('/webhook', async (req, res) => {
     // Telegram retries an update it thinks we missed: handle each update_id once.
     const updateId = req.body?.update_id;
     if (updateId != null && !(await followStore.claimUpdate(updateId))) return;
-    if (req.body?.callback_query) return await followBot.handleCallback(req.body.callback_query);
+    const cb = req.body?.callback_query;
+    if (cb && String(cb.data || '').startsWith('tl:')) return await handleLoginCallback(cb);
+    if (cb) return await followBot.handleCallback(cb);
     const msg = req.body?.message;
     if (!msg || msg.chat?.type !== 'private') return;
     if (msg.contact) return await handleContact(msg);
@@ -192,6 +374,15 @@ router.post('/webhook', async (req, res) => {
 
 router.delete('/link', authenticateToken, isStudent, async (req, res) => {
   try {
+    // An account made with Telegram has no email, phone or Google: removing Telegram would lock the student out for good.
+    const { data: me } = await supabase.from('users').select('email, phone, google_sub').eq('id', req.user.userId).maybeSingle();
+    if (me && !me.email && !me.phone && !me.google_sub) {
+      return res.status(409).json({
+        success: false,
+        code: 'TELEGRAM_IS_ONLY_LOGIN',
+        error: 'Telegram is how you sign in to this account. Add an email or phone number first, then you can remove it.'
+      });
+    }
     const { error } = await supabase.from('student_private')
       .update({
         telegram_chat_id: null, telegram_user_id: null, telegram_username: null,

@@ -322,12 +322,10 @@ router.post('/login', credentialLimiter, async (req, res) => {
  * Web client, plus the iOS / Android clients). Only verified Google emails are
  * accepted.
  *
- * Matching: a returning Google user is found by google_sub. A NEW Google user
- * whose email already belongs to a password account is refused (409
- * GOOGLE_EMAIL_EXISTS): emails are not verified at signup, so auto-linking
- * would let someone who pre-registered another person's email take over that
- * person's Google login. Everyone else gets a new student account. Google
- * sign-in never creates or logs in teachers/admins.
+ * Matching: a returning Google user is found by google_sub. Otherwise a student
+ * account with the same verified email is linked to this Google account and
+ * signed in (its password keeps working). Otherwise a new student account is
+ * created. Google sign-in never creates or logs in teachers/admins.
  */
 let googleClient = null;
 const googleAudiences = () => String(process.env.GOOGLE_CLIENT_IDS || '')
@@ -365,16 +363,30 @@ router.post('/google', credentialLimiter, async (req, res) => {
     let isNew = false;
 
     if (!user) {
+      // Same verified email as an existing account: that person signs in to it,
+      // and Google is linked so next time it is matched by google_sub. The
+      // password stays valid, so password login keeps working.
       const { data: sameEmail } = await supabase
-        .from('users').select('id').eq('email', email).maybeSingle();
+        .from('users').select('*').eq('email', email).maybeSingle();
       if (sameEmail) {
-        return res.status(409).json({
-          success: false,
-          code: 'GOOGLE_EMAIL_EXISTS',
-          error: 'This email already has an account. Sign in with your password instead.'
-        });
+        if (sameEmail.google_sub && sameEmail.google_sub !== payload.sub) {
+          return res.status(409).json({
+            success: false,
+            code: 'GOOGLE_ACCOUNT_MISMATCH',
+            error: 'This account is linked to a different Google account. Sign in with your password instead.'
+          });
+        }
+        if (sameEmail.role === 'student' && !sameEmail.google_sub) {
+          const { error: linkError } = await supabase
+            .from('users').update({ google_sub: payload.sub }).eq('id', sameEmail.id);
+          if (linkError) throw linkError;
+          sameEmail.google_sub = payload.sub;
+        }
+        user = sameEmail;
       }
+    }
 
+    if (!user) {
       const name = String(payload.name || email.split('@')[0]).trim().slice(0, 100) || 'Student';
       // No one can sign in with a password they don't know; "forgot password"
       // style flows can set a real one later.
@@ -414,6 +426,141 @@ router.post('/google', credentialLimiter, async (req, res) => {
   } catch (error) {
     console.error('Google login error:', error);
     res.status(500).json({ success: false, error: 'Google sign-in failed' });
+  }
+});
+
+/**
+ * Forgotten password, in two steps. No SMS: the code goes to the person's
+ * connected Telegram and/or their email address.
+ *
+ *   POST /api/auth/password-reset/request  { identifier }
+ *   POST /api/auth/password-reset/confirm  { identifier, code, newPassword }
+ *
+ * `request` answers the same way whether or not the account exists or has a
+ * channel, so it can't be used to find out who has an account.
+ */
+const crypto = require('crypto');
+const telegram = require('../utils/telegram');
+const mailer = require('../utils/email');
+
+const RESET_TTL_MS = 10 * 60 * 1000;
+const RESET_MAX_ATTEMPTS = 5;
+const RESET_RESEND_GAP_MS = 60 * 1000;
+const RESET_MAX_PER_HOUR = 5;
+
+const resetRequestLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 20,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: rateLimitResponse('Too many reset requests. Please try again later.')
+});
+
+const resetCodeHash = (userId, code) =>
+  crypto.createHmac('sha256', process.env.JWT_SECRET || 'dev').update(`${userId}:${code}`).digest('hex');
+
+const findUserByIdentifier = async (identifier) => {
+  const raw = String(identifier || '').trim();
+  if (!raw) return null;
+  const q = supabase.from('users').select('*');
+  const { data } = await (raw.includes('@')
+    ? q.eq('email', normalizeEmail(raw))
+    : q.eq('phone', normalizePhone(raw))).maybeSingle();
+  return data || null;
+};
+
+const RESET_SENT = {
+  success: true,
+  message: 'If this account exists and has Telegram or email connected, a code has been sent.'
+};
+
+router.post('/password-reset/request', resetRequestLimiter, async (req, res) => {
+  try {
+    const user = await findUserByIdentifier(req.body?.identifier);
+    if (!user || user.deleted_at) return res.json(RESET_SENT);
+
+    const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const { data: recent } = await supabase
+      .from('password_reset_codes').select('created_at')
+      .eq('user_id', user.id).gte('created_at', since)
+      .order('created_at', { ascending: false });
+    if (recent?.length >= RESET_MAX_PER_HOUR) return res.json(RESET_SENT);
+    if (recent?.[0] && Date.now() - new Date(recent[0].created_at).getTime() < RESET_RESEND_GAP_MS) {
+      return res.json(RESET_SENT);
+    }
+
+    // Channels this person can actually receive a code on.
+    let chatId = null;
+    if (user.role === 'student' && telegram.enabled()) {
+      const { data: priv } = await supabase
+        .from('student_private').select('telegram_chat_id, telegram_blocked_at')
+        .eq('user_id', user.id).maybeSingle();
+      if (priv?.telegram_chat_id && !priv.telegram_blocked_at) chatId = priv.telegram_chat_id;
+    }
+    const emailTo = user.email && mailer.enabled() ? user.email : null;
+    if (!chatId && !emailTo) return res.json(RESET_SENT);
+
+    const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+    const { error: insertError } = await supabase.from('password_reset_codes').insert({
+      user_id: user.id,
+      code_hash: resetCodeHash(user.id, code),
+      expires_at: new Date(Date.now() + RESET_TTL_MS).toISOString()
+    });
+    if (insertError) throw insertError;
+
+    const kh = user.language !== 'en';
+    const text = kh
+      ? `រំដួល ស្កូឡារ៍: លេខកូដកំណត់ពាក្យសម្ងាត់ថ្មីរបស់អ្នកគឺ ${code}\nវាផុតកំណត់ក្នុង ១០ នាទី។ បើអ្នកមិនបានស្នើសុំ សូមមិនអើពើសារនេះ។`
+      : `Romduol Scholars: your password reset code is ${code}\nIt expires in 10 minutes. If you did not ask for it, ignore this message.`;
+    if (chatId) await telegram.sendPlain(chatId, text);
+    if (emailTo) await mailer.sendEmail({ to: emailTo, subject: 'Romduol Scholars password reset code', text });
+
+    res.json(RESET_SENT);
+  } catch (error) {
+    console.error('Password reset request error:', error);
+    res.status(500).json({ success: false, error: 'Could not send a reset code. Please try again.' });
+  }
+});
+
+router.post('/password-reset/confirm', credentialLimiter, async (req, res) => {
+  try {
+    const { identifier, newPassword } = req.body || {};
+    const code = String(req.body?.code || '').trim();
+    const bad = () => res.status(400).json({ success: false, code: 'RESET_CODE_INVALID', error: 'The code is wrong or has expired. Ask for a new one.' });
+
+    if (!/^\d{6}$/.test(code)) return bad();
+    if (typeof newPassword !== 'string' || newPassword.length < 6) {
+      return res.status(400).json({ success: false, error: 'Password must be at least 6 characters' });
+    }
+    if (newPassword.length > 200) return res.status(400).json({ success: false, error: 'Password is too long' });
+
+    const user = await findUserByIdentifier(identifier);
+    if (!user || user.deleted_at) return bad();
+
+    const { data: row } = await supabase
+      .from('password_reset_codes').select('*')
+      .eq('user_id', user.id).is('used_at', null)
+      .gt('expires_at', new Date().toISOString())
+      .order('created_at', { ascending: false }).limit(1).maybeSingle();
+    if (!row || row.attempts >= RESET_MAX_ATTEMPTS) return bad();
+
+    const expected = Buffer.from(row.code_hash, 'hex');
+    const given = Buffer.from(resetCodeHash(user.id, code), 'hex');
+    if (expected.length !== given.length || !crypto.timingSafeEqual(expected, given)) {
+      await supabase.from('password_reset_codes').update({ attempts: row.attempts + 1 }).eq('id', row.id);
+      return bad();
+    }
+
+    const hashed = await bcrypt.hash(newPassword, 10);
+    const { error: updateError } = await supabase.from('users').update({ password: hashed }).eq('id', user.id);
+    if (updateError) throw updateError;
+    // One use only, and any other outstanding codes die with it.
+    await supabase.from('password_reset_codes').delete().eq('user_id', user.id);
+
+    res.json({ success: true, message: 'Password updated. You can sign in now.' });
+  } catch (error) {
+    console.error('Password reset confirm error:', error);
+    res.status(500).json({ success: false, error: 'Could not reset the password. Please try again.' });
   }
 });
 
@@ -882,3 +1029,5 @@ router.post('/account/reactivate', authenticateToken, async (req, res) => {
 });
 
 module.exports = router;
+// Shared with the Telegram sign-in flow (routes/telegram.routes.js).
+module.exports.helpers = { sanitizeUser, accountLoginGate, reactivateIfSelfDeactivated };
