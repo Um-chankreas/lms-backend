@@ -28,6 +28,13 @@ async function call(method, body) {
 const sendMessage = (chatId, text, extra = {}) =>
   call('sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true, ...extra });
 
+/** Plain text, no parse_mode: follow-up messages carry names and Khmer text that must never need escaping. */
+const sendPlain = (chatId, text, extra = {}) =>
+  call('sendMessage', { chat_id: chatId, text, disable_web_page_preview: true, ...extra });
+const answerCallback = (callbackQueryId, text) => call('answerCallbackQuery', { callback_query_id: callbackQueryId, ...(text ? { text } : {}) });
+const editMessage = (chatId, messageId, text, extra = {}) =>
+  call('editMessageText', { chat_id: chatId, message_id: messageId, text, disable_web_page_preview: true, ...extra });
+
 const escapeHtml = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 /** "15:30" in Cambodia (24-hour), whatever timezone this server runs in. */
@@ -87,6 +94,6 @@ async function reachableStudents(userIds) {
 }
 
 module.exports = {
-  enabled, botUsername, call, sendMessage, sendToStudents, reachableStudents,
+  enabled, botUsername, call, sendMessage, sendPlain, answerCallback, editMessage, sendToStudents, reachableStudents,
   escapeHtml, phnomPenhTime, joinUrl, JOIN_LABEL
 };

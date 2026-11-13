@@ -313,6 +313,111 @@ router.post('/login', credentialLimiter, async (req, res) => {
 });
 
 /**
+ * POST /api/auth/google
+ * Sign in with Google. The app gets a Google ID token on the phone and sends it
+ * here; we verify it with Google's public keys, then issue the same JWT as a
+ * password login. Body: { idToken }.
+ *
+ * Accepted audiences: GOOGLE_CLIENT_IDS (comma-separated OAuth client ids: the
+ * Web client, plus the iOS / Android clients). Only verified Google emails are
+ * accepted.
+ *
+ * Matching: a returning Google user is found by google_sub. A NEW Google user
+ * whose email already belongs to a password account is refused (409
+ * GOOGLE_EMAIL_EXISTS): emails are not verified at signup, so auto-linking
+ * would let someone who pre-registered another person's email take over that
+ * person's Google login. Everyone else gets a new student account. Google
+ * sign-in never creates or logs in teachers/admins.
+ */
+let googleClient = null;
+const googleAudiences = () => String(process.env.GOOGLE_CLIENT_IDS || '')
+  .split(',').map((s) => s.trim()).filter(Boolean);
+
+router.post('/google', credentialLimiter, async (req, res) => {
+  try {
+    const audiences = googleAudiences();
+    if (audiences.length === 0) {
+      return res.status(503).json({ success: false, error: 'Google sign-in is not configured' });
+    }
+    const idToken = String(req.body?.idToken || '');
+    if (!idToken || idToken.length > 4096) {
+      return res.status(400).json({ success: false, error: 'Google token is required' });
+    }
+
+    if (!googleClient) {
+      const { OAuth2Client } = require('google-auth-library');
+      googleClient = new OAuth2Client();
+    }
+    let payload;
+    try {
+      const ticket = await googleClient.verifyIdToken({ idToken, audience: audiences });
+      payload = ticket.getPayload();
+    } catch (e) {
+      return res.status(401).json({ success: false, error: 'Google sign-in failed. Please try again.' });
+    }
+    if (!payload?.sub || !payload.email || payload.email_verified !== true) {
+      return res.status(401).json({ success: false, error: 'Your Google email is not verified' });
+    }
+
+    const email = normalizeEmail(payload.email);
+    let { data: user } = await supabase
+      .from('users').select('*').eq('google_sub', payload.sub).maybeSingle();
+    let isNew = false;
+
+    if (!user) {
+      const { data: sameEmail } = await supabase
+        .from('users').select('id').eq('email', email).maybeSingle();
+      if (sameEmail) {
+        return res.status(409).json({
+          success: false,
+          code: 'GOOGLE_EMAIL_EXISTS',
+          error: 'This email already has an account. Sign in with your password instead.'
+        });
+      }
+
+      const name = String(payload.name || email.split('@')[0]).trim().slice(0, 100) || 'Student';
+      // No one can sign in with a password they don't know; "forgot password"
+      // style flows can set a real one later.
+      const unusablePassword = await bcrypt.hash(uuidv4() + uuidv4(), 10);
+      const { data: created, error: createError } = await supabase
+        .from('users')
+        .insert({
+          id: uuidv4(),
+          name,
+          email,
+          phone: null,
+          password: unusablePassword,
+          role: 'student',
+          google_sub: payload.sub,
+          created_at: new Date()
+        })
+        .select()
+        .single();
+      if (createError) throw createError;
+      user = created;
+      isNew = true;
+    }
+
+    if (user.role !== 'student') {
+      return res.status(403).json({ success: false, error: 'Google sign-in is for student accounts only' });
+    }
+    const gate = accountLoginGate(user);
+    if (gate) return res.status(gate.status).json(gate.body);
+    await reactivateIfSelfDeactivated(user);
+
+    const token = generateToken(user.id, user.role);
+    res.json({
+      success: true,
+      message: 'Login successful',
+      data: { user: sanitizeUser(user), token, is_new: isNew }
+    });
+  } catch (error) {
+    console.error('Google login error:', error);
+    res.status(500).json({ success: false, error: 'Google sign-in failed' });
+  }
+});
+
+/**
  * GET /api/auth/profile
  * Get current user profile (requires authentication)
  */

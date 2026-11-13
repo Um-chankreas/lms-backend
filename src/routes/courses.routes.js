@@ -1,5 +1,6 @@
 
 const express = require('express');
+const { summarize: summarizeTeaching } = require('../utils/teachingProgress');
 const router = express.Router();
 const supabase = require('../config/supabase');
 const { authenticateToken, optionalAuth, isStudent, hasRole } = require('../middleware/auth');
@@ -754,6 +755,66 @@ async function loadManagedCourse(req, res) {
   }
   return course;
 }
+
+/**
+ * Teaching progress — which lessons the teacher has taught in class (see sql/071_class_taught_lessons.sql).
+ *   GET    /api/courses/:id/teaching               lessons in order + taught dates, pace %, the next lesson to teach
+ *   POST   /api/courses/:id/teaching               { lesson_id, taught_on?, live_class_id? }  mark a lesson taught
+ *   DELETE /api/courses/:id/teaching/:lessonId     un-mark it
+ * The course's teacher and admins may record it.
+ */
+async function loadTeaching(courseId) {
+  const [{ data: lessons, error: e1 }, { data: taught, error: e2 }] = await Promise.all([
+    supabase.from('lessons').select('id, title, order_number, created_at').eq('course_id', courseId),
+    supabase.from('class_taught_lessons').select('lesson_id, taught_on, live_class_id').eq('course_id', courseId),
+  ]);
+  if (e1) throw e1;
+  if (e2) throw e2;
+  return summarizeTeaching(lessons || [], taught || []);
+}
+
+router.get('/:id/teaching', authenticateToken, async (req, res) => {
+  try {
+    const course = await loadManagedCourse(req, res);
+    if (!course) return res;
+    res.json({ success: true, data: await loadTeaching(course.id) });
+  } catch (error) {
+    console.error('Teaching progress error:', error);
+    res.status(500).json({ success: false, error: 'Could not load teaching progress' });
+  }
+});
+
+router.post('/:id/teaching', authenticateToken, async (req, res) => {
+  try {
+    const course = await loadManagedCourse(req, res);
+    if (!course) return res;
+    const { lesson_id, taught_on, live_class_id } = req.body || {};
+    if (!lesson_id) return res.status(400).json({ success: false, error: 'lesson_id is required' });
+    const { data: lesson } = await supabase.from('lessons').select('id').eq('id', lesson_id).eq('course_id', course.id).maybeSingle();
+    if (!lesson) return res.status(404).json({ success: false, error: 'That lesson is not in this class' });
+    const day = taught_on && /^\d{4}-\d{2}-\d{2}$/.test(taught_on) ? taught_on : new Date().toISOString().slice(0, 10);
+    const row = { course_id: course.id, lesson_id, taught_on: day, taught_by: req.user.userId, live_class_id: live_class_id || null };
+    const { error } = await supabase.from('class_taught_lessons').upsert(row, { onConflict: 'course_id,lesson_id' });
+    if (error) throw error;
+    res.json({ success: true, data: await loadTeaching(course.id) });
+  } catch (error) {
+    console.error('Mark taught error:', error);
+    res.status(500).json({ success: false, error: 'Could not save' });
+  }
+});
+
+router.delete('/:id/teaching/:lessonId', authenticateToken, async (req, res) => {
+  try {
+    const course = await loadManagedCourse(req, res);
+    if (!course) return res;
+    const { error } = await supabase.from('class_taught_lessons').delete().eq('course_id', course.id).eq('lesson_id', req.params.lessonId);
+    if (error) throw error;
+    res.json({ success: true, data: await loadTeaching(course.id) });
+  } catch (error) {
+    console.error('Unmark taught error:', error);
+    res.status(500).json({ success: false, error: 'Could not save' });
+  }
+});
 
 /**
  * GET /api/courses/:id/student-candidates?q=

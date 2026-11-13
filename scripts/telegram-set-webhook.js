@@ -18,7 +18,7 @@ const tg = require('../src/utils/telegram');
   console.log('setWebhook:', JSON.stringify(await tg.call('setWebhook', {
     url: `${base}/api/telegram/webhook`,
     secret_token: secret,
-    allowed_updates: ['message']
+    allowed_updates: ['message', 'callback_query']   // callback_query = taps on follow-up message buttons
   })));
   console.log('setMyCommands:', JSON.stringify(await tg.call('setMyCommands', {
     commands: [

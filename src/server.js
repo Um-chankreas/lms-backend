@@ -12,6 +12,8 @@ const { startClassScheduler } = require('./utils/classScheduler');
 const { startAssignmentScheduler } = require('./utils/assignmentScheduler');
 const { startTelegramReminderScheduler } = require('./utils/telegramReminderScheduler');
 const { startLiveClassSweeper } = require('./utils/liveClassSweeper');
+const { startFollowUpMetricsJob } = require('./utils/followUpMetricsJob');
+const { startMessageQueue } = require('./utils/followUpMessageService');
 const { startDailyDigestScheduler } = require('./utils/dailyDigestScheduler');
 
 // Production sits behind one reverse proxy (Caddy). Trusting that single hop
@@ -70,6 +72,8 @@ app.use('/api/admin/agora-accounts', require('./routes/agoraAccounts.routes'));
 app.use('/api/admin/agora-usage', require('./routes/agoraUsage.routes'));
 app.use('/api/admin', require('./routes/admin.routes'));
 app.use('/api/insights', require('./routes/studentInsights.routes'));
+app.use('/api/follow-up', require('./routes/followUp.routes'));
+app.use('/api/follow-up-messages', require('./routes/followUpMessages.routes'));
 app.use('/api/notifications', require('./routes/notifications.routes'));
 app.use('/api/daily-challenge', require('./routes/dailyChallenge.routes'));
 app.use('/api/blitz', require('./routes/blitz.routes'));
@@ -91,6 +95,26 @@ app.get('/open/live-class/:id', (req, res) => {
     `<body style="font-family:sans-serif;text-align:center;padding:48px 20px"><h2>Romduol Scholars</h2>` +
     `<p>កំពុងបើកកម្មវិធី... / Opening the app...</p>` +
     `<p><a href="${link}" style="display:inline-block;background:#006A3A;color:#fff;padding:14px 28px;border-radius:12px;text-decoration:none;font-weight:bold">បើកថ្នាក់ / Open class</a></p>` +
+    `<script>location.href=${JSON.stringify(link)}</script></body></html>`
+  );
+});
+
+// Every button on a follow-up Telegram message opens one of these. Telegram buttons only take https links, so the
+// page hands the student on to the app (learnquest://). Kinds the app has a screen for open that screen;
+// /open/app opens the app itself.
+app.get('/open/:kind{/:id}', (req, res) => {
+  const { kind, id } = req.params;
+  const ids = { lesson: 'lesson', unit: 'unit', 'live-class': 'live-class' };
+  let link;
+  if (kind === 'app') link = 'learnquest://';
+  else if (ids[kind] && /^[0-9a-f-]{36}$/i.test(String(id))) link = `learnquest://${ids[kind]}/${id}`;
+  else return res.status(404).send('Not found');
+  res.set('Cache-Control', 'no-store').type('html').send(
+    `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
+    `<title>Romduol Scholars</title><meta http-equiv="refresh" content="0;url=${link}"></head>` +
+    `<body style="font-family:sans-serif;text-align:center;padding:48px 20px"><h2>Romduol Scholars</h2>` +
+    `<p>កំពុងបើកកម្មវិធី... / Opening the app...</p>` +
+    `<p><a href="${link}" style="display:inline-block;background:#006A3A;color:#fff;padding:14px 28px;border-radius:12px;text-decoration:none;font-weight:bold">បើកកម្មវិធី / Open the app</a></p>` +
     `<script>location.href=${JSON.stringify(link)}</script></body></html>`
   );
 });
@@ -147,6 +171,8 @@ startClassScheduler();
 startAssignmentScheduler();
 startTelegramReminderScheduler();
 startLiveClassSweeper();
+startFollowUpMetricsJob();
+startMessageQueue();   // sends follow-up Telegram messages that were queued for the sending window   // hourly student_subject_metrics / student_onboarding for the Follow-up page
 
 // Fires the once-a-day "today's most active" shout-out + "come learn"
 // reminders — see src/utils/dailyDigestScheduler.js.

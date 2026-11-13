@@ -188,7 +188,7 @@ function buildLiveReport({ courses, enrollments, students, classes, participants
       eligible += 1;
       const a = acc(studentId);
       a.eligible += 1;
-      const pc = a.perCourse[cls.course_id] || (a.perCourse[cls.course_id] = { minutes: 0, attended: 0, eligible: 0, held: 0, missRun: 0, lastSession: null, last: null });
+      const pc = a.perCourse[cls.course_id] || (a.perCourse[cls.course_id] = { minutes: 0, attended: 0, eligible: 0, held: 0, missRun: 0, lastSession: null, last: null, sessions: [] });
       pc.eligible += 1;
       pc.lastSession = cls.start;
       pc.missRun += 1;   // reset below when they attend; what is left is the run of most recent misses
@@ -202,6 +202,7 @@ function buildLiveReport({ courses, enrollments, students, classes, participants
         a.attended += 1;
         pc.attended += 1;
         pc.missRun = 0;
+        pc.sessions.push([cls.start, cls.end]);
         if (pc.last == null || cls.start > pc.last) pc.last = cls.start;
         attendees += 1;
         stays.push(mins);
@@ -235,6 +236,7 @@ function buildLiveReport({ courses, enrollments, students, classes, participants
       minutes: Math.round(a.minutes),
       minutes_by_course: Object.fromEntries(Object.entries(a.byCourse).map(([k, v]) => [k, Math.round(v)])),
       by_course: Object.fromEntries(Object.entries(a.perCourse).map(([k, v]) => [k, { minutes: Math.round(v.minutes), attended: v.attended, eligible: v.eligible, held_minutes: Math.round(v.held), missed_in_a_row: v.missRun, last_session_at: v.lastSession == null ? null : toIso(v.lastSession), last_attended: v.last == null ? null : toIso(v.last) }])),
+      attended_sessions: Object.fromEntries(Object.entries(a.perCourse).map(([k, v]) => [k, v.sessions])),   // [startMs, endMs] of each class they attended
       share_of_live_time: a.eligibleMinutes ? Math.round((a.minutes / a.eligibleMinutes) * 100) : 0,
       last_attended: a.last == null ? null : toIso(a.last),
     });

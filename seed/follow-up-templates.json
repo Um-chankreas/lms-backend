@@ -1,0 +1,375 @@
+{
+  "version": 1,
+  "note": "Khmer reviewed: NO (needs native-speaker proofread). Placeholders in {braces}. Button 'target' is an app deep-link route, turned into an https link by the backend.",
+  "templates": [
+    {
+      "key": "welcome",
+      "case_code": "new",
+      "audience": "student",
+      "asks_reason": false,
+      "when": "New student, day 1-2, never contacted",
+      "body": {
+        "km": "ជម្រាបសួរ ប្អូន {name}! សូមស្វាគមន៍មកកាន់ Romduol Scholars។\nខ្ញុំឈ្មោះ {teacher} ជាគ្រូដែលនឹងជួយតាមដាន និងគាំទ្រការរៀនរបស់ប្អូន ដើម្បីត្រៀមប្រឡងបាក់ឌុប។\nថ្នាក់ផ្ទាល់ {subject} លើកក្រោយ៖ {next_class}។\nសូមប្អូនចាប់ផ្តើមជាមួយមេរៀនទី១ ដែលចំណាយពេលប្រហែល ១០ នាទីប៉ុណ្ណោះ។ ប្រសិនបើមានសំណួរ សូមឆ្លើយតបសារនេះបានគ្រប់ពេល។ អរគុណ!",
+        "en": "Hi {name}, welcome to Romduol Scholars!\nI'm {teacher}, and I'll help you stay on track for BacII.\nYour next {subject} live class: {next_class}.\nStart with lesson 1 — it takes about 10 minutes. Reply here any time if you have a question."
+      },
+      "buttons": [
+        {
+          "label": {
+            "km": "ចាប់ផ្តើមមេរៀនទី១",
+            "en": "Start lesson 1"
+          },
+          "target": "lesson:first"
+        },
+        {
+          "label": {
+            "km": "មើលម៉ោងរៀន",
+            "en": "See class times"
+          },
+          "target": "live:schedule"
+        }
+      ]
+    },
+    {
+      "key": "step_reminder",
+      "case_code": "new",
+      "audience": "student",
+      "asks_reason": false,
+      "when": "New student, a first-week step is late, not flagged 0",
+      "body": {
+        "km": "ជម្រាបសួរ ប្អូន {name}! ប្អូនបានចាប់ផ្តើមបានយ៉ាងល្អ ({done}/6 ជំហាន)។\nជំហានបន្ទាប់គឺ៖ {step}។ សូមចំណាយពេលតែប៉ុន្មាននាទីប៉ុណ្ណោះ។ អរគុណ!",
+        "en": "Hi {name}! Good start so far ({done}/6 steps).\nNext step: {step}. It only takes a few minutes."
+      },
+      "buttons": [
+        {
+          "label": {
+            "km": "{step_button}",
+            "en": "{step_button}"
+          },
+          "target": "step:{step_key}"
+        }
+      ],
+      "steps": {
+        "tour": {
+          "km": "មើលការណែនាំកម្មវិធី",
+          "en": "take the app tour",
+          "target": "tour"
+        },
+        "lesson": {
+          "km": "បើកមេរៀនទី១",
+          "en": "open your first lesson",
+          "target": "lesson:first"
+        },
+        "quiz": {
+          "km": "ធ្វើតេស្តដំបូង",
+          "en": "do your first quiz",
+          "target": "quiz:first"
+        },
+        "live": {
+          "km": "ចូលរៀនថ្នាក់ផ្ទាល់លើកដំបូង",
+          "en": "join your first live class",
+          "target": "live:next"
+        },
+        "back": {
+          "km": "ចូលរៀនលើកក្រោយ",
+          "en": "come back for one more lesson",
+          "target": "lesson:next"
+        }
+      }
+    },
+    {
+      "key": "not_started",
+      "case_code": "0",
+      "audience": "student",
+      "asks_reason": true,
+      "when": "Case 0 Not getting started",
+      "body": {
+        "km": "ជម្រាបសួរ ប្អូន {name}! ខ្ញុំឈ្មោះ {teacher} មកពី Romduol Scholars។\nខ្ញុំសង្កេតឃើញថា ប្អូនមិនទាន់បានចាប់ផ្តើមរៀននៅឡើយទេ។ មិនអីទេ ការចាប់ផ្តើមតែងតែពិបាកបន្តិច។\nតើមានបញ្ហាអ្វីដែលខ្ញុំអាចជួយបានទេ? សូមចុចប៊ូតុងខាងក្រោម ឬឆ្លើយតបមកខ្ញុំដោយផ្ទាល់។ អរគុណ!",
+        "en": "Hi {name}, it's {teacher} from Romduol Scholars.\nI noticed you haven't started your lessons yet. That's OK — starting is the hardest part.\nIs anything getting in the way? Tap a button below or just reply to me."
+      },
+      "buttons": [
+        {
+          "label": {
+            "km": "ចាប់ផ្តើមមេរៀនទី១",
+            "en": "Start lesson 1"
+          },
+          "target": "lesson:first"
+        }
+      ]
+    },
+    {
+      "key": "skip_subject",
+      "case_code": "1",
+      "audience": "student",
+      "asks_reason": true,
+      "when": "Case 1 Not joining a subject",
+      "body": {
+        "km": "ជម្រាបសួរ ប្អូន {name}! ខ្ញុំឈ្មោះ {teacher} មកពី Romduol Scholars។\nក្នុងរយៈពេល ២ សប្តាហ៍ចុងក្រោយនេះ ប្អូនបានចូលរៀនថ្នាក់ផ្ទាល់ {subject} ចំនួន {attended} ដង ក្នុងចំណោម {held} ដង។\nខ្ញុំសូមផ្ញើវីដេអូថតពីថ្នាក់មុនជូន ដើម្បីកុំឱ្យប្អូនខកខានមេរៀន។ ថ្នាក់បន្ទាប់៖ {next_class}។\nតើមានបញ្ហាអ្វីដែលធ្វើឱ្យប្អូនពិបាកចូលរៀនមុខវិជ្ជានេះទេ? សូមប្រាប់ខ្ញុំផង។",
+        "en": "Hi {name}, it's {teacher} from Romduol Scholars.\nIn the last 2 weeks you joined {attended} of {held} {subject} live classes.\nHere's the recording of the last class so you don't fall behind. Next class: {next_class}.\nIs something making this class hard to join?"
+      },
+      "variant_if_attended_zero": {
+        "line": 2,
+        "km": "ប្អូនមិនទាន់បានចូលរៀនថ្នាក់ផ្ទាល់ {subject} នៅឡើយទេ។",
+        "en": "You haven't joined a {subject} live class yet."
+      },
+      "buttons": [
+        {
+          "label": {
+            "km": "មើលវីដេអូថត",
+            "en": "Watch recording"
+          },
+          "target": "recording:last:{subject_id}"
+        }
+      ]
+    },
+    {
+      "key": "no_study",
+      "case_code": "2",
+      "audience": "student",
+      "asks_reason": false,
+      "when": "Case 2 Joins live, doesn't study after class",
+      "body": {
+        "km": "ជម្រាបសួរ ប្អូន {name}! អរគុណច្រើនដែលប្អូនបានចូលរៀនថ្នាក់ផ្ទាល់ {subject} ជាប្រចាំ។\nដើម្បីឱ្យចងចាំមេរៀនបានយូរ សូមប្អូនរៀនមេរៀនខ្លីមួយ បន្ទាប់ពីថ្នាក់នីមួយៗ។\nមេរៀនបន្ទាប់របស់ប្អូនគឺ៖ {lesson} (ប្រហែល {minutes} នាទី)។ អរគុណ!",
+        "en": "Hi {name}, thanks for joining {subject} live classes so regularly.\nTo remember more, do one short lesson after each class.\nYour next one: {lesson} (about {minutes} min)."
+      },
+      "buttons": [
+        {
+          "label": {
+            "km": "បើកមេរៀន",
+            "en": "Open lesson"
+          },
+          "target": "lesson:{lesson_id}"
+        }
+      ]
+    },
+    {
+      "key": "slow",
+      "case_code": "3",
+      "audience": "student",
+      "asks_reason": false,
+      "when": "Case 3 Slow progress",
+      "body": {
+        "km": "ជម្រាបសួរ ប្អូន {name}! ខ្ញុំសង្កេតឃើញថាប្អូនកំពុងរៀន {subject} ជំពូកទី {chapter}។ ជំពូកនេះពិបាកសម្រាប់សិស្សជាច្រើន។\nខ្ញុំសូមផ្ញើវីដេអូពន្យល់ឡើងវិញខ្លីមួយ ({minutes} នាទី)។ បន្ទាប់ពីមើលរួច សូមសាកល្បងធ្វើតេស្តម្តងទៀត។\nប្រសិនបើនៅតែពិបាក សូមចុច “ខ្ញុំត្រូវការជំនួយ” ខ្ញុំរីករាយនឹងជួយពន្យល់។",
+        "en": "Hi {name}, I see you're working on {subject} chapter {chapter}. Many students find this chapter hard.\nHere's a short review video ({minutes} min). After watching, try the quiz again.\nStill stuck? Tap “I need help” and I'll explain it."
+      },
+      "buttons": [
+        {
+          "label": {
+            "km": "មើលវីដេអូពន្យល់",
+            "en": "Watch review"
+          },
+          "target": "review:{chapter_id}"
+        },
+        {
+          "label": {
+            "km": "ធ្វើតេស្តម្តងទៀត",
+            "en": "Retry quiz"
+          },
+          "target": "quiz:{quiz_id}"
+        },
+        {
+          "label": {
+            "km": "ខ្ញុំត្រូវការជំនួយ",
+            "en": "I need help"
+          },
+          "callback": "help"
+        }
+      ]
+    },
+    {
+      "key": "missing_all",
+      "case_code": "4",
+      "audience": "student",
+      "asks_reason": true,
+      "when": "Case 4 Missing all subjects. No reply in 2 days -> call parent",
+      "body": {
+        "km": "ជម្រាបសួរ ប្អូន {name}! ខ្ញុំឈ្មោះ {teacher} មកពី Romduol Scholars។\nរយៈពេលពីរបីសប្តាហ៍មកនេះ យើងមិនបានឃើញប្អូនចូលរៀនថ្នាក់ផ្ទាល់ទេ ហើយយើងពិតជាបារម្ភពីប្អូន។\nតើប្អូនសុខសប្បាយជាទេ? សូមប្រាប់ខ្ញុំផងថាមានបញ្ហាអ្វី ដើម្បីឱ្យយើងអាចជួយបាន។ អរគុណ!",
+        "en": "Hi {name}, it's {teacher} from Romduol Scholars.\nWe haven't seen you in live classes for the last couple of weeks, and we're a little worried.\nAre you OK? Tell me what's going on so we can help."
+      },
+      "buttons": [
+        {
+          "label": {
+            "km": "សូមទូរស័ព្ទមកខ្ញុំ",
+            "en": "Please call me"
+          },
+          "callback": "call_me"
+        }
+      ]
+    },
+    {
+      "key": "parent_message",
+      "case_code": "4",
+      "audience": "parent",
+      "asks_reason": false,
+      "copy_only": true,
+      "when": "Case 4, parent call not answered. Teacher copies it into their own Telegram or SMS",
+      "body": {
+        "km": "ជម្រាបសួរ លោក/លោកស្រី។ ខ្ញុំឈ្មោះ {teacher} ជាគ្រូនៅ Romduol Scholars ដែល {name} កំពុងរៀនត្រៀមប្រឡងបាក់ឌុប។\nរយៈពេលប្រហែល ២ សប្តាហ៍មកនេះ {name} មិនបានចូលរៀនថ្នាក់ផ្ទាល់ទេ។ ខ្ញុំសូមអនុញ្ញាតសាកសួរថា តើមានបញ្ហាអ្វីដែលយើងអាចជួយបានដែរឬទេ?\nសូមលោក/លោកស្រីមេត្តាឆ្លើយតបសារនេះ ឬទូរស័ព្ទមកលេខ {teacher_phone} នៅពេលដែលងាយស្រួល។ សូមអរគុណ!",
+        "en": "Hello. I'm {teacher}, a teacher at Romduol Scholars, where {name} is preparing for BacII.\nFor about 2 weeks, {name} hasn't joined live classes. May I ask if there is anything we can help with?\nPlease reply to this message or call me at {teacher_phone} when it's convenient. Thank you!"
+      },
+      "buttons": []
+    },
+    {
+      "key": "praise_week",
+      "case_code": "praise",
+      "audience": "student",
+      "asks_reason": false,
+      "when": "Doing well tab, max once a week",
+      "body": {
+        "km": "អបអរសាទរ ប្អូន {name}! សប្តាហ៍នេះ ប្អូនបានចូលរៀនថ្នាក់ផ្ទាល់ {attended}/{held} ដង និងបានរៀនចប់ {lessons} មេរៀន។\nសូមបន្តខិតខំបែបនេះ ប្អូននឹងត្រៀមខ្លួនបានយ៉ាងល្អសម្រាប់ការប្រឡងបាក់ឌុប។ — {teacher}",
+        "en": "Great work, {name}! This week you joined {attended}/{held} live classes and finished {lessons} lessons.\nKeep this up and you'll be well prepared for BacII. — {teacher}"
+      },
+      "buttons": [
+        {
+          "label": {
+            "km": "មើលវឌ្ឍនភាពរបស់ខ្ញុំ",
+            "en": "See my progress"
+          },
+          "target": "progress"
+        }
+      ]
+    },
+    {
+      "key": "praise_first_week",
+      "case_code": "praise",
+      "audience": "student",
+      "asks_reason": false,
+      "when": "New student finished all 6 first-week steps",
+      "body": {
+        "km": "អបអរសាទរ ប្អូន {name}! ប្អូនបានបញ្ចប់ជំហានទាំង ៦ នៃសប្តាហ៍ដំបូងរួចរាល់ហើយ។\nនេះជាការចាប់ផ្តើមដ៏ល្អមួយ។ សូមបន្តរៀនបន្តិចៗជារៀងរាល់ថ្ងៃ! — {teacher}",
+        "en": "Congratulations, {name}! You finished all 6 first-week steps.\nThat's a strong start. Keep learning a little every day! — {teacher}"
+      },
+      "buttons": [
+        {
+          "label": {
+            "km": "មើលវឌ្ឍនភាពរបស់ខ្ញុំ",
+            "en": "See my progress"
+          },
+          "target": "progress"
+        }
+      ]
+    }
+  ],
+  "reasons": [
+    {
+      "reason": "time_clash",
+      "button": {
+        "km": "ម៉ោងរៀនជាន់គ្នា",
+        "en": "Time clash"
+      },
+      "reply": {
+        "km": "អរគុណសម្រាប់ការប្រាប់។ នេះជាវីដេអូថត និងម៉ោងរៀនផ្សេងទៀតសម្រាប់ {subject}។",
+        "en": "Thanks for letting me know. Here's the recording and other class times for {subject}."
+      },
+      "reply_links": [
+        "recording:last:{subject_id}",
+        "live:schedule:{subject_id}"
+      ]
+    },
+    {
+      "reason": "too_hard",
+      "button": {
+        "km": "ពិបាកពេក",
+        "en": "Too hard"
+      },
+      "reply": {
+        "km": "អរគុណដែលបានប្រាប់។ នេះជាវីដេអូពន្យល់ខ្លីមួយ។ {teacher} នឹងទាក់ទងប្អូនឆាប់ៗនេះ។",
+        "en": "Thanks for telling me. Here's a short review video. {teacher} will contact you soon."
+      },
+      "reply_links": [
+        "review:{chapter_id}"
+      ]
+    },
+    {
+      "reason": "no_internet_device",
+      "button": {
+        "km": "គ្មានអ៊ីនធឺណិត ឬទូរស័ព្ទ",
+        "en": "No internet or phone"
+      },
+      "reply": {
+        "km": "អរគុណសម្រាប់ការប្រាប់។ ប្អូនអាចទាញយកមេរៀន PDF និងវីដេអូថត នៅពេលមាន Wi-Fi ហើយរៀននៅពេលក្រោយបាន។",
+        "en": "Thanks for letting me know. You can download lesson PDFs and recordings on Wi-Fi and study later."
+      },
+      "reply_links": [
+        "downloads"
+      ]
+    },
+    {
+      "reason": "family_work",
+      "button": {
+        "km": "រវល់ការងារ ឬគ្រួសារ",
+        "en": "Busy with family or work"
+      },
+      "reply": {
+        "km": "អរគុណសម្រាប់ការប្រាប់។ ប្អូនអាចមើលវីដេអូថតពេលណាក៏បាន។ រៀនតែ ១៥ នាទីក្នុងមួយថ្ងៃ ក៏ជួយបានច្រើនដែរ។",
+        "en": "Thanks for letting me know. You can watch recordings any time. Even 15 minutes a day helps a lot."
+      },
+      "reply_links": [
+        "recording:last:{subject_id}"
+      ]
+    },
+    {
+      "reason": "not_interested",
+      "button": {
+        "km": "មិនសូវចាប់អារម្មណ៍មុខវិជ្ជានេះ",
+        "en": "Not interested in this subject"
+      },
+      "reply": {
+        "km": "អរគុណសម្រាប់ការប្រាប់ដោយស្មោះត្រង់។ {teacher} នឹងឆ្លើយតបប្អូនឆាប់ៗនេះ។",
+        "en": "Thanks for being honest. {teacher} will reply to you soon."
+      },
+      "reply_links": []
+    },
+    {
+      "reason": "sick",
+      "button": {
+        "km": "ខ្ញុំឈឺ",
+        "en": "I was sick"
+      },
+      "reply": {
+        "km": "សូមឱ្យប្អូនឆាប់បានជាសះស្បើយ! នេះជាវីដេអូថតនៃថ្នាក់ដែលប្អូនខកខាន សម្រាប់ពេលដែលប្អូនមានកម្លាំងវិញ។",
+        "en": "Get well soon! Here are the recordings you missed, for when you feel better."
+      },
+      "reply_links": [
+        "recordings:missed"
+      ]
+    },
+    {
+      "reason": "other",
+      "button": {
+        "km": "ផ្សេងទៀត",
+        "en": "Something else"
+      },
+      "reply": {
+        "km": "សូមសរសេរសារខ្លីមួយប្រាប់ពីបញ្ហារបស់ប្អូន ហើយ {teacher} នឹងអានវា។ អរគុណ!",
+        "en": "Please type a short message about what's going on, and {teacher} will read it. Thank you!"
+      },
+      "reply_links": []
+    }
+  ],
+  "callback_replies": {
+    "call_me": {
+      "km": "អរគុណ! {teacher} នឹងទូរស័ព្ទទៅប្អូនឆាប់ៗនេះ។",
+      "en": "Thank you! {teacher} will call you soon."
+    },
+    "help": {
+      "km": "អរគុណ! {teacher} នឹងឆ្លើយតបជួយពន្យល់ប្អូនឆាប់ៗនេះ។",
+      "en": "Thank you! {teacher} will reply and help you soon."
+    }
+  },
+  "rules": {
+    "send_window_weekday": [
+      "17:00",
+      "20:00"
+    ],
+    "send_window_weekend": [
+      "08:00",
+      "20:00"
+    ],
+    "timezone": "Asia/Phnom_Penh",
+    "max_per_student_per_day": 1,
+    "same_case_cooldown_days": 3,
+    "stop_after_unanswered": 2,
+    "praise_max_per_week": 1,
+    "max_words": 60
+  }
+}

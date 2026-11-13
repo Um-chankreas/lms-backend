@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "test": "node scripts/progression-tests/progression.test.js && node scripts/skip-tests/skipTests.test.js && node scripts/notification-tests/rules.test.js && node scripts/notification-tests/jobs.test.js && node scripts/notification-tests/reminder.test.js && node scripts/live-report/liveReport.test.js"
+    "test": "node scripts/progression-tests/progression.test.js && node scripts/skip-tests/skipTests.test.js && node scripts/notification-tests/rules.test.js && node scripts/notification-tests/jobs.test.js && node scripts/notification-tests/reminder.test.js && node scripts/live-report/liveReport.test.js && node scripts/telegramImport.test.js && node scripts/teachingProgress.test.js && node scripts/followUpRules.test.js && node scripts/followUpMetrics.test.js && node scripts/followUpModel.test.js && node scripts/followUpMessages.test.js && node scripts/followUpSend.test.js && node scripts/telegramFollowUpBot.test.js"
   },
   "keywords": [],
   "author": "",
@@ -27,6 +27,7 @@
     "express": "^5.2.1",
     "express-rate-limit": "^8.7.0",
     "ffmpeg-static": "^5.3.0",
+    "google-auth-library": "^11.3.4",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.2.0",
     "node-tikzjax": "^1.0.5",
